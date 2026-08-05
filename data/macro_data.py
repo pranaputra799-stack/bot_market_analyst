@@ -594,18 +594,25 @@ class MacroDataFetcher:
         events.sort(key=lambda x: x.get("_dt_utc") or datetime.min.replace(tzinfo=timezone.utc))
         return events
 
-    def format_calendar_text(self, events: List[Dict], max_events: int = 10) -> str:
+    def format_calendar_text(self, events: List[Dict], max_events: int = 10, only_high: bool = False) -> str:
         """
         Format daftar event kalender ekonomi menjadi teks yang rapi.
         Waktu ditampilkan dalam WIB (UTC+7).
+
+        Args:
+            events: Daftar event dari get_economic_calendar*()
+            max_events: Jumlah event maksimal yang ditampilkan
+            only_high: Jika True, HANYA tampilkan event high impact (untuk /calendar)
         """
         tz_wib = ZoneInfo("Asia/Jakarta")
         today = datetime.now(tz_wib).strftime("%A, %d %B %Y")
 
         if not events:
+            scope = "bulan ini" if only_high else "7 hari ke depan"
+            impact_note = "data high-impact " if only_high else ""
             return (
                 f"📅 *KALENDER EKONOMI* (Waktu: WIB/UTC+7)\n📆 {today}\n\n"
-                f"✅ Tidak ada rilis data ekonomi besar terjadwal dalam 7 hari ke depan.\n"
+                f"✅ Tidak ada rilis {impact_note}terjadwal {scope}.\n"
                 f"ℹ️ Sumber: jadwal resmi (BLS/Fed) - data real-time tidak tersedia."
             )
 
@@ -619,7 +626,8 @@ class MacroDataFetcher:
         elif "jadwal_resmi" in sources:
             source = "🗓️ Sumber: Jadwal rilis resmi (BLS/Fed)"
 
-        lines = [f"📅 *KALENDER EKONOMI* (Waktu: WIB/UTC+7)\n📆 {today}"]
+        title = "📅 *KALENDER EKONOMI* — HIGH IMPACT" if only_high else "📅 *KALENDER EKONOMI*"
+        lines = [f"{title} (Waktu: WIB/UTC+7)\n📆 {today}"]
         if source:
             lines.append(source)
         lines.append("")
@@ -629,9 +637,11 @@ class MacroDataFetcher:
         medium_events = [e for e in events if e["impact"] == "medium"]
         low_events = [e for e in events if e["impact"] == "low"]
 
-        shown = 0
+        # only_high: hanya group high yang ditampilkan
+        groups = [high_events] if only_high else [high_events, medium_events, low_events]
 
-        for group in [high_events, medium_events, low_events]:
+        shown = 0
+        for group in groups:
             if not group:
                 continue
             for event in group[:max_events]:
@@ -672,21 +682,33 @@ class MacroDataFetcher:
 
         if not high_events and not medium_events and not low_events:
             lines.append("✅ Tidak ada rilis data ekonomi besar terjadwal dalam 7 hari ke depan.\n")
+        elif only_high and not high_events:
+            lines.append("✅ Tidak ada rilis data high-impact terjadwal dalam periode ini.\n")
 
         return "\n".join(lines)
 
-    async def get_economic_calendar(self) -> List[Dict]:
+    async def get_economic_calendar(
+        self,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> List[Dict]:
         """
         Mendapatkan kalender ekonomi. Prioritas sumber:
         1. FRED (gratis, resmi, real-time) - jadwal rilis aktual BLS/BEA
         2. Finnhub (jika API key punya akses)
         3. Fallback: jadwal resmi built-in (BLS/Fed) + event berulang
         Hasil di-cache 10 menit dengan key yang menyertakan tanggal agar tidak basi.
+
+        Args:
+            from_date: Tanggal mulai (YYYY-MM-DD). Default: hari ini (WIB)
+            to_date: Tanggal akhir (YYYY-MM-DD). Default: +7 hari
         """
         tz_wib = ZoneInfo("Asia/Jakarta")
         today = datetime.now(tz_wib)
-        from_date = today.strftime("%Y-%m-%d")
-        to_date = (today + timedelta(days=7)).strftime("%Y-%m-%d")
+        if not from_date:
+            from_date = today.strftime("%Y-%m-%d")
+        if not to_date:
+            to_date = (today + timedelta(days=7)).strftime("%Y-%m-%d")
 
         cache_key = f"economic_calendar:{from_date}:{to_date}"
         cached_result = cache.get(cache_key)
@@ -704,6 +726,34 @@ class MacroDataFetcher:
 
         cache.set(cache_key, events, 600)  # Cache 10 menit
         return events
+
+    def get_month_calendar_range(self) -> tuple:
+        """
+        Rentang tanggal kalender untuk bulan ini (WIB):
+        tanggal 1 s/d akhir bulan. Dipakai /calendar agar menampilkan
+        seluruh event high-impact bulan berjalan.
+
+        Returns:
+            (from_date, to_date) string YYYY-MM-DD
+        """
+        tz_wib = ZoneInfo("Asia/Jakarta")
+        today = datetime.now(tz_wib)
+        from_date = today.replace(day=1).strftime("%Y-%m-%d")
+        # Akhir bulan: 1 bulan berikutnya minus 1 hari
+        if today.month == 12:
+            next_month_first = today.replace(year=today.year + 1, month=1, day=1)
+        else:
+            next_month_first = today.replace(month=today.month + 1, day=1)
+        to_date = (next_month_first - timedelta(days=1)).strftime("%Y-%m-%d")
+        return from_date, to_date
+
+    async def get_economic_calendar_month(self) -> List[Dict]:
+        """
+        Kalender ekonomi bulan ini (tanggal 1 s/d akhir bulan WIB).
+        Digunakan /calendar untuk menampilkan event high-impact bulan berjalan.
+        """
+        from_date, to_date = self.get_month_calendar_range()
+        return await self.get_economic_calendar(from_date=from_date, to_date=to_date)
 
     # ===================== MACRO SUMMARY =====================
 

@@ -588,8 +588,9 @@ class MarketBot:
         )
 
         try:
-            events = await self.macro.get_economic_calendar()
-            calendar_text = self.macro.format_calendar_text(events, max_events=10)
+            # Kalender ekonomi BULAN INI, hanya event high impact
+            events = await self.macro.get_economic_calendar_month()
+            calendar_text = self.macro.format_calendar_text(events, max_events=15, only_high=True)
 
             message = f"{calendar_text}\n{DISCLAIMER}"
             await safe_reply_text(
@@ -1088,8 +1089,9 @@ JAWABAN:"""
                 action="typing",
             )
             try:
-                events = await self.macro.get_economic_calendar()
-                calendar_text = self.macro.format_calendar_text(events, max_events=10)
+                # Kalender ekonomi BULAN INI, hanya event high impact
+                events = await self.macro.get_economic_calendar_month()
+                calendar_text = self.macro.format_calendar_text(events, max_events=15, only_high=True)
                 message = f"{calendar_text}\n{DISCLAIMER}"
                 await safe_edit_message_text(
                     query,

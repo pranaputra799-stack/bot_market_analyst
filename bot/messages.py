@@ -19,7 +19,7 @@ Saya adalah asisten analisis pasar keuangan berbasis AI dengan *Multi-Agent Anal
 • 📰 *Berita & sentimen* pasar terkini
 • 🔗 Korelasi antar instrumen (DXY vs Gold, dll)
 • 🌅 *Morning Brief* harian (kirim /morning)
-• 📅 *Kalender Ekonomi* real-time (kirim /calendar)
+• 📅 *Kalender Ekonomi* high-impact bulan ini (kirim /calendar)
 • 📈 *Grafik harga* (kirim /chart gold, /chart eurusd, dll)
 
 🧠 *Multi-Agent Analysis:*
@@ -80,9 +80,8 @@ Cukup kirim pertanyaan tentang pasar keuangan, dan saya akan menjawab dengan dat
 • Sentimen pasar
 
 *Kalender Ekonomi (📅 /calendar)*
-• Rilis data NFP, CPI, FOMC, GDP, dll
+• Rilis data high-impact BULAN INI (NFP, CPI, FOMC, GDP, dll)
 • Forecast & konsensus pasar
-• Impact level (High/Medium/Low)
 • Jadwal rilis resmi real-time (FRED/BLS/Fed) + Finnhub jika tersedia
 
 ⚙️ *Perintah Tersedia:*
@@ -90,7 +89,7 @@ Cukup kirim pertanyaan tentang pasar keuangan, dan saya akan menjawab dengan dat
 /help - Bantuan ini
 /morning - ☀️ Morning Brief harian
 /sentiment - 🧠 Sentimen pasar (contoh: /sentiment eurusd, /sentiment gold)
-/calendar - 📅 Kalender Ekonomi real-time
+/calendar - 📅 Kalender Ekonomi high-impact bulan ini
 /alert - 🔔 Notifikasi event ekonomi otomatis (/alert on)
 /chart - 📈 Grafik harga (contoh: /chart eurusd)
 /status - ✅ Cek status API & sistem
