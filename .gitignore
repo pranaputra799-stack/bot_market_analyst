@@ -1,0 +1,30 @@
+# ===================== Python =====================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# ===================== Environment =====================
+.env
+.env.local
+*.pkl
+
+# ===================== IDE =====================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ===================== OS =====================
+.DS_Store
+Thumbs.db
+*.log
+
+# ===================== Railway =====================
+# Jangan ignore .env.example karena template untuk user
+!.env.example

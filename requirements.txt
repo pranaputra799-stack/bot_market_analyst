@@ -1,0 +1,27 @@
+# Core
+python-telegram-bot[job-queue]==20.7
+python-dotenv==1.0.1
+
+# Data Layer
+# yfinance >=1.0 memakai backend curl_cffi (impersonasi fingerprint browser)
+# yang jauh lebih jarang kena rate-limit 429 Yahoo dibanding 0.2.x (requests
+# polos dengan User-Agent default yfinance yang mudah diblokir).
+yfinance>=1.0.0,<2.0
+requests==2.31.0
+aiohttp==3.9.1
+
+# AI Engine
+# (tidak perlu library tambahan, cukup requests)
+
+# Optional: untuk fitur tambahan
+pandas==2.1.3          # Jika perlu manipulasi data
+numpy==1.26.2          # Jika perlu kalkulasi teknikal
+beautifulsoup4==4.12.2 # Jika perlu scraping (alternatif)
+lxml==4.9.4            # XML parsing untuk RSS
+
+# Timezone & JobQueue support
+pytz>=2023.3
+backports.zoneinfo; python_version < "3.9"
+
+# Logging
+# (built-in logging sudah cukup)

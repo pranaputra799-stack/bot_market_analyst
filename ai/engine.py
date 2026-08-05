@@ -1,0 +1,406 @@
+"""
+AI Fallback Engine - Inti dari sistem AI dengan multi-provider fallback.
+Mekanisme:
+  Groq (primary) -> Gemini (fallback 1) -> OpenRouter (fallback 2) -> Cerebras (fallback 3)
+
+Setiap provider punya rate limit dan karakteristik berbeda.
+Bot secara otomatis mencoba provider berikutnya jika satu provider gagal.
+"""
+import asyncio
+import json
+import logging
+import time
+from typing import Dict, List, Optional, Callable, Any
+
+import aiohttp
+import requests
+
+from config.settings import (
+    GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY,
+    CEREBRAS_API_KEY, MISTRAL_API_KEY, AI_FALLBACK_ORDER,
+)
+from config.providers import PROVIDER_CONFIGS
+from data.cache import get_cached_ai_response, set_cached_ai_response, safe_hash
+
+logger = logging.getLogger(__name__)
+
+
+class AIFallbackEngine:
+    """
+    Engine AI dengan mekanisme fallback multi-provider.
+    Mencoba provider satu per satu sampai ada yang sukses.
+    """
+
+    DEFAULT_SYSTEM = (
+        "Anda adalah analis pasar keuangan senior spesialis forex, gold, dan makroekonomi. "
+        "ATURAN PENTING:\n"
+        "1. Jawab HANYA pertanyaan yang diajukan user, jangan menjawab topik lain.\n"
+        "2. Gunakan data konteks yang disediakan sebagai referensi, bukan sebagai topik utama.\n"
+        "3. Jika pertanyaan user tidak berkaitan dengan data yang tersedia, tetap jawab berdasarkan pengetahuan umum.\n"
+        "4. Jawab dalam Bahasa Indonesia yang santai namun profesional.\n"
+        "5. Jangan mengarang data harga; gunakan hanya data yang diberikan dalam konteks.\n"
+        "6. Jangan mengarang jadwal rilis data ekonomi (tanggal/jam). Hanya sebutkan event yang benar-benar ada di data kalender; jika tidak ada data, katakan tidak tersedia."
+    )
+
+    def __init__(self, fallback_order: Optional[List[str]] = None):
+        self.fallback_order = fallback_order or AI_FALLBACK_ORDER
+        self.api_keys = {
+            "groq": GROQ_API_KEY,
+            "gemini": GEMINI_API_KEY,
+            "openrouter": OPENROUTER_API_KEY,
+            "cerebras": CEREBRAS_API_KEY,
+            "mistral": MISTRAL_API_KEY,
+        }
+        self.stats = {
+            "total_requests": 0,
+            "successful": 0,
+            "failed": 0,
+            "provider_usage": {p: 0 for p in self.fallback_order},
+            "last_error": None,
+        }
+
+    def generate(self, prompt: str, max_retries: int = 3, use_cache: bool = True, system_override: Optional[str] = None) -> str:
+        """
+        Generate response dengan fallback otomatis.
+
+        Args:
+            prompt: Prompt yang akan dikirim ke AI
+            max_retries: Max retry per provider
+            use_cache: Apakah menggunakan cache untuk pertanyaan identik
+            system_override: System prompt khusus untuk menggantikan default
+
+        Returns:
+            String response dari AI
+        """
+        self.stats["total_requests"] += 1
+
+        # Store system override for this request
+        self._current_system = system_override or self.DEFAULT_SYSTEM
+
+        # Cek cache dulu (include system in cache key)
+        cache_key = prompt
+        if system_override:
+            cache_key = f"{safe_hash(system_override)}:{prompt}"
+        
+        if use_cache:
+            cached = get_cached_ai_response(cache_key)
+            if cached:
+                logger.info("Using cached AI response")
+                return cached
+
+        # Coba provider satu per satu
+        for provider in self.fallback_order:
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"Trying provider: {provider} (attempt {attempt + 1}/{max_retries})")
+
+                    config = PROVIDER_CONFIGS.get(provider)
+                    if not config:
+                        logger.warning(f"Provider {provider} not found in config")
+                        continue
+
+                    key = self.api_keys.get(provider)
+                    if not key:
+                        logger.warning(f"No API key for {provider}")
+                        break  # Skip to next provider
+
+                    response = self._call_provider(provider, prompt)
+                    if response:
+                        self.stats["successful"] += 1
+                        self.stats["provider_usage"][provider] += 1
+
+                        # Only wrap with via tag if NOT using system_override (internal agent call)
+                        if system_override:
+                            formatted = response
+                        else:
+                            formatted = f"[via {config['name']}] 🤖\n\n{response}"
+
+                        # Cache response
+                        if use_cache:
+                            set_cached_ai_response(cache_key, formatted)
+
+                        return formatted
+
+                    # Provider merespon kosong (429 / model error). Jeda exponensial
+                    # sebelum attempt berikutnya agar tidak memperparah rate limit.
+                    if attempt < max_retries - 1:
+                        wait = 2 ** attempt
+                        logger.info(f"{provider} returned empty response, retrying in {wait}s...")
+                        time.sleep(wait)
+
+                except Exception as e:
+                    logger.warning(f"{provider} attempt {attempt + 1} failed: {e}")
+                    self.stats["last_error"] = f"{provider}: {e}"
+                    if attempt < max_retries - 1:
+                        wait = 2 ** attempt  # Exponential backoff
+                        logger.info(f"Retrying in {wait}s...")
+                        time.sleep(wait)
+
+            # Jika provider ini gagal total, log dan lanjut ke berikutnya
+            logger.info(f"{provider} exhausted, trying next provider...")
+
+        self.stats["failed"] += 1
+        error_msg = (
+            "Maaf, semua AI provider sedang tidak tersedia saat ini. "
+            "Silakan coba lagi nanti.\n\n"
+            "Tips:\n"
+            "• Coba beberapa menit lagi (rate limit mungkin sudah reset)\n"
+            "• Gunakan perintah /status untuk melihat status sistem\n"
+            "• Pastikan API keys sudah diisi di file .env"
+        )
+        return error_msg
+
+    async def generate_async(self, prompt: str, max_retries: int = 3, use_cache: bool = True, system_override: Optional[str] = None) -> str:
+        """Async version of generate."""
+        return await asyncio.to_thread(self.generate, prompt, max_retries, use_cache, system_override)
+
+    def _call_provider(self, provider: str, prompt: str) -> Optional[str]:
+        """
+        Panggil provider AI dengan format yang sesuai.
+
+        Args:
+            provider: Nama provider (groq, gemini, openrouter, cerebras)
+            prompt: Prompt text
+
+        Returns:
+            Response text atau None jika gagal
+        """
+        config = PROVIDER_CONFIGS[provider]
+        key = self.api_keys[provider]
+
+        if config["payload_template"] == "gemini":
+            return self._call_gemini(config, key, prompt)
+        else:
+            return self._call_openai_compatible(config, key, prompt)
+
+    def _call_openai_compatible(self, config: Dict, key: str, prompt: str) -> Optional[str]:
+        """
+        Panggil API dengan format OpenAI-compatible.
+        Digunakan oleh: Groq, OpenRouter, Cerebras, Mistral
+
+        Mencoba model utama, lalu fallback_models satu per satu jika gagal
+        (404 model tidak ada, 429 rate limit, error, dll).
+        """
+        models = [config["model"]] + list(config.get("fallback_models", []))
+
+        payload = {
+            "model": models[0],
+            "messages": [
+                {
+                    "role": "system",
+                    "content": getattr(self, '_current_system', self.DEFAULT_SYSTEM),
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.3,
+            "max_tokens": 2048,
+        }
+
+        for model in models:
+            payload["model"] = model
+            try:
+                resp = requests.post(
+                    config["url"],
+                    json=payload,
+                    headers=config["headers"](key),
+                    timeout=30,
+                )
+
+                if resp.status_code == 429:
+                    logger.warning(f"{config['name']} rate limited (429) with {model}")
+                    # 429 adalah kuota per-akun (TPM/RPM) — ganti model TIDAK membantu.
+                    # Hormati Retry-After lalu hentikan percobaan ke model lain;
+                    # loop attempt/provider di generate() yang melanjutkan.
+                    wait = self._retry_after_wait(resp)
+                    logger.info(f"{config['name']} rate limited — waiting {wait:.0f}s before retry")
+                    time.sleep(wait)
+                    return None
+
+                if resp.status_code != 200:
+                    logger.warning(f"{config['name']} error {resp.status_code} with {model}: {resp.text[:200]}")
+                    continue
+
+                data = resp.json()
+
+                # Handle different response structures
+                if "choices" in data and len(data["choices"]) > 0:
+                    message = data["choices"][0].get("message", {})
+                    content = message.get("content", "")
+                    if content:
+                        return content
+
+                if "error" in data:
+                    logger.warning(f"{config['name']} API error with {model}: {data['error']}")
+                    continue
+
+            except requests.exceptions.Timeout:
+                logger.warning(f"{config['name']} timeout with {model}")
+                # Timeout biasanya berlaku untuk semua model — langsung lanjut ke provider berikutnya
+                return None
+            except requests.exceptions.ConnectionError:
+                logger.warning(f"{config['name']} connection error with {model}")
+                return None
+            except Exception as e:
+                logger.warning(f"{config['name']} unexpected error with {model}: {e}")
+                continue
+
+        return None
+
+    def _call_gemini(self, config: Dict, key: str, prompt: str) -> Optional[str]:
+        """
+        Panggil Google Gemini API.
+        Format berbeda dari OpenAI-compatible.
+
+        Mencoba model utama, lalu fallback_models jika gagal (404 model hilang, dll).
+        """
+        models = [config["model"]] + list(config.get("fallback_models", []))
+
+        for model in models:
+            url = f"{config['url']}{model}:generateContent?key={key}"
+
+            payload = {
+                "system_instruction": {
+                    "parts": [
+                        {
+                            "text": getattr(self, '_current_system', self.DEFAULT_SYSTEM),
+                        }
+                    ]
+                },
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0.3,
+                    "maxOutputTokens": 2048,
+                    "topP": 0.95,
+                    "topK": 40,
+                },
+                "safetySettings": [
+                    {
+                        "category": "HARM_CATEGORY_HARASSMENT",
+                        "threshold": "BLOCK_NONE"
+                    },
+                    {
+                        "category": "HARM_CATEGORY_HATE_SPEECH",
+                        "threshold": "BLOCK_NONE"
+                    },
+                    {
+                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        "threshold": "BLOCK_NONE"
+                    },
+                    {
+                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                        "threshold": "BLOCK_NONE"
+                    }
+                ]
+            }
+
+            try:
+                resp = requests.post(
+                    url,
+                    json=payload,
+                    headers=config["headers"](key),
+                    timeout=30,
+                )
+
+                if resp.status_code == 429:
+                    logger.warning(f"Gemini rate limited (429) with {model}")
+                    # Sama seperti provider OpenAI-compatible: 429 = kuota akun,
+                    # tunggu Retry-After lalu serahkan ke loop attempt/provider.
+                    wait = self._retry_after_wait(resp)
+                    logger.info(f"Gemini rate limited — waiting {wait:.0f}s before retry")
+                    time.sleep(wait)
+                    return None
+
+                if resp.status_code != 200:
+                    logger.warning(f"Gemini error {resp.status_code} with {model}: {resp.text[:200]}")
+                    continue
+
+                data = resp.json()
+
+                if "candidates" in data and len(data["candidates"]) > 0:
+                    candidate = data["candidates"][0]
+                    if "content" in candidate:
+                        parts = candidate["content"].get("parts", [])
+                        if parts:
+                            text = parts[0].get("text", "")
+                            if text:
+                                return text
+
+                if "promptFeedback" in data and "blockReason" in data["promptFeedback"]:
+                    logger.warning(f"Gemini blocked with {model}: {data['promptFeedback']['blockReason']}")
+                    continue
+
+            except requests.exceptions.Timeout:
+                logger.warning(f"Gemini timeout with {model}")
+                # Timeout biasanya berlaku untuk semua model — langsung lanjut ke provider berikutnya
+                return None
+            except requests.exceptions.ConnectionError:
+                logger.warning(f"Gemini connection error with {model}")
+                return None
+            except Exception as e:
+                logger.warning(f"Gemini unexpected error with {model}: {e}")
+                continue
+
+        return None
+
+    @staticmethod
+    def _retry_after_wait(resp) -> float:
+        """
+        Ambil durasi tunggu dari header Retry-After (detik), dengan batas wajar.
+
+        Args:
+            resp: Response requests/httpx yang punya atribut headers
+
+        Returns:
+            Jumlah detik tunggu (1-10 detik)
+        """
+        retry_after = resp.headers.get("Retry-After") if hasattr(resp, "headers") else None
+        try:
+            wait = float(retry_after)
+        except (TypeError, ValueError):
+            wait = 2.0
+        return min(max(wait, 1.0), 10.0)
+
+    def get_stats(self) -> Dict:
+        """Dapatkan statistik penggunaan AI engine."""
+        return {
+            **self.stats,
+            "available_providers": [
+                p for p in self.fallback_order
+                if self.api_keys.get(p)
+            ],
+            "provider_names": {
+                p: PROVIDER_CONFIGS[p]["name"]
+                for p in self.fallback_order
+                if p in PROVIDER_CONFIGS
+            },
+        }
+
+    def test_connection(self, provider: str) -> Dict:
+        """Test koneksi ke provider tertentu."""
+        if provider not in PROVIDER_CONFIGS:
+            return {"status": "error", "message": f"Provider {provider} tidak dikenal"}
+
+        key = self.api_keys.get(provider)
+        if not key:
+            return {"status": "error", "message": f"API key untuk {provider} tidak ditemukan"}
+
+        try:
+            response = self._call_provider(provider, "Halo, balas dengan 'OK' saja.")
+            if response:
+                return {"status": "ok", "message": f"{PROVIDER_CONFIGS[provider]['name']} berfungsi normal"}
+            else:
+                return {"status": "error", "message": f"{PROVIDER_CONFIGS[provider]['name']} merespon kosong"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
