@@ -7,7 +7,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
@@ -64,49 +64,168 @@ from bot.messages import (
 logger = logging.getLogger(__name__)
 
 
-async def safe_reply_text(message, text: str, parse_mode: Optional[str] = "Markdown", **kwargs):
+# Batas maksimal karakter per pesan Telegram (4096). Dipakai 4000 agar ada ruang
+# aman untuk emoji/karakter UTF-8 yang bisa dihitung berbeda.
+TG_MAX_MESSAGE_CHARS = 4000
+
+
+def split_long_text(text: str, max_len: int = TG_MAX_MESSAGE_CHARS) -> List[str]:
     """
-    Kirim reply_text dengan aman. Fallback ke plain text jika parse mode gagal.
+    Pecah teks panjang menjadi beberapa bagian agar tidak melebihi batas
+    4096 karakter per pesan Telegram.
+
+    Memotong di batas paragraf, lalu batas baris, agar konten tidak terpotong
+    di tengah kalimat. Bagian-bagian yang sudah dipecah tetap utuh (tidak ada
+    konten yang dibuang).
+
+    Args:
+        text: Teks yang akan dipecah
+        max_len: Batas panjang per bagian
+
+    Returns:
+        List of text chunks
     """
+    if len(text) <= max_len:
+        return [text]
+
+    chunks: List[str] = []
+    current = ""
+
+    for para in text.split("\n\n"):
+        if len(current) + len(para) + 2 <= max_len:
+            current = f"{current}\n\n{para}" if current else para
+            continue
+
+        # Flush paragraf yang sudah terkumpul
+        if current:
+            chunks.append(current)
+            current = ""
+
+        if len(para) <= max_len:
+            current = para
+            continue
+
+        # Paragraf sendirian lebih panjang dari max_len: pecah per baris,
+        # lalu hard-split bila masih ada baris yang lebih panjang dari max_len.
+        buf = ""
+        for line in para.split("\n"):
+            if len(buf) + len(line) + 1 <= max_len:
+                buf = f"{buf}\n{line}" if buf else line
+            else:
+                if buf:
+                    chunks.append(buf)
+                while len(line) > max_len:
+                    chunks.append(line[:max_len])
+                    line = line[max_len:]
+                buf = line
+        if buf:
+            current = buf
+
+    if current:
+        chunks.append(current)
+
+    return [c for c in chunks if c]
+
+
+async def _reply_chunk(message, chunk: str, parse_mode: Optional[str], kwargs: Dict):
+    """Kirim satu chunk via reply_text dengan fallback plain text jika Markdown gagal."""
     try:
-        return await message.reply_text(text, parse_mode=parse_mode, **kwargs)
+        return await message.reply_text(chunk, parse_mode=parse_mode, **kwargs)
     except BadRequest as e:
         if any(err in str(e).lower() for err in ["parse", "entity", "entities"]):
             logger.warning(f"Markdown parse error: {e}. Retrying without parse_mode.")
             kwargs_copy = dict(kwargs)
             kwargs_copy.pop("parse_mode", None)
-            return await message.reply_text(text, **kwargs_copy)
+            return await message.reply_text(chunk, **kwargs_copy)
+        raise
+
+
+async def safe_reply_text(message, text: str, parse_mode: Optional[str] = "Markdown", **kwargs):
+    """
+    Kirim reply_text dengan aman.
+    - Fallback ke plain text jika parse mode gagal.
+    - Otomatis pecah jadi beberapa pesan jika melebihi batas 4096 karakter
+      (menyebabkan morning brief / analisis panjang tidak terpotong).
+    """
+    try:
+        return await _reply_chunk(message, text, parse_mode, kwargs)
+    except BadRequest as e:
+        if "too long" in str(e).lower():
+            logger.info(f"Message too long ({len(text)} chars), splitting into parts...")
+            result = None
+            for chunk in split_long_text(text):
+                result = await _reply_chunk(message, chunk, parse_mode, kwargs)
+            return result
+        raise
+
+
+async def _send_chunk(bot, chat_id: int, chunk: str, parse_mode: Optional[str], kwargs: Dict):
+    """Kirim satu chunk via send_message dengan fallback plain text jika Markdown gagal."""
+    try:
+        return await bot.send_message(chat_id=chat_id, text=chunk, parse_mode=parse_mode, **kwargs)
+    except BadRequest as e:
+        if any(err in str(e).lower() for err in ["parse", "entity", "entities"]):
+            logger.warning(f"Markdown parse error: {e}. Retrying without parse_mode.")
+            kwargs_copy = dict(kwargs)
+            kwargs_copy.pop("parse_mode", None)
+            return await bot.send_message(chat_id=chat_id, text=chunk, **kwargs_copy)
         raise
 
 
 async def safe_send_message(bot, chat_id: int, text: str, parse_mode: Optional[str] = "Markdown", **kwargs):
     """
-    Kirim send_message dengan aman. Fallback ke plain text jika parse mode gagal.
+    Kirim send_message dengan aman.
+    - Fallback ke plain text jika parse mode gagal.
+    - Otomatis pecah jadi beberapa pesan jika melebihi batas 4096 karakter.
     """
     try:
-        return await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode, **kwargs)
+        return await _send_chunk(bot, chat_id, text, parse_mode, kwargs)
     except BadRequest as e:
-        if any(err in str(e).lower() for err in ["parse", "entity", "entities"]):
-            logger.warning(f"Markdown parse error: {e}. Retrying without parse_mode.")
-            kwargs_copy = dict(kwargs)
-            kwargs_copy.pop("parse_mode", None)
-            return await bot.send_message(chat_id=chat_id, text=text, **kwargs_copy)
+        if "too long" in str(e).lower():
+            logger.info(f"Message too long ({len(text)} chars), splitting into parts...")
+            result = None
+            for chunk in split_long_text(text):
+                result = await _send_chunk(bot, chat_id, chunk, parse_mode, kwargs)
+            return result
         raise
 
 
 async def safe_edit_message_text(query, text: str, parse_mode: Optional[str] = "Markdown", **kwargs):
     """
-    Edit message text dengan aman. Fallback ke plain text jika parse mode gagal.
+    Edit message text dengan aman.
+    - Fallback ke plain text jika parse mode gagal.
+    - Jika teks terlalu panjang untuk di-edit, kirim sebagai pesan balasan baru
+      (dipecah bila perlu) agar konten tidak hilang.
     """
     try:
         return await query.edit_message_text(text, parse_mode=parse_mode, **kwargs)
     except BadRequest as e:
+        if "too long" in str(e).lower():
+            if query.message is not None:
+                logger.info(f"Edit message too long ({len(text)} chars), replying with parts instead...")
+                result = None
+                for chunk in split_long_text(text):
+                    result = await _reply_chunk(query.message, chunk, parse_mode, kwargs)
+                return result
+            # Tidak ada message untuk di-reply (mis. inline mode) — biarkan error asli
+            raise
         if any(err in str(e).lower() for err in ["parse", "entity", "entities"]):
             logger.warning(f"Markdown parse error: {e}. Retrying without parse_mode.")
             kwargs_copy = dict(kwargs)
             kwargs_copy.pop("parse_mode", None)
             return await query.edit_message_text(text, **kwargs_copy)
         raise
+
+
+def _strip_provider_prefix(text: str) -> str:
+    """
+    Hapus prefix '[via Provider] 🤖' dari response AI (ditambahkan engine
+    untuk request tanpa system_override) agar konten analisis bersih.
+    """
+    if "[via" in text:
+        parts = text.split("\n\n", 1)
+        return parts[1] if len(parts) > 1 else text
+    return text
 
 
 class MarketBot:
@@ -450,17 +569,23 @@ class MarketBot:
 
                 result = await self.analysis_director.analyze(analysis_prompt)
 
-                # Extract from analysis result
-                ai_content = result.final_response or ""
+                # Extract from analysis result (bersihkan prefix [via ...])
+                ai_content = _strip_provider_prefix(result.final_response or "")
 
-                # Parse sections
-                if "OUTLOOK:" in ai_content and "KATALIS UTAMA:" in ai_content:
+                # Parse sections TANPA memotong konten (jangan hard-truncate 400/700 char)
+                if "KATALIS UTAMA" in ai_content:
                     sections = ai_content.split("KATALIS UTAMA:")
                     outlook_part = sections[0].replace("OUTLOOK:", "").replace("OUTLOOK", "").strip()
                     catalysts_part = sections[1].strip() if len(sections) > 1 else ""
                 else:
-                    outlook_part = ai_content[:400]
-                    catalysts_part = ai_content[400:700]
+                    # Tidak ada marker: gunakan seluruh konten sebagai outlook
+                    outlook_part = ai_content.strip()
+                    catalysts_part = ""
+
+                if not outlook_part:
+                    outlook_part = "Belum ada data analisis untuk hari ini."
+                if not catalysts_part:
+                    catalysts_part = "Belum ada katalis utama yang teridentifikasi hari ini."
 
                 return MORNING_BRIEF_TEMPLATE.format(
                     date=today,
@@ -489,19 +614,15 @@ class MarketBot:
             f"KATALIS UTAMA:\n[3-4 katalis utama yang perlu diwaspadai hari ini, beri perhatian ekstra pada rilis data di KALENDER EKONOMI]"
         )
 
-        ai_response = self.ai.generate(outlook_prompt, use_cache=True)
+        ai_response = self.ai.generate(outlook_prompt, use_cache=True, max_tokens=4096)
 
-        # Parse AI response
-        if "[via" in ai_response:
-            parts = ai_response.split("\n\n", 1)
-            ai_content = parts[1] if len(parts) > 1 else ai_response
-        else:
-            ai_content = ai_response
+        # Parse AI response (bersihkan prefix [via ...])
+        ai_content = _strip_provider_prefix(ai_response)
 
         # Split into outlook and catalysts
         sections = ai_content.split("KATALIS UTAMA:")
         outlook = sections[0].replace("OUTLOOK:", "").strip() if sections else "Data belum tersedia"
-        catalysts = sections[1].strip() if len(sections) > 1 else "Belum ada katalis utama yang teridentifikasi"
+        catalysts = sections[1].strip() if len(sections) > 1 else "Belum ada katalis utama yang teridentifikasi hari ini."
 
         return MORNING_BRIEF_TEMPLATE.format(
             date=today,

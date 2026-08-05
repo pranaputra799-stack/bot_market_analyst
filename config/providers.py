@@ -33,16 +33,25 @@ PROVIDER_CONFIGS = {
     "openrouter": {
         "name": "OpenRouter",
         "url": "https://openrouter.ai/api/v1/chat/completions",
-        # inclusionai/ling-3.0-flash:free = satu-satunya free endpoint yang stabil
-        # dengan guardrail privacy akun ini (terverifikasi 200). Endpoint lain
-        # (gemma-4, nemotron, dst) diblokir guardrail kecuali akun mengubah
-        # data policy di https://openrouter.ai/settings/privacy
+        # Model free yang terverifikasi stabil (200). OpenRouter punya BANYAK
+        # model gratis (:free / $0). auto_discover_free = True membuat engine
+        # otomatis menarik daftar model free terkini dari API OpenRouter
+        # sehingga bot tetap jalan walau Groq/Gemini sedang down.
+        # CATATAN: beberapa model :free bisa diblokir guardrail privacy akun
+        # kecuali data policy diubah di https://openrouter.ai/settings/privacy
+        # (set ke "Allow all" agar semua model free bisa dipakai).
         "model": "inclusionai/ling-3.0-flash:free",
         "fallback_models": [
-            "openrouter/free",
-            "google/gemma-4-31b-it:free",
-            "nvidia/nemotron-3-nano-30b-a3b:free"
+            "openrouter/free",                          # auto-router: pilih model free terbaik
+            "google/gemma-4-31b-it:free",               # reasoning kuat, vision (262K ctx)
+            "google/gemma-4-26b-a4b-it:free",
+            "nvidia/nemotron-3-ultra-550b-a55b:free",   # 1M context, bagus utk analisis panjang
+            "nvidia/nemotron-3-super-120b-a12b:free",
+            "openai/gpt-oss-20b:free",
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+            "nvidia/nemotron-3-nano-30b-a3b:free",
         ],
+        "auto_discover_free": True,  # tarik daftar free model terbaru dari API
         "headers": lambda key: {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",

@@ -24,8 +24,15 @@ OPENROUTER_API_KEY = _get_key("OPENROUTER_API_KEY", "")
 CEREBRAS_API_KEY = _get_key("CEREBRAS_API_KEY", "")
 MISTRAL_API_KEY = _get_key("MISTRAL_API_KEY", "")
 
-# Fallback order - akan dicoba berurutan sampai ada yang sukses
-AI_FALLBACK_ORDER = ["groq", "gemini", "openrouter", "cerebras", "mistral"]
+# Fallback order - akan dicoba berurutan sampai ada yang sukses.
+# OpenRouter (banyak model free) dijadikan fallback utama setelah Groq
+# agar bot tetap responsif saat Groq/Gemini sedang rate-limit / down.
+# Bisa di-override via env AI_FALLBACK_ORDER (pisahkan dengan koma).
+AI_FALLBACK_ORDER = [
+    x.strip() for x in os.getenv(
+        "AI_FALLBACK_ORDER", "groq,openrouter,gemini,cerebras,mistral"
+    ).split(",") if x.strip()
+]
 
 # ===================== DATA PROVIDERS =====================
 ALPHA_VANTAGE_KEY = _get_key("ALPHA_VANTAGE_KEY", "")

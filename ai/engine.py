@@ -1,14 +1,17 @@
 """
 AI Fallback Engine - Inti dari sistem AI dengan multi-provider fallback.
 Mekanisme:
-  Groq (primary) -> Gemini (fallback 1) -> OpenRouter (fallback 2) -> Cerebras (fallback 3)
+  Groq (primary) -> OpenRouter (fallback 1, banyak model free) -> Gemini (fallback 2) -> Cerebras (fallback 3) -> Mistral (fallback 4)
 
 Setiap provider punya rate limit dan karakteristik berbeda.
 Bot secara otomatis mencoba provider berikutnya jika satu provider gagal.
+OpenRouter memakai daftar model free (suffix :free / $0) yang di-discovery
+langsung dari API sehingga bot tetap jalan walau Groq/Gemini sedang down.
 """
 import asyncio
 import json
 import logging
+import threading
 import time
 from typing import Dict, List, Optional, Callable, Any
 
@@ -21,6 +24,7 @@ from config.settings import (
 )
 from config.providers import PROVIDER_CONFIGS
 from data.cache import get_cached_ai_response, set_cached_ai_response, safe_hash
+from ai.openrouter_client import get_free_models
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +63,20 @@ class AIFallbackEngine:
             "last_error": None,
         }
 
-    def generate(self, prompt: str, max_retries: int = 3, use_cache: bool = True, system_override: Optional[str] = None) -> str:
+        # Warm up daftar model free OpenRouter di background (non-blocking)
+        # agar fallback ke OpenRouter langsung pakai daftar model terbaru.
+        if self.api_keys.get("openrouter"):
+            try:
+                threading.Thread(
+                    target=get_free_models,
+                    kwargs={"refresh": True},
+                    daemon=True,
+                    name="openrouter-warmup",
+                ).start()
+            except Exception:
+                pass
+
+    def generate(self, prompt: str, max_retries: int = 3, use_cache: bool = True, system_override: Optional[str] = None, max_tokens: int = 4096) -> str:
         """
         Generate response dengan fallback otomatis.
 
@@ -68,6 +85,7 @@ class AIFallbackEngine:
             max_retries: Max retry per provider
             use_cache: Apakah menggunakan cache untuk pertanyaan identik
             system_override: System prompt khusus untuk menggantikan default
+            max_tokens: Batas token output (4096 agar teks tidak terpotong)
 
         Returns:
             String response dari AI
@@ -76,6 +94,7 @@ class AIFallbackEngine:
 
         # Store system override for this request
         self._current_system = system_override or self.DEFAULT_SYSTEM
+        self._current_max_tokens = max_tokens
 
         # Cek cache dulu (include system in cache key)
         cache_key = prompt
@@ -150,9 +169,9 @@ class AIFallbackEngine:
         )
         return error_msg
 
-    async def generate_async(self, prompt: str, max_retries: int = 3, use_cache: bool = True, system_override: Optional[str] = None) -> str:
+    async def generate_async(self, prompt: str, max_retries: int = 3, use_cache: bool = True, system_override: Optional[str] = None, max_tokens: int = 4096) -> str:
         """Async version of generate."""
-        return await asyncio.to_thread(self.generate, prompt, max_retries, use_cache, system_override)
+        return await asyncio.to_thread(self.generate, prompt, max_retries, use_cache, system_override, max_tokens)
 
     def _call_provider(self, provider: str, prompt: str) -> Optional[str]:
         """
@@ -183,6 +202,13 @@ class AIFallbackEngine:
         """
         models = [config["model"]] + list(config.get("fallback_models", []))
 
+        # OpenRouter: perbanyak kandidat dengan daftar free model terkini dari API
+        if config.get("auto_discover_free"):
+            for m in get_free_models():
+                if m not in models:
+                    models.append(m)
+            models = models[:20]  # batasi agar fallback tidak lambat saat semua gagal
+
         payload = {
             "model": models[0],
             "messages": [
@@ -196,7 +222,7 @@ class AIFallbackEngine:
                 }
             ],
             "temperature": 0.3,
-            "max_tokens": 2048,
+            "max_tokens": getattr(self, '_current_max_tokens', 4096),
         }
 
         for model in models:
@@ -281,7 +307,7 @@ class AIFallbackEngine:
                 ],
                 "generationConfig": {
                     "temperature": 0.3,
-                    "maxOutputTokens": 2048,
+                    "maxOutputTokens": getattr(self, '_current_max_tokens', 4096),
                     "topP": 0.95,
                     "topK": 40,
                 },
