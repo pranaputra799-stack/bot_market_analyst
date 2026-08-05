@@ -9,6 +9,7 @@ Scoring factors:
 4. SCENARIO CLARITY (20%) — How clear the scenario picture is
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -116,7 +117,10 @@ class ConfidenceAgent:
                 thesis_output=thesis_output[:500] if thesis_output else "No thesis",
             )
 
-            response = self.ai.generate(
+            # generate() sinkron (requests) → jalankan di thread agar tidak
+            # memblokir event loop dan bisa paralel dengan agent lain.
+            response = await asyncio.to_thread(
+                self.ai.generate,
                 prompt,
                 use_cache=True,
                 system_override=CONFIDENCE_SYSTEM,

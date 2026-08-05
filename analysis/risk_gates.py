@@ -13,6 +13,7 @@ Identifies:
 ⚠️ This is EDUCATIONAL analysis, not trading advice.
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -104,7 +105,10 @@ class RiskGates:
                 scenarios_output=scenarios_output[:800] if scenarios_output else "No scenarios",
             )
 
-            response = self.ai.generate(
+            # generate() sinkron (requests) → jalankan di thread agar tidak
+            # memblokir event loop dan bisa paralel dengan agent lain.
+            response = await asyncio.to_thread(
+                self.ai.generate,
                 prompt,
                 use_cache=True,
                 system_override=RISK_SYSTEM,

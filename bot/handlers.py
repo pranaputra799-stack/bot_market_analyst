@@ -220,6 +220,35 @@ async def safe_edit_message_text(query, text: str, parse_mode: Optional[str] = "
         raise
 
 
+async def _edit_progress_message(message, text: str, parse_mode: Optional[str] = "Markdown", **kwargs):
+    """
+    Ganti pesan progress dengan jawaban akhir (edit_text).
+    - Fallback plain text jika Markdown gagal.
+    - Jika terlalu panjang untuk di-edit, reply berchunk lalu hapus pesan progress.
+    """
+    try:
+        return await message.edit_text(text, parse_mode=parse_mode, **kwargs)
+    except BadRequest as e:
+        msg = str(e).lower()
+        if "message is not modified" in msg:
+            return None  # teks sama persis — abaikan
+        if "too long" in msg:
+            result = None
+            for chunk in split_long_text(text):
+                result = await _reply_chunk(message, chunk, parse_mode, kwargs)
+            try:
+                await message.delete()  # bersihkan pesan progress
+            except Exception:
+                pass
+            return result
+        if any(err in msg for err in ["parse", "entity", "entities"]):
+            logger.warning(f"Markdown parse error: {e}. Retrying without parse_mode.")
+            kwargs_copy = dict(kwargs)
+            kwargs_copy.pop("parse_mode", None)
+            return await message.edit_text(text, **kwargs_copy)
+        raise
+
+
 def _strip_provider_prefix(text: str) -> str:
     """
     Hapus prefix '[via Provider] 🤖' dari response AI (ditambahkan engine
@@ -308,6 +337,10 @@ class MarketBot:
             ],
             [
                 InlineKeyboardButton("🧠 Sentimen Pasar", callback_data="sentiment"),
+            ],
+            [
+                InlineKeyboardButton("🔔 Langganan Brief", callback_data="subscribe"),
+                InlineKeyboardButton("🔕 Berhenti", callback_data="unsubscribe"),
             ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -794,6 +827,15 @@ class MarketBot:
             action="typing",
         )
 
+        # Pesan progress — diedit menjadi jawaban akhir setelah analisis selesai
+        progress = None
+        try:
+            progress = await update.message.reply_text(
+                "🔍 Menganalisis pertanyaan Anda... mohon tunggu sebentar."
+            )
+        except Exception:
+            progress = None
+
         try:
             if self.analysis_director and ENABLE_MULTI_AGENT:
                 # ===== NEW: Multi-Agent Analysis Pipeline =====
@@ -853,26 +895,35 @@ class MarketBot:
             # Hapus simbol '*' (markdown bold) dari jawaban agar tidak tampil mentah
             final_message = strip_markdown_asterisks(final_message)
 
-            # Send response
-            await safe_reply_text(
-                update.message,
-                final_message,
-                parse_mode="Markdown",
-                disable_web_page_preview=True,
-            )
+            # Send response — edit pesan progress menjadi jawaban akhir
+            if progress is not None:
+                await _edit_progress_message(
+                    progress,
+                    final_message,
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True,
+                )
+            else:
+                await safe_reply_text(
+                    update.message,
+                    final_message,
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True,
+                )
 
         except asyncio.TimeoutError:
-            await safe_reply_text(
-                update.message,
-                "⏰ Maaf, permintaan timeout. Silakan coba lagi dengan pertanyaan yang lebih spesifik.",
-            )
+            msg = "⏰ Maaf, permintaan timeout. Silakan coba lagi dengan pertanyaan yang lebih spesifik."
+            if progress is not None:
+                await _edit_progress_message(progress, msg)
+            else:
+                await safe_reply_text(update.message, msg)
         except Exception as e:
             logger.error(f"Error handling message: {e}", exc_info=True)
-            await safe_reply_text(
-                update.message,
-                f"{ERROR_MESSAGE}\n\nDetail teknis: {str(e)[:100]}",
-                parse_mode="Markdown",
-            )
+            msg = f"{ERROR_MESSAGE}\n\nDetail teknis: {str(e)[:100]}"
+            if progress is not None:
+                await _edit_progress_message(progress, msg, parse_mode="Markdown")
+            else:
+                await safe_reply_text(update.message, msg, parse_mode="Markdown")
 
     def _detect_pairs(self, question: str) -> list:
         """Detect forex pairs mentioned in question."""
@@ -1136,6 +1187,33 @@ JAWABAN:"""
                 parse_mode="Markdown",
                 disable_web_page_preview=True,
             )
+
+        elif data == "subscribe":
+            chat_id = update.effective_chat.id
+            subscribed = await asyncio.to_thread(db.add_subscriber, chat_id)
+            if subscribed:
+                await query.message.reply_text(
+                    "🎉 Berhasil berlangganan Morning Brief harian!\n"
+                    "Setiap pagi kamu akan menerima ringkasan pasar otomatis. 🌅"
+                )
+            else:
+                await query.message.reply_text(
+                    "❌ Gagal berlangganan. Database mungkin belum dikonfigurasi "
+                    "(SUPABASE_URL / SUPABASE_KEY)."
+                )
+
+        elif data == "unsubscribe":
+            chat_id = update.effective_chat.id
+            removed = await asyncio.to_thread(db.remove_subscriber, chat_id)
+            if removed:
+                await query.message.reply_text(
+                    "👋 Berhasil berhenti berlangganan Morning Brief.\n"
+                    "Kirim /start lalu klik tombol 🔔 untuk berlangganan lagi."
+                )
+            else:
+                await query.message.reply_text(
+                    "⚠️ Kamu belum terdaftar sebagai subscriber Morning Brief."
+                )
 
         elif data == "help":
             await safe_edit_message_text(

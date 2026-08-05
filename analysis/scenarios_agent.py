@@ -10,6 +10,7 @@ Generates THREE scenarios:
 Each scenario includes probability, catalysts, and impact assessment.
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -82,7 +83,10 @@ class ScenariosAgent:
             contradiction_output=contradiction_output[:800] if contradiction_output else "No contradictions found",
         )
 
-        response = self.ai.generate(
+        # generate() sinkron (requests) → jalankan di thread agar tidak
+        # memblokir event loop dan bisa paralel dengan agent lain.
+        response = await asyncio.to_thread(
+            self.ai.generate,
             prompt,
             use_cache=True,
             system_override=SCENARIOS_SYSTEM,

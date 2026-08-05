@@ -10,6 +10,7 @@ Takes research context and technical signals, then produces:
 - Risk factors
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -118,7 +119,10 @@ class ThesisAgent:
             f"\nAdjust your thesis focus based on this question type."
         )
 
-        response = self.ai.generate(
+        # generate() sinkron (requests) → jalankan di thread agar tidak
+        # memblokir event loop dan bisa paralel dengan agent lain.
+        response = await asyncio.to_thread(
+            self.ai.generate,
             prompt,
             use_cache=False,
             system_override=system_prompt,

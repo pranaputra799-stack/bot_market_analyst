@@ -39,6 +39,12 @@ from data.cache import cache, safe_hash
 logger = logging.getLogger(__name__)
 
 
+# Intent yang cukup dengan jalur RINGAN (1-2 panggilan LLM): research + signals +
+# synthesis saja. Thesis/contradiction/confidence/risk hanya menambah latensi
+# tanpa banyak nilai untuk tipe pertanyaan ini (mis. "berapa harga EUR/USD?").
+LIGHT_INTENTS = {"education", "price_check", "news_sentiment", "calendar"}
+
+
 @dataclass
 class AnalysisResult:
     """Complete result from the multi-agent analysis pipeline."""
@@ -119,7 +125,7 @@ class AnalysisDirector:
         start_time = time.time()
 
         # ===== INTENT CLASSIFICATION =====
-        intent_result = self.intent_classifier.classify(question)
+        intent_result = await self.intent_classifier.classify(question)
         intent = intent_result.intent
         logger.info(f"Director: Detected intent={intent} (conf={intent_result.confidence:.0%}, entities={intent_result.detected_entities})")
 
@@ -163,8 +169,8 @@ class AnalysisDirector:
                     )
                 metrics.record_agent_time("signals", (time.time() - signal_start) * 1000)
 
-            # ===== STAGE 3: Thesis (skip for education/calendar-only) =====
-            if intent not in ("education",):
+            # ===== STAGE 3: Thesis (skip untuk light intents) =====
+            if intent not in LIGHT_INTENTS:
                 logger.info("Director: Running Thesis Agent...")
                 result.agents_executed.append("thesis")
                 thesis_start = time.time()
@@ -181,8 +187,8 @@ class AnalysisDirector:
             signal_output = result.signal.summary if result.signal else ""
             market_str = result.research_context.raw_context if result.research_context else ""
 
-            # ===== STAGE 4: Contradictions (skip for education/news-only) =====
-            if intent not in ("education", "news_sentiment", "calendar"):
+            # ===== STAGE 4: Contradictions (skip untuk light intents) =====
+            if intent not in LIGHT_INTENTS:
                 logger.info("Director: Running Contradiction Agent...")
                 result.agents_executed.append("contradiction")
                 contra_start = time.time()
@@ -217,13 +223,14 @@ class AnalysisDirector:
                 f"{s.name}: {s.probability}%" for s in result.scenarios
             ) if result.scenarios else "No scenarios"
 
-            # ===== STAGE 6: Confidence =====
-            if result.thesis or result.signal:
-                logger.info("Director: Running Confidence Agent...")
-                result.agents_executed.append("confidence")
-                conf_start = time.time()
-
-                result.confidence = await self.confidence.calibrate(
+            # ===== STAGE 6+7: Confidence & Risk (jalan PARALEL) =====
+            # Keduanya bergantung pada kontradiksi & skenario yang sudah selesai,
+            # sehingga bisa dieksekusi bersamaan. LLM call di dalam tiap agent
+            # sudah di-thread (asyncio.to_thread), jadi gather benar-benar paralel.
+            conf_task = None
+            risk_task = None
+            if (result.thesis or result.signal) and intent not in LIGHT_INTENTS:
+                conf_task = self.confidence.calibrate(
                     question=question,
                     signal=result.signal,
                     contradictions=result.contradictions,
@@ -234,21 +241,37 @@ class AnalysisDirector:
                     scenarios_output=scenarios_output,
                     thesis_output=thesis_output,
                 )
-                metrics.record_agent_time("confidence", (time.time() - conf_start) * 1000)
-
-            # ===== STAGE 7: Risk Assessment (skip for education) =====
-            if intent not in ("education", "calendar"):
-                logger.info("Director: Running Risk Assessment...")
-                result.agents_executed.append("risk_gates")
-                risk_start = time.time()
-
-                result.risk_assessment = await self.risk.assess(
+            if intent not in LIGHT_INTENTS:
+                risk_task = self.risk.assess(
                     market_data=market_str,
                     thesis_output=thesis_output,
                     contradiction_output=contra_output,
                     scenarios_output=scenarios_output,
                 )
-                metrics.record_agent_time("risk_gates", (time.time() - risk_start) * 1000)
+
+            parallel = [
+                (name, task)
+                for name, task in (("confidence", conf_task), ("risk_gates", risk_task))
+                if task is not None
+            ]
+            if parallel:
+                logger.info(f"Director: Running {[n for n, _ in parallel]} in parallel...")
+                result.agents_executed.extend(n for n, _ in parallel)
+                stage_start = time.time()
+                outcomes = await asyncio.gather(
+                    *(task for _, task in parallel),
+                    return_exceptions=True,
+                )
+                stage_ms = (time.time() - stage_start) * 1000
+                for (name, _), outcome in zip(parallel, outcomes):
+                    if isinstance(outcome, Exception):
+                        logger.warning(f"Director: {name} agent failed: {outcome}")
+                        continue
+                    if name == "confidence":
+                        result.confidence = outcome
+                    else:
+                        result.risk_assessment = outcome
+                    metrics.record_agent_time(name, stage_ms)
 
             # ===== FINAL SYNTHESIS (intent-aware) =====
             logger.info(f"Director: Synthesizing final response for intent={intent}...")
@@ -334,7 +357,7 @@ class AnalysisDirector:
                 risk_output=risk_str,
             )
 
-            response = self.ai.generate(synthesis_prompt, use_cache=False)
+            response = await asyncio.to_thread(self.ai.generate, synthesis_prompt, use_cache=False)
             if response and len(response) > 50:
                 return response
         except Exception as e:

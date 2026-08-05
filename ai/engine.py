@@ -15,7 +15,6 @@ import threading
 import time
 from typing import Dict, List, Optional, Callable, Any
 
-import aiohttp
 import requests
 
 from config.settings import (
@@ -78,11 +77,10 @@ class AIFallbackEngine:
             "provider_usage": {p: 0 for p in self.fallback_order},
             "last_error": None,
         }
-        # Kunci thread-safety: _current_system/_current_max_tokens adalah state
-        # instance, dan generate() bisa dipanggil dari beberapa thread sekaligus
-        # (asyncio.to_thread di handlers/sentiment/agents). Tanpa lock, dua request
-        # paralel bisa saling menimpa system prompt.
-        self._gen_lock = threading.Lock()
+        # Catatan thread-safety: system_override & max_tokens dikirim PER-REQUEST
+        # (bukan state instance), sehingga generate() aman dipanggil paralel dari
+        # banyak thread (asyncio.to_thread di handlers/sentiment/agents) tanpa
+        # risiko saling menimpa system prompt.
 
         # Warm up daftar model free OpenRouter di background (non-blocking)
         # agar fallback ke OpenRouter langsung pakai daftar model terbaru.
@@ -113,77 +111,70 @@ class AIFallbackEngine:
         """
         self.stats["total_requests"] += 1
 
-        # Store system override for this request
-        self._current_system = system_override or self.DEFAULT_SYSTEM
-        self._current_max_tokens = max_tokens
+        system = system_override or self.DEFAULT_SYSTEM
 
         # Cek cache dulu (include system in cache key)
         cache_key = prompt
         if system_override:
             cache_key = f"{safe_hash(system_override)}:{prompt}"
-        
+
         if use_cache:
             cached = get_cached_ai_response(cache_key)
             if cached:
                 logger.info("Using cached AI response")
                 return cached
 
-        # Set state + panggil provider dalam satu lock agar request paralel
-        # (dari asyncio.to_thread) tidak saling menimpa system prompt.
-        with self._gen_lock:
-            self._current_system = system_override or self.DEFAULT_SYSTEM
-            self._current_max_tokens = max_tokens
+        # Coba provider satu per satu. system & max_tokens dikirim per-request
+        # sehingga request paralel dari thread berbeda tidak saling menimpa.
+        for provider in self.fallback_order:
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"Trying provider: {provider} (attempt {attempt + 1}/{max_retries})")
 
-            # Coba provider satu per satu
-            for provider in self.fallback_order:
-                for attempt in range(max_retries):
-                    try:
-                        logger.info(f"Trying provider: {provider} (attempt {attempt + 1}/{max_retries})")
+                    config = PROVIDER_CONFIGS.get(provider)
+                    if not config:
+                        logger.warning(f"Provider {provider} not found in config")
+                        continue
 
-                        config = PROVIDER_CONFIGS.get(provider)
-                        if not config:
-                            logger.warning(f"Provider {provider} not found in config")
-                            continue
+                    key = self.api_keys.get(provider)
+                    if not key:
+                        logger.warning(f"No API key for {provider}")
+                        break  # Skip to next provider
 
-                        key = self.api_keys.get(provider)
-                        if not key:
-                            logger.warning(f"No API key for {provider}")
-                            break  # Skip to next provider
+                    response = self._call_provider(provider, prompt, system, max_tokens)
+                    if response:
+                        self.stats["successful"] += 1
+                        self.stats["provider_usage"][provider] += 1
 
-                        response = self._call_provider(provider, prompt)
-                        if response:
-                            self.stats["successful"] += 1
-                            self.stats["provider_usage"][provider] += 1
+                        # Only wrap with via tag if NOT using system_override (internal agent call)
+                        if system_override:
+                            formatted = response
+                        else:
+                            formatted = f"[via {config['name']}] 🤖\n\n{response}"
 
-                            # Only wrap with via tag if NOT using system_override (internal agent call)
-                            if system_override:
-                                formatted = response
-                            else:
-                                formatted = f"[via {config['name']}] 🤖\n\n{response}"
+                        # Cache response
+                        if use_cache:
+                            set_cached_ai_response(cache_key, formatted)
 
-                            # Cache response
-                            if use_cache:
-                                set_cached_ai_response(cache_key, formatted)
+                        return formatted
 
-                            return formatted
+                    # Provider merespon kosong (429 / model error). Jeda exponensial
+                    # sebelum attempt berikutnya agar tidak memperparah rate limit.
+                    if attempt < max_retries - 1:
+                        wait = 2 ** attempt
+                        logger.info(f"{provider} returned empty response, retrying in {wait}s...")
+                        time.sleep(wait)
 
-                        # Provider merespon kosong (429 / model error). Jeda exponensial
-                        # sebelum attempt berikutnya agar tidak memperparah rate limit.
-                        if attempt < max_retries - 1:
-                            wait = 2 ** attempt
-                            logger.info(f"{provider} returned empty response, retrying in {wait}s...")
-                            time.sleep(wait)
+                except Exception as e:
+                    logger.warning(f"{provider} attempt {attempt + 1} failed: {e}")
+                    self.stats["last_error"] = f"{provider}: {e}"
+                    if attempt < max_retries - 1:
+                        wait = 2 ** attempt  # Exponential backoff
+                        logger.info(f"Retrying in {wait}s...")
+                        time.sleep(wait)
 
-                    except Exception as e:
-                        logger.warning(f"{provider} attempt {attempt + 1} failed: {e}")
-                        self.stats["last_error"] = f"{provider}: {e}"
-                        if attempt < max_retries - 1:
-                            wait = 2 ** attempt  # Exponential backoff
-                            logger.info(f"Retrying in {wait}s...")
-                            time.sleep(wait)
-
-                # Jika provider ini gagal total, log dan lanjut ke berikutnya
-                logger.info(f"{provider} exhausted, trying next provider...")
+            # Jika provider ini gagal total, log dan lanjut ke berikutnya
+            logger.info(f"{provider} exhausted, trying next provider...")
 
         self.stats["failed"] += 1
         error_msg = (
@@ -200,13 +191,15 @@ class AIFallbackEngine:
         """Async version of generate."""
         return await asyncio.to_thread(self.generate, prompt, max_retries, use_cache, system_override, max_tokens)
 
-    def _call_provider(self, provider: str, prompt: str) -> Optional[str]:
+    def _call_provider(self, provider: str, prompt: str, system: str, max_tokens: int) -> Optional[str]:
         """
         Panggil provider AI dengan format yang sesuai.
 
         Args:
             provider: Nama provider (groq, gemini, openrouter, cerebras)
             prompt: Prompt text
+            system: System prompt untuk request ini (per-request, bukan state)
+            max_tokens: Batas token output untuk request ini
 
         Returns:
             Response text atau None jika gagal
@@ -215,11 +208,11 @@ class AIFallbackEngine:
         key = self.api_keys[provider]
 
         if config["payload_template"] == "gemini":
-            return self._call_gemini(config, key, prompt)
+            return self._call_gemini(config, key, prompt, system, max_tokens)
         else:
-            return self._call_openai_compatible(config, key, prompt)
+            return self._call_openai_compatible(config, key, prompt, system, max_tokens)
 
-    def _call_openai_compatible(self, config: Dict, key: str, prompt: str) -> Optional[str]:
+    def _call_openai_compatible(self, config: Dict, key: str, prompt: str, system: str, max_tokens: int) -> Optional[str]:
         """
         Panggil API dengan format OpenAI-compatible.
         Digunakan oleh: Groq, OpenRouter, Cerebras, Mistral
@@ -241,7 +234,7 @@ class AIFallbackEngine:
             "messages": [
                 {
                     "role": "system",
-                    "content": getattr(self, '_current_system', self.DEFAULT_SYSTEM),
+                    "content": system,
                 },
                 {
                     "role": "user",
@@ -249,7 +242,7 @@ class AIFallbackEngine:
                 }
             ],
             "temperature": 0.3,
-            "max_tokens": getattr(self, '_current_max_tokens', 4096),
+            "max_tokens": max_tokens,
         }
 
         for model in models:
@@ -302,7 +295,7 @@ class AIFallbackEngine:
 
         return None
 
-    def _call_gemini(self, config: Dict, key: str, prompt: str) -> Optional[str]:
+    def _call_gemini(self, config: Dict, key: str, prompt: str, system: str, max_tokens: int) -> Optional[str]:
         """
         Panggil Google Gemini API.
         Format berbeda dari OpenAI-compatible.
@@ -318,7 +311,7 @@ class AIFallbackEngine:
                 "system_instruction": {
                     "parts": [
                         {
-                            "text": getattr(self, '_current_system', self.DEFAULT_SYSTEM),
+                            "text": system,
                         }
                     ]
                 },
@@ -334,7 +327,7 @@ class AIFallbackEngine:
                 ],
                 "generationConfig": {
                     "temperature": 0.3,
-                    "maxOutputTokens": getattr(self, '_current_max_tokens', 4096),
+                    "maxOutputTokens": max_tokens,
                     "topP": 0.95,
                     "topK": 40,
                 },
@@ -450,7 +443,7 @@ class AIFallbackEngine:
             return {"status": "error", "message": f"API key untuk {provider} tidak ditemukan"}
 
         try:
-            response = self._call_provider(provider, "Halo, balas dengan 'OK' saja.")
+            response = self._call_provider(provider, "Halo, balas dengan 'OK' saja.", self.DEFAULT_SYSTEM, 1024)
             if response:
                 return {"status": "ok", "message": f"{PROVIDER_CONFIGS[provider]['name']} berfungsi normal"}
             else:

@@ -72,6 +72,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ===================== ERROR TRACKING (Sentry) =====================
+# Aktif hanya jika SENTRY_DSN diisi di .env / dashboard deploy.
+# Import dibungkus try/except agar bot tetap jalan walau sentry-sdk belum terpasang.
+SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+if SENTRY_DSN:
+    try:
+        import sentry_sdk  # type: ignore
+
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            environment="production" if IS_CLOUD else "development",
+            traces_sample_rate=0.1,
+        )
+        logger.info("Sentry error tracking initialized")
+    except Exception as e:
+        logger.warning(f"Sentry init failed: {e}")
+
 
 async def post_init(application: Application):
     """Setup setelah bot initialize."""
@@ -85,6 +102,8 @@ async def post_init(application: Application):
         BotCommand("alert", "🔔 Notifikasi event ekonomi"),
         BotCommand("status", "✅ Status sistem & API"),
         BotCommand("chart", "📈 Grafik harga"),
+        BotCommand("subscribe", "🔔 Langganan Morning Brief"),
+        BotCommand("unsubscribe", "🔕 Berhenti langganan"),
         BotCommand("about", "ℹ️ Tentang bot ini"),
     ]
     await application.bot.set_my_commands(commands)
@@ -226,6 +245,8 @@ def run_polling():
     application.add_handler(CommandHandler("calendar", bot.calendar_command))
     application.add_handler(CommandHandler("alert", bot.alert_command))
     application.add_handler(CommandHandler("chart", bot.chart_command))
+    application.add_handler(CommandHandler("subscribe", bot.subscribe_command))
+    application.add_handler(CommandHandler("unsubscribe", bot.unsubscribe_command))
     application.add_handler(CallbackQueryHandler(bot.handle_callback))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message)
@@ -269,6 +290,8 @@ def run_webhook():
     application.add_handler(CommandHandler("calendar", bot.calendar_command))
     application.add_handler(CommandHandler("alert", bot.alert_command))
     application.add_handler(CommandHandler("chart", bot.chart_command))
+    application.add_handler(CommandHandler("subscribe", bot.subscribe_command))
+    application.add_handler(CommandHandler("unsubscribe", bot.unsubscribe_command))
     application.add_handler(CallbackQueryHandler(bot.handle_callback))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message)

@@ -88,6 +88,8 @@ Cukup kirim pertanyaan tentang pasar keuangan, dan saya akan menjawab dengan dat
 /start - Mulai ulang bot
 /help - Bantuan ini
 /morning - ☀️ Morning Brief harian
+/subscribe - 🔔 Langganan Morning Brief otomatis
+/unsubscribe - 🔕 Berhenti langganan Morning Brief
 /sentiment - 🧠 Sentimen pasar (contoh: /sentiment eurusd, /sentiment gold)
 /calendar - 📅 Kalender Ekonomi high-impact bulan ini
 /alert - 🔔 Notifikasi event ekonomi otomatis (/alert on)

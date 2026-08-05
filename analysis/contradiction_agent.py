@@ -9,6 +9,7 @@ Cross-checks:
 - Cross-asset inconsistencies
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -82,7 +83,10 @@ class ContradictionAgent:
             signal_output=signal_output[:1000] if signal_output else "No signals",
         )
 
-        response = self.ai.generate(
+        # generate() sinkron (requests) → jalankan di thread agar tidak
+        # memblokir event loop dan bisa paralel dengan agent lain.
+        response = await asyncio.to_thread(
+            self.ai.generate,
             prompt,
             use_cache=True,
             system_override=CONTRADICTION_SYSTEM,

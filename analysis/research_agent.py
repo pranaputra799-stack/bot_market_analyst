@@ -208,7 +208,10 @@ class ResearchAgent:
             context_data=format_context_for_prompt(context.raw_context),
         )
 
-        response = self.ai.generate(
+        # generate() sinkron (requests) → jalankan di thread agar tidak
+        # memblokir event loop.
+        response = await asyncio.to_thread(
+            self.ai.generate,
             prompt,
             use_cache=False,
             system_override=RESEARCH_SYSTEM,

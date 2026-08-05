@@ -22,6 +22,7 @@ Intent Categories:
   - general:        catch-all
 """
 
+import asyncio
 import re
 import logging
 from dataclasses import dataclass, field
@@ -205,7 +206,7 @@ class IntentClassifier:
         """
         self.ai = ai_engine
 
-    def classify(self, question: str) -> IntentResult:
+    async def classify(self, question: str) -> IntentResult:
         """
         Klasifikasi intent dari pertanyaan user menggunakan layered approach.
 
@@ -245,7 +246,7 @@ class IntentClassifier:
 
         # Jika confidence rendah dan AI engine tersedia, coba LLM fallback
         if best_score < 0.4 and self.ai:
-            llm_intent = self._llm_classify(q)
+            llm_intent = await self._llm_classify(q)
             if llm_intent:
                 best_intent = llm_intent
                 best_score = 0.7  # LLM classification dianggap cukup yakin
@@ -314,7 +315,7 @@ class IntentClassifier:
 
     # ── Layer 3: LLM Fallback ───────────────────────────────────────────
 
-    def _llm_classify(self, q: str) -> Optional[str]:
+    async def _llm_classify(self, q: str) -> Optional[str]:
         """
         Gunakan LLM untuk klasifikasi intent jika keyword gagal.
         """
@@ -346,7 +347,9 @@ class IntentClassifier:
         )
 
         try:
-            response = self.ai.generate(prompt, use_cache=False)
+            # generate() sinkron (requests) → jalankan di thread agar tidak
+            # memblokir event loop saat klassifikasi ambigu.
+            response = await asyncio.to_thread(self.ai.generate, prompt, use_cache=False)
             response = response.strip().lower()
             valid_intents = self.INTENT_KEYWORDS.keys()
             for intent in valid_intents:
