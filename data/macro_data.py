@@ -382,6 +382,20 @@ class MacroDataFetcher:
         (53, "GDP AS (QoQ)", "🔥 HIGH", "%"),
     ]
 
+    # Mapping nama event kalender → series FRED + cara hitung Actual/Previous.
+    # Dipakai untuk mengisi nilai real-time event yang sudah rilis (FRED gratis,
+    # observasi resmi BLS/BEA) agar indikator "Sudah rilis" punya angka, bukan cuma teks.
+    # Mode: level (nilai langsung), mom_change (perubahan absolut), mom_pct (MoM %),
+    # yoy_pct (YoY %), qoq_pct (QoQ %).
+    FRED_EVENT_SERIES = {
+        "Non-Farm Payrolls (NFP) & Unemployment Rate": ("PAYEMS", "mom_change", "K"),
+        "CPI / Inflasi AS (YoY)": ("CPIAUCSL", "yoy_pct", "%"),
+        "PPI / Harga Produsen AS (MoM)": ("PPIFIS", "mom_pct", "%"),
+        "GDP AS (QoQ)": ("GDP", "qoq_pct", "%"),
+        "Fed Funds Rate Decision (FOMC)": ("FEDFUNDS", "level", "%"),
+        "Initial Jobless Claims (US)": ("ICSA", "level", "K"),
+    }
+
     async def get_economic_calendar_fred(
         self,
         from_date: Optional[str] = None,
@@ -708,6 +722,184 @@ class MacroDataFetcher:
         actual = event.get("actual")
         return actual is not None and actual != ""
 
+    # ===================== ACTUAL/PREVIOUS REAL-TIME (via FRED) =====================
+
+    @cached(ttl=CACHE_MACRO_TTL)
+    def _get_fred_observations(self, series_id: str, limit: int = 16) -> List[Dict]:
+        """
+        Ambil observasi terbaru sebuah series FRED (descending by date).
+        Dipakai untuk mengisi nilai Actual/Previous event kalender yang sudah rilis.
+
+        Args:
+            series_id: ID series FRED (PAYEMS, CPIAUCSL, PPIFIS, GDP, FEDFUNDS, ICSA)
+            limit: Jumlah observasi maksimal (16 cukup untuk hitung YoY)
+
+        Returns:
+            List[Dict] dengan key date (YYYY-MM-DD) & value (float), terurut desc
+        """
+        if not self.fred_key:
+            return []
+        try:
+            url = "https://api.stlouisfed.org/fred/series/observations"
+            params = {
+                "series_id": series_id,
+                "api_key": self.fred_key,
+                "file_type": "json",
+                "sort_order": "desc",
+                "limit": limit,
+            }
+            resp = requests.get(url, params=params, timeout=15)
+            data = resp.json()
+            obs = []
+            for o in data.get("observations", []):
+                if o.get("value") in (None, ".", ""):
+                    continue
+                try:
+                    obs.append({"date": o["date"], "value": float(o["value"])})
+                except (TypeError, ValueError):
+                    continue
+            return obs
+        except Exception as e:
+            logger.warning(f"FRED observations error ({series_id}): {e}")
+            return []
+
+    @staticmethod
+    def _find_obs_index(obs: List[Dict], event_dt_utc) -> Optional[int]:
+        """
+        Cari indeks observasi (terurut descending) yang tanggalnya paling dekat
+        dengan tanggal rilis event dari masa lalu (obs.date <= release date).
+        Dipakai agar tiap event (mis. Initial Claims mingguan) mendapat nilai
+        observasi yang SESUAI dengan periode rilisnya, bukan selalu yang terbaru.
+
+        Returns:
+            Indeks observasi atau None jika tidak ada yang cocok
+        """
+        if not obs:
+            return None
+        if event_dt_utc is None:
+            return 0  # fallback: observasi terbaru
+        try:
+            release_date = event_dt_utc.date()
+        except (TypeError, AttributeError):
+            return 0
+        for i, o in enumerate(obs):
+            try:
+                odate = datetime.strptime(o["date"], "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                continue
+            if odate <= release_date:
+                return i
+        return None  # semua observasi lebih baru dari rilis (data belum ada)
+
+    @staticmethod
+    def _compute_fred_event_value(obs: List[Dict], mode: str, start_idx: int = 0):
+        """
+        Hitung (actual, previous) dari observasi FRED pada posisi start_idx
+        (observasi terurut descending: start_idx = periode yang sedang dinilai):
+        - level:       nilai pada start_idx & sebelumnya
+        - mom_change:  selisih absolut (mis. NFP ribuan)
+        - mom_pct:     perubahan % MoM (PPI)
+        - yoy_pct:     perubahan % YoY (CPI, butuh 13 observasi dari start_idx)
+        - qoq_pct:     perubahan % QoQ ANNUALIZED (GDP, konvensi rilis AS)
+
+        Returns:
+            (actual, previous) float atau None
+        """
+        v = [o["value"] for o in obs]
+
+        def val(i):
+            return v[i] if 0 <= i < len(v) else None
+
+        def pct(new, old):
+            if old in (None, 0):
+                return None
+            return round((new / old - 1) * 100, 2)
+
+        try:
+            if mode == "level":
+                return val(start_idx), val(start_idx + 1)
+            if mode == "mom_change":
+                a, b = val(start_idx), val(start_idx + 1)
+                if a is None or b is None:
+                    return None, None
+                return round(a - b, 2), (round(val(start_idx + 1) - val(start_idx + 2), 2) if val(start_idx + 2) is not None else None)
+            if mode == "mom_pct":
+                return pct(val(start_idx), val(start_idx + 1)), (pct(val(start_idx + 1), val(start_idx + 2)) if val(start_idx + 2) is not None else None)
+            if mode == "yoy_pct":
+                return pct(val(start_idx), val(start_idx + 12)), (pct(val(start_idx + 1), val(start_idx + 13)) if val(start_idx + 13) is not None else None)
+            if mode == "qoq_pct":
+                qoq = pct(val(start_idx), val(start_idx + 1))
+                qoq_prev = pct(val(start_idx + 1), val(start_idx + 2)) if val(start_idx + 2) is not None else None
+                # Annualize QoQ sesuai konvensi rilis GDP AS: (1+q)^4 - 1
+                actual = round(((1 + qoq / 100) ** 4 - 1) * 100, 2) if qoq is not None else None
+                prev = round(((1 + qoq_prev / 100) ** 4 - 1) * 100, 2) if qoq_prev is not None else None
+                return actual, prev
+        except (IndexError, TypeError):
+            return None, None
+        return None, None
+
+    async def _enrich_fred_values(self, events: List[Dict]) -> List[Dict]:
+        """
+        Isi nilai Actual/Previous event yang SUDAH RILIS dari observasi FRED real-time
+        (untuk event dari sumber jadwal resmi/FRED yang tidak punya nilai).
+        Event dari Finnhub (yang sudah punya actual/estimate/prev) tidak diubah.
+        """
+        if not self.fred_key or not events:
+            return events
+
+        now = datetime.now(timezone.utc)
+        # Pilih event yang sudah rilis, belum punya actual, dan punya mapping series
+        to_enrich = []
+        series_needed = {}
+        for e in events:
+            if not self._is_event_released(e):
+                continue
+            if e.get("actual") not in (None, ""):
+                continue  # sudah punya nilai (Finnhub)
+            name = e.get("event", "")
+            if name not in self.FRED_EVENT_SERIES:
+                continue
+            series_id, mode, unit = self.FRED_EVENT_SERIES[name]
+            to_enrich.append(e)
+            series_needed.setdefault(series_id, []).append(e)
+
+        if not to_enrich:
+            return events
+
+        # Fetch observasi untuk semua series yang dibutuhkan (paralel)
+        obs_cache = {}
+        fetch_tasks = []
+        for series_id, evs in series_needed.items():
+            fetch_tasks.append(self._fetch_observations_async(series_id))
+        results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+        for series_id, res in zip(series_needed.keys(), results):
+            if isinstance(res, Exception):
+                logger.warning(f"FRED obs fetch failed for {series_id}: {res}")
+                obs_cache[series_id] = []
+            else:
+                obs_cache[series_id] = res
+
+        # Isi nilai actual/prev — cocokkan observasi dengan tanggal rilis tiap event
+        for e in to_enrich:
+            name = e.get("event", "")
+            series_id, mode, unit = self.FRED_EVENT_SERIES[name]
+            obs = obs_cache.get(series_id, [])
+            idx = self._find_obs_index(obs, e.get("_dt_utc"))
+            if idx is None:
+                continue  # observasi untuk periode ini belum ada
+            actual, prev = self._compute_fred_event_value(obs, mode, start_idx=idx)
+            if actual is not None:
+                e["actual"] = actual
+            if prev is not None:
+                e["prev"] = prev
+            if actual is not None:
+                e["source"] = "fred"  # nilai aktual dari FRED
+        return events
+
+    async def _fetch_observations_async(self, series_id: str) -> List[Dict]:
+        """Wrapper async untuk _get_fred_observations (yang sync, via requests)."""
+        return await asyncio.to_thread(self._get_fred_observations, series_id)
+
     async def get_economic_calendar(
         self,
         from_date: Optional[str] = None,
@@ -744,6 +936,9 @@ class MacroDataFetcher:
         # 3) Fallback built-in (defensif; finnhub sudah punya fallback internal sendiri)
         if not events:
             events = self._get_scheduled_calendar(from_date=from_date, to_date=to_date)
+
+        # Isi nilai Actual/Previous real-time untuk event yang sudah rilis (via FRED)
+        events = await self._enrich_fred_values(events)
 
         cache.set(cache_key, events, 600)  # Cache 10 menit
         return events
