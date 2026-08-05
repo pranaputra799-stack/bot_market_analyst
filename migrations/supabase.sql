@@ -1,6 +1,7 @@
 -- ============================================================
 -- MarketAI Analyst Bot — Schema Supabase
 -- Jalankan SEKALI di Supabase SQL Editor (Dashboard → SQL → New query)
+-- File ini IDEMPOTENT: aman dijalankan ulang (CREATE IF NOT EXISTS).
 -- ============================================================
 
 -- ------------------------------------------------------------
@@ -39,22 +40,47 @@ CREATE TABLE IF NOT EXISTS public.subscribers (
 );
 
 -- ============================================================
--- Catatan RLS (Row Level Security):
--- Supabase project baru biasanya mengaktifkan RLS. Agar bot bisa
--- membaca/menulis via REST (anon key), izinkan akses tabel di atas:
+-- RLS (Row Level Security) & GRANT
 --
---   alter table public.app_cache enable row level security;
---   create policy "app_cache anon" on public.app_cache
---     for all using (true) with check (true);
+-- Supabase project baru mengaktifkan RLS secara default. Tanpa
+-- policy, request REST memakai anon key akan DITOLAK (data tak
+-- terlihat / error), sehingga bot tidak bisa memakai cache L2.
+-- Policy di bawah mengizinkan akses anon — aman untuk bot
+-- pribadi. Untuk produksi publik: ganti role 'anon' dengan
+-- service_role (jangan expose key-nya di frontend).
+-- ============================================================
+
+-- app_cache
+ALTER TABLE public.app_cache ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "app_cache_all_anon" ON public.app_cache;
+CREATE POLICY "app_cache_all_anon" ON public.app_cache
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+-- users
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "users_all_anon" ON public.users;
+CREATE POLICY "users_all_anon" ON public.users
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+-- subscribers
+ALTER TABLE public.subscribers ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "subscribers_all_anon" ON public.subscribers;
+CREATE POLICY "subscribers_all_anon" ON public.subscribers
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+-- Grant eksplisit (pengaman tambahan; Supabase biasanya sudah
+-- memberi default privileges untuk schema public)
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.app_cache TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.users    TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.subscribers TO anon, authenticated, service_role;
+
+-- ============================================================
+-- Verifikasi cepat (jalankan setelah semua statement di atas):
 --
---   alter table public.users enable row level security;
---   create policy "users anon" on public.users
---     for all using (true) with check (true);
+--   select table_name from information_schema.tables
+--   where table_schema = 'public'
+--   and table_name in ('app_cache', 'users', 'subscribers');
 --
---   alter table public.subscribers enable row level security;
---   create policy "subscribers anon" on public.subscribers
---     for all using (true) with check (true);
---
--- (Aman untuk bot pribadi; untuk produksi publik, ganti 'anon'
---  dengan service_role key dan jangan expose di frontend.)
+-- Harus mengembalikan 3 baris. Jika sudah pernah punya tabel
+-- users/subscribers sebelumnya, baris lama tetap aman (IF NOT EXISTS).
 -- ============================================================

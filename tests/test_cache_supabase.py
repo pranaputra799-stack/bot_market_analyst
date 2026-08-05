@@ -5,6 +5,7 @@ kontrak get/set/delete/enabled.
 """
 
 import hashlib
+import time
 import unittest
 
 import data.cache as cache_mod
@@ -145,6 +146,82 @@ class TestSupabaseCacheParsing(unittest.TestCase):
             self.assertIsNone(sc.get("ai:missing"))
         finally:
             cache_mod.requests.get = original
+
+
+class TestSupabaseCacheWritePayload(unittest.TestCase):
+    """Regresi: payload HTTP ke PostgREST harus membawa nilai MENTAH (tanpa
+    json.dumps). json.dumps double-encode di Supabase asli — string terbaca
+    dengan kutip literal dan list berubah menjadi string (ditemukan lewat
+    live E2E terhadap Supabase sungguhan).
+    """
+
+    def _sc(self):
+        return cache_mod.SupabaseCache(url="https://x.supabase.co", key="k", enabled=True)
+
+    def _capture_post(self):
+        captured = {}
+
+        class FakeResp:
+            status_code = 201
+
+            def json(self):
+                return []
+
+        def fake_post(*a, **k):
+            captured["json"] = k.get("json")
+            return FakeResp()
+
+        return captured, fake_post
+
+    def _wait_for(self, captured, timeout=3.0):
+        """Tunggu deterministik sampai background thread mengirim payload."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if "json" in captured:
+                return
+            time.sleep(0.05)
+        raise AssertionError(f"background thread tidak mengirim payload dalam {timeout}s")
+
+    def test_set_sends_raw_string_value(self):
+        sc = self._sc()
+        captured, fake_post = self._capture_post()
+        original = cache_mod.requests.post
+        try:
+            cache_mod.requests.post = fake_post
+            sc.set("ai:abc", "TEXT_POLOS", 300)
+            self._wait_for(captured)
+            payload = captured["json"]
+            self.assertEqual(payload["key"], "ai:abc")
+            self.assertEqual(payload["value"], "TEXT_POLOS")
+            self.assertIn("expires_at", payload)
+        finally:
+            cache_mod.requests.post = original
+
+    def test_set_sends_raw_list_value(self):
+        sc = self._sc()
+        captured, fake_post = self._capture_post()
+        original = cache_mod.requests.post
+        try:
+            cache_mod.requests.post = fake_post
+            rows = [{"q": "tanya", "a": "jawab"}]
+            sc.set("conversation:1", rows, 900)
+            self._wait_for(captured)
+            # Nilai list dikirim mentah (bukan string hasil json.dumps)
+            self.assertEqual(captured["json"]["value"], rows)
+        finally:
+            cache_mod.requests.post = original
+
+    def test_set_disabled_sends_nothing(self):
+        sc = cache_mod.SupabaseCache(url="https://x.supabase.co", key="k", enabled=False)
+        sent = []
+        original = cache_mod.requests.post
+        try:
+            cache_mod.requests.post = lambda *a, **k: sent.append(k)
+            sc.set("ai:x", "y", 300)
+            time.sleep(0.4)
+            self.assertEqual(sent, [])
+        finally:
+            cache_mod.requests.post = original
 
 
 class TestLayeredAICache(unittest.TestCase):

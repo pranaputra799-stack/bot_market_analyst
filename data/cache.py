@@ -12,7 +12,6 @@ Arsitektur dua lapis (hybrid) agar RAM proses bot tidak membengkak:
 """
 
 import hashlib
-import json
 import logging
 import threading
 import time
@@ -183,13 +182,20 @@ class SupabaseCache:
     # ── Tulis (fire-and-forget) ────────────────────────────────
 
     def set(self, cache_key: str, value: Any, ttl: int):
-        """Simpan nilai (upsert) di background thread."""
+        """Simpan nilai (upsert) di background thread.
+
+        CATATAN: nilai dikirim APA ADANYA (tanpa json.dumps) — kolom jsonb
+        menerima nilai JSON langsung dan requests sudah men-serialize.
+        json.dumps justru double-encode: string jadi '"teks"' (kutip literal)
+        dan list jadi string teks JSON, yang merusak round-trip di Supabase
+        asli (ditemukan lewat live E2E: nilai terbaca dengan kutip literal).
+        """
         if not self.enabled:
             return
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
         payload = {
             "key": cache_key,
-            "value": json.dumps(value, ensure_ascii=False),
+            "value": value,
             "expires_at": expires_at.isoformat(),
         }
         threading.Thread(
