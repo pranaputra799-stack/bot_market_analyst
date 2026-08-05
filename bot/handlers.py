@@ -5,6 +5,7 @@ Now with multi-agent analysis system from MarketLens.
 """
 import asyncio
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
@@ -225,6 +226,24 @@ def _strip_provider_prefix(text: str) -> str:
     if "[via" in text:
         parts = text.split("\n\n", 1)
         return parts[1] if len(parts) > 1 else text
+    return text
+
+
+def strip_markdown_asterisks(text: str) -> str:
+    """
+    Hapus simbol '*' (markdown bold/italic) dari teks respons AI agar tidak
+    tampil mentah di Telegram.
+
+    Asterisk yang diapit angka (mis. perkalian "5*3" atau footnote) dipertahankan
+    agar data numerik tidak rusak.
+    """
+    if not text:
+        return text
+    # 1) Hapus pasangan markdown: **teks** atau *teks* (sisakan isinya)
+    text = re.sub(r"\*{1,2}([^*\n]+?)\*{1,2}", r"\1", text)
+    # 2) Buang asterisk tersisa yang tidak berpasangan (markdown rusak),
+    #    kecuali yang diapit angka (perkalian/footnote numerik).
+    text = re.sub(r"(?<!\d)\*+(?!\d)", "", text)
     return text
 
 
@@ -553,24 +572,14 @@ class MarketBot:
         if self.analysis_director:
             try:
                 # Gunakan multi-agent untuk analisis yang lebih dalam
-                analysis_prompt = (
-                    f"Hari ini tanggal {today}. Berdasarkan data pasar berikut, buatlah "
-                    f"OUTLOOK dan KATALIS UTAMA untuk hari ini dalam 3-4 kalimat per bagian.\n\n"
-                    f"PENTING: Jangan mengarang event ekonomi. Hanya sebutkan event yang benar-benar ada "
-                    f"di KALENDER EKONOMI di bawah. Jika tidak ada event terjadwal, tulis 'Tidak ada rilis data besar hari ini'.\n\n"
-                    f"DATA PASAR:\n{market_summary}\n\n"
-                    f"DATA MAKRO:\n{macro_summary}\n\n"
-                    f"KALENDER EKONOMI:\n{calendar_text}\n\n"
-                    f"BERITA:\n{news_summary}\n\n"
-                    f"Format jawaban:\n"
-                    f"OUTLOOK:\n[outlook singkat untuk EUR/USD, Gold, dan DXY hari ini]\n\n"
-                    f"KATALIS UTAMA:\n[3-4 katalis utama yang perlu diwaspadai hari ini]"
+                analysis_prompt = self._build_morning_brief_prompt(
+                    today, market_summary, macro_summary, calendar_text, news_summary
                 )
 
                 result = await self.analysis_director.analyze(analysis_prompt)
 
-                # Extract from analysis result (bersihkan prefix [via ...])
-                ai_content = _strip_provider_prefix(result.final_response or "")
+                # Extract from analysis result (bersihkan prefix [via ...] + simbol *)
+                ai_content = strip_markdown_asterisks(_strip_provider_prefix(result.final_response or ""))
 
                 # Parse sections TANPA memotong konten (jangan hard-truncate 400/700 char)
                 if "KATALIS UTAMA" in ai_content:
@@ -600,24 +609,14 @@ class MarketBot:
                 logger.warning(f"Multi-agent morning brief failed: {e}, falling back to legacy")
 
         # Fallback: legacy single-prompt method
-        outlook_prompt = (
-            f"Hari ini tanggal {today}. Berdasarkan data pasar berikut, buatlah "
-            f"OUTLOOK dan KATALIS UTAMA untuk hari ini dalam 3-4 kalimat per bagian.\n\n"
-            f"PENTING: Jangan mengarang event ekonomi. Hanya sebutkan event yang benar-benar ada "
-            f"di KALENDER EKONOMI di bawah. Jika tidak ada event terjadwal, tulis 'Tidak ada rilis data besar hari ini'.\n\n"
-            f"DATA PASAR:\n{market_summary}\n\n"
-            f"DATA MAKRO:\n{macro_summary}\n\n"
-            f"KALENDER EKONOMI:\n{calendar_text}\n\n"
-            f"BERITA:\n{news_summary}\n\n"
-            f"Format jawaban:\n"
-            f"OUTLOOK:\n[outlook singkat untuk EUR/USD, Gold, dan DXY hari ini]\n\n"
-            f"KATALIS UTAMA:\n[3-4 katalis utama yang perlu diwaspadai hari ini, beri perhatian ekstra pada rilis data di KALENDER EKONOMI]"
+        outlook_prompt = self._build_morning_brief_prompt(
+            today, market_summary, macro_summary, calendar_text, news_summary
         )
 
         ai_response = self.ai.generate(outlook_prompt, use_cache=True, max_tokens=4096)
 
-        # Parse AI response (bersihkan prefix [via ...])
-        ai_content = _strip_provider_prefix(ai_response)
+        # Parse AI response (bersihkan prefix [via ...] + simbol *)
+        ai_content = strip_markdown_asterisks(_strip_provider_prefix(ai_response))
 
         # Split into outlook and catalysts
         sections = ai_content.split("KATALIS UTAMA:")
@@ -632,6 +631,40 @@ class MarketBot:
             news_summary=news_summary,
             outlook=outlook,
             catalysts=catalysts,
+        )
+
+    def _build_morning_brief_prompt(
+        self,
+        today: str,
+        market_summary: str,
+        macro_summary: str,
+        calendar_text: str,
+        news_summary: str,
+    ) -> str:
+        """
+        Bangun prompt morning brief (dipakai path multi-agent & legacy).
+        Best practice: role jelas, alur berpikir, guardrail anti-halusinasi,
+        format output eksplisit, dan larangan markdown (*).
+        """
+        return (
+            f"ROLE: Anda adalah analis pasar senior yang menyusun briefing pagi untuk "
+            f"trader retail Indonesia yang sibuk.\n\n"
+            f"Hari ini tanggal {today}.\n\n"
+            f"ALUR BERPIKIR:\n"
+            f"1) Tinjau data di bawah.\n"
+            f"2) Tentukan prospek EUR/USD, Gold (XAU/USD), dan DXY hari ini.\n"
+            f"3) Identifikasi katalis & risiko hari ini — khususnya dari KALENDER EKONOMI.\n"
+            f"4) Tulis OUTLOOK (3-4 kalimat) dan KATALIS UTAMA (3-4 poin).\n\n"
+            f"PENTING: Jangan mengarang event ekonomi. Hanya sebutkan event yang benar-benar ada "
+            f"di KALENDER EKONOMI. Jika tidak ada event terjadwal, tulis 'Tidak ada rilis data besar hari ini'.\n\n"
+            f"DATA PASAR:\n{market_summary}\n\n"
+            f"DATA MAKRO:\n{macro_summary}\n\n"
+            f"KALENDER EKONOMI:\n{calendar_text}\n\n"
+            f"BERITA:\n{news_summary}\n\n"
+            f"FORMAT JAWABAN (tanpa simbol * / markdown):\n"
+            f"OUTLOOK:\n[prospek singkat EUR/USD, Gold, dan DXY hari ini — 3-4 kalimat]\n\n"
+            f"KATALIS UTAMA:\n[3-4 katalis/level/risiko yang perlu diwaspadai hari ini]\n\n"
+            f"Jawab dalam Bahasa Indonesia. JANGAN gunakan simbol * atau **."
         )
 
     # ===================== MESSAGE HANDLER =====================
@@ -720,6 +753,9 @@ class MarketBot:
                 )
 
                 final_message = f"{answer}{DISCLAIMER}"
+
+            # Hapus simbol '*' (markdown bold) dari jawaban agar tidak tampil mentah
+            final_message = strip_markdown_asterisks(final_message)
 
             # Send response
             await safe_reply_text(
@@ -870,7 +906,10 @@ class MarketBot:
         elif any(kw in q for kw in ["harga", "price", "berapa", "rate", "kurs", "naik", "turun"]):
             intent_instruction = "Fokus pada harga terkini, perubahan, dan konteks pergerakan."
 
-        return f"""Waktu saat ini: {current_time}
+        return f"""ROLE:
+Anda adalah analis pasar keuangan senior (forex, gold, makroekonomi) yang menjawab trader retail Indonesia. Target pembaca sibuk — utamakan angka, tren, dan implikasi.
+
+Waktu saat ini: {current_time}
 
 === DATA PASAR & MAKRO TERKINI (GUNAKAN SEBAGAI REFERENSI) ===
 {context}
@@ -879,15 +918,20 @@ class MarketBot:
 PERTANYAAN USER:
 "{question}"
 
+ALUR BERPIKIR (internal):
+1. Pahami intent pertanyaan.
+2. Ambil data relevan dari konteks; jangan mengarang angka.
+3. Susun jawaban: inti jawaban dulu (BLUF) → penjelasan singkat → kesimpulan.
+
 INSTRUKSI PENTING:
 - Jawab HANYA pertanyaan di atas, jangan membahas topik lain.
 - Gunakan data di atas hanya jika relevan dengan pertanyaan.
 - Jika pertanyaan tidak berkaitan dengan data tersedia, jawab berdasarkan pengetahuan umum.
 - {intent_instruction}
-- Struktur jawaban: langsung ke inti jawaban → penjelasan singkat → kesimpulan.
+- JANGAN mengarang harga, tanggal, atau jadwal rilis data ekonomi yang tidak ada di data.
 - Maksimal 350 kata. Gunakan Bahasa Indonesia yang santai tapi profesional.
-- Gunakan emoji secukupnya agar mudah dibaca.
-- Akhiri dengan disclaimer bahwa ini analisis edukasi.
+- JANGAN gunakan simbol markdown (*, **, _, #) — gunakan emoji, angka, dan baris baru.
+- Akhiri dengan disclaimer bahwa ini analisis edukasi, bukan rekomendasi trading.
 
 JAWABAN:"""
 

@@ -322,7 +322,9 @@ class IntentClassifier:
             return None
 
         prompt = (
-            f"Klasifikasikan intent dari pertanyaan berikut ke dalam salah satu kategori:\n"
+            f"ROLE: Anda adalah classifier intent untuk bot analisis pasar. "
+            f"Tugas: tentukan SATU kategori intent dari pertanyaan user.\n\n"
+            f"DAFTAR KATEGORI (pilih salah satu):\n"
             f"- price_check: Menanyakan harga/nilai pasar\n"
             f"- technical: Analisis teknikal, indikator, chart\n"
             f"- fundamental: Data fundamental ekonomi\n"
@@ -334,8 +336,13 @@ class IntentClassifier:
             f"- prediction: Prediksi arah pasar\n"
             f"- calendar: Jadwal rilis data\n"
             f"- risk: Analisis risiko\n\n"
+            f"CONTOH:\n"
+            f"Pertanyaan: \"gold naik apa turun besok?\" → prediction\n"
+            f"Pertanyaan: \"berapa harga EUR/USD sekarang?\" → price_check\n"
+            f"Pertanyaan: \"jelaskan apa itu RSI\" → education\n\n"
             f"Pertanyaan: \"{q}\"\n\n"
-            f"Jawab HANYA dengan nama kategorinya, tanpa tambahan apapun."
+            f"Jawab HANYA dengan satu nama kategori (huruf kecil), tanpa tanda kutip, "
+            f"tanpa penjelasan, tanpa simbol lain."
         )
 
         try:
