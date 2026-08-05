@@ -1,18 +1,24 @@
 """
-Conversation Memory — Memory percakapan per-user (in-memory, TTL).
+Conversation Memory — Memory percakapan per-user (L1 memori + L2 Supabase).
 
 Menyimpan beberapa pertanyaan-jawaban terakhir per user agar pertanyaan
 follow-up ("kalau begitu support-nya di mana?") punya konteks percakapan
 sebelumnya. Riwayat otomatis kedaluwarsa setelah MEMORY_TTL detik.
 
-Catatan privasi: data hanya di memori proses, tidak disimpan permanen,
-dan otomatis hilang saat bot restart / TTL berakhir.
+Penyimpanan dua lapis:
+- L1: memori (cepat) — hanya menyimpan entri aktif, dibatasi MAX_ENTRIES.
+- L2: Supabase (persisten, via data.cache.persistent) — agar riwayat tidak
+  menambah beban RAM proses bot dan tetap ada saat bot restart.
+  Aman no-op bila Supabase tidak dikonfigurasi.
+
+Catatan privasi: TTL 15 menit — data otomatis terhapus; tidak ada penyimpanan
+permanen jangka panjang.
 """
 
 import logging
 from typing import Dict, List
 
-from data.cache import cache
+from data.cache import cache, persistent
 
 logger = logging.getLogger(__name__)
 
@@ -29,15 +35,24 @@ def _key(user_id: int) -> str:
 
 
 def get_history(user_id: int) -> List[Dict]:
-    """Ambil riwayat percakapan user (terbaru di akhir list)."""
-    data = cache.get(_key(user_id))
-    if isinstance(data, list):
-        return data
+    """
+    Ambil riwayat percakapan user (terbaru di akhir list).
+    Cek memori dulu; jika kosong, ambil dari Supabase (L2) dan isi ulang memori.
+    """
+    key = _key(user_id)
+    data = cache.get(key)
+    if data is not None:
+        return data if isinstance(data, list) else []
+
+    persisted = persistent.get(key)
+    if isinstance(persisted, list):
+        cache.set(key, persisted, MEMORY_TTL)
+        return persisted
     return []
 
 
 def add_exchange(user_id: int, question: str, answer: str):
-    """Simpan satu pertanyaan-jawaban, potong agar hemat token."""
+    """Simpan satu pertanyaan-jawaban (memori + Supabase), potong agar hemat token."""
     history = get_history(user_id)
     history.append({
         "q": (question or "").strip()[:MAX_QUESTION_CHARS],
@@ -46,12 +61,14 @@ def add_exchange(user_id: int, question: str, answer: str):
     # Hanya simpan MAX_ENTRIES terakhir
     history = history[-MAX_ENTRIES:]
     cache.set(_key(user_id), history, MEMORY_TTL)
+    persistent.set(_key(user_id), history, MEMORY_TTL)
     logger.debug(f"Conversation memory updated for user {user_id}: {len(history)} entries")
 
 
 def clear(user_id: int):
-    """Hapus riwayat percakapan user."""
+    """Hapus riwayat percakapan user (memori + Supabase)."""
     cache.delete(_key(user_id))
+    persistent.delete(_key(user_id))
 
 
 def format_history(user_id: int, max_exchanges: int = MAX_EXCHANGES_IN_CONTEXT) -> str:

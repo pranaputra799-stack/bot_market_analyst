@@ -58,7 +58,7 @@ from config.settings import (
     IS_CLOUD,
 )
 from bot.handlers import MarketBot
-from data.cache import cache
+from data.cache import cache, cleanup_all
 
 # ===================== LOGGING SETUP =====================
 log_handlers = [logging.StreamHandler()]
@@ -140,6 +140,17 @@ async def event_reminder_callback(context):
         await bot_instance.check_event_reminders(context.application)
 
 
+async def cache_cleanup_callback(context):
+    """
+    Bersihkan cache kedaluwarsa (memori + Supabase L2) secara berkala
+    agar RAM proses bot tidak membengkak seiring waktu.
+    """
+    try:
+        await asyncio.to_thread(cleanup_all)
+    except Exception as e:
+        logger.warning(f"Cache cleanup failed: {e}")
+
+
 def setup_scheduler(application: Application, bot: MarketBot):
     """
     Setup job queue untuk morning brief & notifikasi event ekonomi.
@@ -213,6 +224,15 @@ def setup_scheduler(application: Application, bot: MarketBot):
             logger.info(
                 f"Economic event reminders scheduled every {ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES} minutes"
             )
+
+        # Bersihkan cache kedaluwarsa (memori + Supabase) setiap 10 menit
+        application.job_queue.run_repeating(
+            cache_cleanup_callback,
+            interval=timedelta(minutes=10),
+            first=120,  # Mulai 2 menit setelah start
+            name="cache_cleanup",
+        )
+        logger.info("Cache cleanup scheduled every 10 minutes")
     else:
         logger.warning("JobQueue not available, morning brief & event alerts scheduling disabled. Install pytz if needed.")
 

@@ -47,11 +47,20 @@ TWELVEDATA_KEY = _get_key("TWELVEDATA_KEY", "")
 SUPABASE_URL = _get_key("SUPABASE_URL", "")
 SUPABASE_KEY = _get_key("SUPABASE_KEY", "")
 
+# Supabase juga dipakai sebagai cache persisten (L2): AI response & conversation
+# memory disimpan di tabel 'app_cache' (lihat migrations/supabase.sql) agar RAM
+# proses bot tidak membengkak dan cache tidak hilang saat restart.
+# Set false jika ingin cache murni di memori.
+SUPABASE_CACHE_ENABLED = os.getenv("SUPABASE_CACHE_ENABLED", "true").lower() in ("1", "true", "yes")
+
 # ===================== CACHE SETTINGS =====================
 CACHE_TTL_SECONDS = 300  # 5 menit untuk data harga
 CACHE_MACRO_TTL = 3600   # 1 jam untuk data makro
 CACHE_NEWS_TTL = 600     # 10 menit untuk berita
 CACHE_AI_TTL = 600       # 10 menit untuk response AI (pertanyaan identik)
+# Batas maksimal entri di memory cache — entri terlama di-evict saat penuh agar
+# RAM proses bot tetap terkendali (0 = tanpa batas).
+CACHE_MAX_ENTRIES = int(os.getenv("CACHE_MAX_ENTRIES", "5000"))
 
 # ===================== MORNING BRIEF =====================
 MORNING_BRIEF_HOUR = int(os.getenv("MORNING_BRIEF_HOUR", "7"))

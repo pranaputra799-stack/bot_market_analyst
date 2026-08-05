@@ -81,12 +81,37 @@ python main.py
 | `GEMINI_API_KEY` | opsi | Fallback — https://aistudio.google.com/app/apikey |
 | `FRED_API_KEY` | opsi | Kalender ekonomi real-time resmi — https://fred.stlouisfed.org |
 | `FINNHUB_KEY` | opsi | Berita & sentimen |
-| `SUPABASE_URL` / `SUPABASE_KEY` | opsi | Penyimpanan user & subscriber morning brief |
+| `SUPABASE_URL` / `SUPABASE_KEY` | opsi | User & subscriber morning brief + cache persisten (L2) |
+| `SUPABASE_CACHE_ENABLED` | opsi | Aktifkan cache persisten Supabase (`true`/`false`, default `true`) |
+| `CACHE_MAX_ENTRIES` | opsi | Batas entri memory cache (default `5000`) |
 | `SENTRY_DSN` | opsi | Error tracking (kosongkan untuk menonaktifkan) |
 | `MORNING_BRIEF_CHAT_IDS` | opsi | Chat ID penerima morning brief otomatis |
 | `ECONOMIC_ALERT_ENABLED` | opsi | Notifikasi event ekonomi (`true`/`false`) |
 
 Lihat `.env.example` untuk daftar lengkap.
+
+## 🗄️ Cache Persisten di Supabase (anti-RAM membengkak)
+
+Bot memakai cache **dua lapis (hybrid)**:
+
+- **L1 — Memory** (cepat): semua data pasar, berita, makro, hasil analisis.
+  Dibatasi `CACHE_MAX_ENTRIES` entri (FIFO eviction) dan dibersihkan otomatis
+  tiap 10 menit oleh job scheduler — RAM proses dijamin tidak membengkak.
+- **L2 — Supabase** (persisten): AI response & conversation memory disimpan di
+  tabel `app_cache` secara background (tidak memblokir request). Cache bertahan
+  lintas restart dan tidak menambah beban RAM.
+
+**Setup sekali saja** — jalankan `migrations/supabase.sql` di Supabase SQL Editor
+(membuat tabel `app_cache`, `users`, `subscribers` + index + kebijakan RLS).
+Jika Supabase belum dikonfigurasi / tabel belum dibuat, bot otomatis jatuh ke
+mode memory-only tanpa error.
+
+| Data | L1 (memori) | L2 (Supabase) |
+|---|---|---|
+| Data pasar/makro/berita | ✅ | — |
+| Hasil analisis multi-agent | ✅ | — |
+| AI response (besar) | ✅ (TTL 10 mnt) | ✅ (persisten) |
+| Conversation memory | ✅ (TTL 15 mnt) | ✅ (persisten) |
 
 ## 📦 Deploy
 
