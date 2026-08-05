@@ -5,6 +5,7 @@ Now with multi-agent analysis system from MarketLens.
 """
 import asyncio
 import logging
+import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -464,30 +465,57 @@ class MarketBot:
         current_price = data.get("current_price")
         change = data.get("change_pct")
 
-        # Generate candlestick chart, fallback ke line chart
-        chart_url = self.chart.build_candlestick_chart(ohlcv, symbol)
-        if not chart_url:
-            # Fallback: line chart sederhana
-            prices = [d.get("close", 0) for d in ohlcv]
-            labels = [d.get("date", "")[-5:] for d in ohlcv]
-            chart_url = self.chart.build_line_chart(prices, labels, symbol)
+        chart_path = None
+        try:
+            # Generate candlestick chart LOKAL (matplotlib), fallback ke line chart
+            chart_path = self.chart.build_candlestick_chart(ohlcv, symbol)
+            if not chart_path:
+                # Fallback: line chart sederhana
+                prices = [d.get("close", 0) for d in ohlcv]
+                labels = [d.get("date", "")[-5:] for d in ohlcv]
+                chart_path = self.chart.build_line_chart(prices, labels, symbol)
 
-        # Buat caption
-        arrow = "🟢" if change and change > 0 else "🔴" if change and change < 0 else "⚪"
-        change_str = f"{change:+.2f}%" if change is not None else ""
-        caption = (
-            f"📈 *{display_name}*\n"
-            f"{arrow} Harga: *{format_price(current_price, symbol)}* {change_str}\n"
-            f"📊 Periode: {period} ({interval})\n"
-        )
+            if not chart_path:
+                await safe_send_message(
+                    context.bot,
+                    chat_id=chat_id,
+                    text=f"❌ Gagal membuat grafik untuk *{display_name}*. Silakan coba lagi nanti.",
+                    parse_mode="Markdown",
+                )
+                return
 
-        # Kirim via URL (Telegram akan download sendiri)
-        await context.bot.send_photo(
-            chat_id=chat_id,
-            photo=chart_url,
-            caption=caption,
-            parse_mode="Markdown",
-        )
+            # Buat caption
+            arrow = "🟢" if change and change > 0 else "🔴" if change and change < 0 else "⚪"
+            change_str = f"{change:+.2f}%" if change is not None else ""
+            caption = (
+                f"📈 *{display_name}*\n"
+                f"{arrow} Harga: *{format_price(current_price, symbol)}* {change_str}\n"
+                f"📊 Periode: {period} ({interval})\n"
+            )
+
+            # Kirim file PNG langsung ke Telegram (tanpa layanan chart eksternal)
+            with open(chart_path, "rb") as f:
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=f,
+                    caption=caption,
+                    parse_mode="Markdown",
+                )
+        except Exception as e:
+            logger.error(f"Chart generation/send error for {symbol}: {e}", exc_info=True)
+            await safe_send_message(
+                context.bot,
+                chat_id=chat_id,
+                text=f"❌ Gagal membuat grafik untuk *{display_name}*. Silakan coba lagi nanti.",
+                parse_mode="Markdown",
+            )
+        finally:
+            # Bersihkan file temp chart
+            if chart_path:
+                try:
+                    os.remove(chart_path)
+                except OSError:
+                    pass
 
     # ===================== MORNING BRIEF =====================
 

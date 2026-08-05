@@ -1,22 +1,33 @@
 """
-Chart Generator - Membuat grafik harga menggunakan QuickChart.io API.
-QuickChart.io: API gratis (1,000 chart/bulan), Chart.js-based, tanpa dependency Python tambahan.
+Chart Generator - Membuat grafik harga secara LOKAL dengan matplotlib.
+
+Sebelumnya memakai QuickChart.io (layanan eksternal) yang ternyata merender
+gambar candlestick KOSONG (0 pixel candle) dan rawan rate-limit. Sekarang chart
+digambar langsung di server dan dikirim sebagai file PNG ke Telegram — tanpa
+ketergantungan layanan pihak ketiga.
 
 Mendukung:
 - Candlestick chart (forex, gold, index)
 - Line chart (data time-series)
-- Area chart (crypto, volume)
 """
-import json
 import logging
-import urllib.parse
+import os
+import tempfile
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-logger = logging.getLogger(__name__)
+# Backend Agg (headless) WAJIB sebelum import pyplot
+os.environ.setdefault("MPLBACKEND", "Agg")
+import matplotlib  # noqa: E402
+try:
+    matplotlib.use("Agg", force=True)
+except Exception:
+    pass
+import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.patches import Rectangle  # noqa: E402
+from matplotlib.ticker import FuncFormatter  # noqa: E402
 
-# QuickChart.io base URL
-QUICKCHART_URL = "https://quickchart.io/chart"
+logger = logging.getLogger(__name__)
 
 # Nama display untuk setiap simbol
 SYMBOL_DISPLAY_NAMES = {
@@ -44,8 +55,8 @@ SYMBOL_DISPLAY_NAMES = {
 
 class ChartGenerator:
     """
-    Generator grafik harga menggunakan QuickChart.io.
-    Menghasilkan URL gambar chart yang bisa langsung dikirim ke Telegram.
+    Generator grafik harga lokal (matplotlib).
+    Menghasilkan file PNG yang langsung dikirim ke Telegram.
     """
 
     # Warna untuk bullish/bearish candle
@@ -60,212 +71,233 @@ class ChartGenerator:
         """Dapatkan nama display untuk simbol."""
         return SYMBOL_DISPLAY_NAMES.get(symbol, symbol.replace("=X", "").replace("=F", ""))
 
+    @staticmethod
+    def _parse_date(date_str: str) -> Optional[datetime]:
+        """
+        Parse tanggal dari berbagai format yfinance:
+        "2026-08-05", "2026-08-05 13:00", "2026-08-05T13:00:00Z",
+        "2026-08-05T13:00:00+00:00", dll.
+        """
+        if not date_str:
+            return None
+        # Normalisasi separator T -> spasi, buang Z / offset timezone
+        cleaned = date_str.strip().replace("T", " ").replace("Z", "")
+        offset = cleaned.find("+", 10)
+        if offset == -1:
+            offset = cleaned.find("-", 10)
+        if offset != -1:
+            cleaned = cleaned[:offset].strip()
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(cleaned, fmt)
+            except (ValueError, TypeError):
+                continue
+        # Fallback terakhir: fromisoformat
+        try:
+            return datetime.fromisoformat(date_str.strip().replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _price_formatter(decimals: int):
+        """Formatter sumbu Y dengan jumlah desimal sesuai instrumen."""
+        return FuncFormatter(lambda x, _: f"{x:,.{decimals}f}")
+
+    @staticmethod
+    def _decimals_for_price(price: float) -> int:
+        """Jumlah desimal yang pas untuk range harga (forex 4-5, indeks 2, dll)."""
+        if price < 1:
+            return 5
+        if price < 20:
+            return 4
+        if price < 1000:
+            return 2
+        return 0
+
+    def _style_axes(self, ax):
+        """Terapkan dark theme ke axes."""
+        ax.set_facecolor(self.CHART_BG_COLOR)
+        ax.tick_params(colors=self.TEXT_COLOR, labelsize=10)
+        ax.grid(True, color=self.GRID_COLOR, alpha=0.6, linewidth=0.6)
+        for spine in ax.spines.values():
+            spine.set_color(self.GRID_COLOR)
+
+    def _save_figure(self, fig) -> Optional[str]:
+        """
+        Simpan figure ke file PNG temp dan return path-nya.
+        Gunakan layout ketat agar judul/label tidak terpotong.
+        """
+        try:
+            fig.set_facecolor(self.CHART_BG_COLOR)
+            fig.tight_layout(pad=1.2)
+            fd, path = tempfile.mkstemp(suffix=".png", prefix="chart_")
+            os.close(fd)
+            fig.savefig(path, format="png", dpi=130, facecolor=fig.get_facecolor())
+            logger.info(f"Chart saved: {path} ({os.path.getsize(path)} bytes)")
+            return path
+        except Exception as e:
+            logger.error(f"Failed to save chart: {e}")
+            return None
+
     def build_candlestick_chart(
         self,
         ohlcv_data: List[Dict],
         symbol: str,
-        width: int = 700,
-        height: int = 400,
-        max_points: int = 30,
+        width: int = 11,
+        height: int = 6,
+        max_points: int = 40,
     ) -> Optional[str]:
         """
-        Generate URL candlestick chart dari data OHLCV.
+        Generate candlestick chart LOKAL dari data OHLCV.
 
         Args:
             ohlcv_data: List of {date, open, high, low, close, volume}
             symbol: Simbol Yahoo Finance (e.g. EURUSD=X)
-            width: Lebar gambar (px)
-            height: Tinggi gambar (px)
-            max_points: Max data points (QuickChart URL length limit ~8KB)
+            width/height: Ukuran figure (inch)
+            max_points: Max data points yang digambar
 
         Returns:
-            QuickChart URL string, atau None jika data kosong
+            Path file PNG, atau None jika data tidak cukup / gagal
         """
-        if not ohlcv_data or len(ohlcv_data) < 3:
+        if not ohlcv_data or len(ohlcv_data) < 2:
             logger.warning(f"Not enough OHLCV data for {symbol}")
             return None
 
         display_name = self._get_display_name(symbol)
 
-        # Limit & format data untuk candlestick chart
-        data_slice = ohlcv_data[-max_points:] if len(ohlcv_data) > max_points else ohlcv_data
+        # Siapkan candle (kronologis: dari paling lama ke terbaru)
         candles = []
-        for row in data_slice:
-            date_str = row.get("date", "")
+        for row in ohlcv_data[-max_points:]:
+            dt = self._parse_date(row.get("date", ""))
             try:
-                dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                timestamp = dt.strftime("%Y-%m-%d")
-            except (ValueError, AttributeError):
-                timestamp = date_str[:10]
-
-            candles.append({
-                "t": timestamp,
-                "o": float(row.get("open", 0)),
-                "h": float(row.get("high", 0)),
-                "l": float(row.get("low", 0)),
-                "c": float(row.get("close", 0)),
-            })
-
-        # Reverse to chronological order
+                candles.append({
+                    "dt": dt,
+                    "o": float(row.get("open", 0)),
+                    "h": float(row.get("high", 0)),
+                    "l": float(row.get("low", 0)),
+                    "c": float(row.get("close", 0)),
+                })
+            except (TypeError, ValueError):
+                continue
         candles.reverse()
 
-        chart_config = {
-            "type": "candlestick",
-            "data": {
-                "datasets": [{
-                    "label": display_name,
-                    "data": candles,
-                    "color": {
-                        "up": self.CANDLE_UP_COLOR,
-                        "down": self.CANDLE_DOWN_COLOR,
-                        "unchanged": "#888888",
-                    },
-                }]
-            },
-            "options": {
-                "responsive": True,
-                "maintainAspectRatio": False,
-                "plugins": {
-                    "legend": {
-                        "display": True,
-                        "labels": {"color": self.TEXT_COLOR, "font": {"size": 14}}
-                    },
-                    "title": {
-                        "display": True,
-                        "text": f"{display_name}",
-                        "color": self.TEXT_COLOR,
-                        "font": {"size": 16, "weight": "bold"}
-                    }
-                },
-                "scales": {
-                    "x": {
-                        "type": "time",
-                        "time": {"unit": "day", "displayFormats": {"day": "MMM d"}},
-                        "grid": {"color": self.GRID_COLOR},
-                        "ticks": {"color": self.TEXT_COLOR}
-                    },
-                    "y": {
-                        "grid": {"color": self.GRID_COLOR},
-                        "ticks": {"color": self.TEXT_COLOR}
-                    }
-                },
-                "backgroundColor": self.CHART_BG_COLOR,
-            }
-        }
+        if len(candles) < 2:
+            return None
 
-        return self._build_url(chart_config, width, height, version=3)
+        try:
+            fig, ax = plt.subplots(figsize=(width, height))
+            n = len(candles)
+
+            last_price = candles[-1]["c"]
+            decimals = self._decimals_for_price(last_price)
+
+            for i, c in enumerate(candles):
+                color = self.CANDLE_UP_COLOR if c["c"] >= c["o"] else self.CANDLE_DOWN_COLOR
+                # Sumbu (wick)
+                ax.plot([i, i], [c["l"], c["h"]], color=color, linewidth=1.2, zorder=2)
+                # Body candle
+                body_lo = min(c["o"], c["c"])
+                body_hi = max(c["o"], c["c"])
+                body_h = body_hi - body_lo
+                if body_h == 0:
+                    body_h = max((c["h"] - c["l"]) * 0.05, (c["h"] or 1) * 1e-5)
+                ax.add_patch(Rectangle(
+                    (i - 0.35, body_lo), 0.7, body_h,
+                    facecolor=color, edgecolor=color, linewidth=0.5, zorder=3,
+                ))
+
+            # Label sumbu X: tanggal (tampilkan ~6 label)
+            tick_step = max(1, n // 6)
+            tick_positions = list(range(0, n, tick_step))
+            if tick_positions[-1] != n - 1:
+                tick_positions.append(n - 1)
+            ax.set_xticks(tick_positions)
+            ax.set_xticklabels([
+                (candles[i]["dt"].strftime("%d/%m") if candles[i]["dt"] else str(i))
+                for i in tick_positions
+            ], rotation=30, ha="right")
+
+            ax.set_title(display_name, color=self.TEXT_COLOR, fontsize=15, fontweight="bold")
+            ax.set_ylabel("Harga", color=self.TEXT_COLOR, fontsize=11)
+            ax.yaxis.set_major_formatter(self._price_formatter(decimals))
+            self._style_axes(ax)
+
+            # Warna label grid + legenda warna candle
+            legend_lines = [
+                plt.Line2D([0], [0], color=self.CANDLE_UP_COLOR, lw=4, label="Naik"),
+                plt.Line2D([0], [0], color=self.CANDLE_DOWN_COLOR, lw=4, label="Turun"),
+            ]
+            ax.legend(handles=legend_lines, loc="upper left", fontsize=9,
+                      facecolor=self.CHART_BG_COLOR, edgecolor=self.GRID_COLOR,
+                      labelcolor=self.TEXT_COLOR)
+
+            return self._save_figure(fig)
+        except Exception as e:
+            logger.error(f"Candlestick chart failed for {symbol}: {e}")
+            return None
+        finally:
+            try:
+                plt.close(fig)
+            except Exception:
+                pass
 
     def build_line_chart(
         self,
         data_points: List[float],
         labels: List[str],
         symbol: str,
-        width: int = 700,
-        height: int = 350,
-        max_points: int = 30,
-    ) -> str:
+        width: int = 11,
+        height: int = 5.5,
+        max_points: int = 40,
+    ) -> Optional[str]:
         """
-        Generate URL line chart (fallback jika candlestick tidak tersedia).
+        Generate line chart LOKAL (fallback jika candlestick tidak tersedia).
         """
+        if not data_points or len(data_points) < 2:
+            return None
+
         display_name = self._get_display_name(symbol)
 
-        # Limit data
-        if len(data_points) > max_points:
-            data_points = data_points[-max_points:]
-            labels = labels[-max_points:]
+        data_points = data_points[-max_points:]
+        labels = labels[-max_points:]
+        n = len(data_points)
 
-        # Deteksi trend utk warna garis
-        if len(data_points) >= 2:
+        try:
+            fig, ax = plt.subplots(figsize=(width, height))
+
+            # Deteksi trend utk warna garis
             is_up = data_points[-1] >= data_points[0]
             line_color = self.CANDLE_UP_COLOR if is_up else self.CANDLE_DOWN_COLOR
-        else:
-            line_color = "#42a5f5"
 
-        chart_config = {
-            "type": "line",
-            "data": {
-                "labels": labels,
-                "datasets": [{
-                    "label": display_name,
-                    "data": data_points,
-                    "borderColor": line_color,
-                    "backgroundColor": f"{line_color}33",
-                    "borderWidth": 2,
-                    "pointRadius": 2,
-                    "fill": True,
-                    "tension": 0.1,
-                }]
-            },
-            "options": {
-                "responsive": True,
-                "maintainAspectRatio": False,
-                "plugins": {
-                    "legend": {
-                        "display": True,
-                        "labels": {"color": self.TEXT_COLOR, "font": {"size": 14}}
-                    },
-                    "title": {
-                        "display": True,
-                        "text": f"{display_name}",
-                        "color": self.TEXT_COLOR,
-                        "font": {"size": 16, "weight": "bold"}
-                    }
-                },
-                "scales": {
-                    "x": {
-                        "grid": {"color": self.GRID_COLOR},
-                        "ticks": {"color": self.TEXT_COLOR, "maxTicksLimit": 8}
-                    },
-                    "y": {
-                        "grid": {"color": self.GRID_COLOR},
-                        "ticks": {"color": self.TEXT_COLOR}
-                    }
-                },
-                "backgroundColor": self.CHART_BG_COLOR,
-            }
-        }
+            ax.plot(range(n), data_points, color=line_color, linewidth=2.2,
+                    marker="o", markersize=3, zorder=3)
+            ax.fill_between(range(n), data_points, min(data_points),
+                            color=line_color, alpha=0.15, zorder=1)
 
-        return self._build_url(chart_config, width, height)
+            last_price = data_points[-1]
+            decimals = self._decimals_for_price(last_price)
 
-    def _build_url(
-        self,
-        chart_config: Dict,
-        width: int,
-        height: int,
-        version: int = 4,
-    ) -> str:
-        """
-        Bangun URL QuickChart dari konfigurasi Chart.js.
+            tick_step = max(1, n // 6)
+            tick_positions = list(range(0, n, tick_step))
+            if tick_positions[-1] != n - 1:
+                tick_positions.append(n - 1)
+            ax.set_xticks(tick_positions)
+            ax.set_xticklabels([labels[i] for i in tick_positions], rotation=30, ha="right")
 
-        Args:
-            chart_config: Chart.js configuration dict
-            width: Image width
-            height: Image height
-            version: Chart.js version (3 for candlestick, 4 for latest)
+            ax.set_title(display_name, color=self.TEXT_COLOR, fontsize=15, fontweight="bold")
+            ax.set_ylabel("Harga", color=self.TEXT_COLOR, fontsize=11)
+            ax.yaxis.set_major_formatter(self._price_formatter(decimals))
+            self._style_axes(ax)
 
-        Returns:
-            Full QuickChart URL
-        """
-        # Serialize config to JSON
-        config_json = json.dumps(chart_config)
-
-        # URL encode
-        encoded_config = urllib.parse.quote(config_json)
-
-        # Build URL with dark theme background
-        bkg_color = urllib.parse.quote(self.CHART_BG_COLOR)
-
-        url = (
-            f"{QUICKCHART_URL}?"
-            f"v={version}"
-            f"&w={width}"
-            f"&h={height}"
-            f"&bkg={bkg_color}"
-            f"&devicePixelRatio=2"
-            f"&c={encoded_config}"
-        )
-
-        return url
+            return self._save_figure(fig)
+        except Exception as e:
+            logger.error(f"Line chart failed for {symbol}: {e}")
+            return None
+        finally:
+            try:
+                plt.close(fig)
+            except Exception:
+                pass
 
     @staticmethod
     def get_chart_symbol_from_text(text: str) -> Tuple[Optional[str], Optional[str]]:
