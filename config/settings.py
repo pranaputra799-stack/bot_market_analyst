@@ -118,4 +118,9 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE = os.getenv("LOG_FILE", "bot.log")
 
 # Nonaktifkan file logging di cloud (container temporary)
-LOG_TO_FILE = bool(os.getenv("LOG_TO_FILE", "0")) if IS_CLOUD else True
+# Catatan: bool("0") bernilai True, jadi parsing manual diperlukan.
+LOG_TO_FILE = (
+    os.getenv("LOG_TO_FILE", "0").lower() in ("1", "true", "yes")
+    if IS_CLOUD
+    else True
+)

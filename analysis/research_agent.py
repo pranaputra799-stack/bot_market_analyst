@@ -162,13 +162,11 @@ class ResearchAgent:
 
     async def _fetch_market_summary(self) -> str:
         """Fetch market summary synchronously (Yahoo Finance is sync)."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.market.get_market_summary)
+        return await asyncio.to_thread(self.market.get_market_summary)
 
     async def _fetch_macro_summary(self) -> str:
         """Fetch macro summary synchronously."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.macro.get_macro_summary)
+        return await asyncio.to_thread(self.macro.get_macro_summary)
 
     async def _fetch_news_summary(self) -> str:
         """Fetch news summary."""

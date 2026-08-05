@@ -80,18 +80,26 @@ class NewsFetcher:
                 sentiment = item.get("sentiment", 0)
                 sentiment_label = "🟢 Positif" if sentiment > 0.2 else "🔴 Negatif" if sentiment < -0.2 else "⚪ Netral"
 
+                # Finnhub mengirim timestamp epoch UTC. Nilai bisa berupa int/float,
+                # tapi kadang string — konversi aman agar fromtimestamp tidak TypeError.
+                raw_ts = item.get("datetime", 0)
+                try:
+                    ts = int(raw_ts)
+                except (TypeError, ValueError):
+                    ts = 0
+
                 articles.append({
                     "headline": item.get("headline", ""),
                     "summary": item.get("summary", "")[:200],
                     "url": item.get("url", ""),
                     "source": item.get("source", ""),
-                    # Finnhub mengirim timestamp dalam epoch UTC — konversi ke WIB
-                    # agar waktu berita sesuai jam Indonesia, bukan waktu server.
+                    # Konversi ke WIB agar waktu berita sesuai jam Indonesia,
+                    # bukan waktu server.
                     "datetime": datetime.fromtimestamp(
-                        item.get("datetime", 0), tz=ZoneInfo(MORNING_BRIEF_TIMEZONE)
-                    ).strftime("%Y-%m-%d %H:%M WIB") if item.get("datetime") else "",
+                        ts, tz=ZoneInfo(MORNING_BRIEF_TIMEZONE)
+                    ).strftime("%Y-%m-%d %H:%M WIB") if ts else "",
                     # Simpan raw epoch untuk pembobotan kedekatan waktu di sentiment analyzer
-                    "datetime_ts": item.get("datetime", 0),
+                    "datetime_ts": ts,
                     "sentiment": sentiment,
                     "sentiment_label": sentiment_label,
                     "related": item.get("related", ""),

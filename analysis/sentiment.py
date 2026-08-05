@@ -239,7 +239,7 @@ class SentimentAnalyzer:
         ts = SentimentAnalyzer._safe_float(article.get("datetime_ts"))
         if ts > 0:
             try:
-                age_hours = (timezone.utcnow() - datetime.fromtimestamp(ts, tz=timezone.utc)).total_seconds() / 3600
+                age_hours = (datetime.now(timezone.utc) - datetime.fromtimestamp(ts, tz=timezone.utc)).total_seconds() / 3600
             except (OverflowError, OSError, ValueError):
                 age_hours = float(index) * 6  # fallback kasar
             return max(0.3, 1.0 / (1.0 + age_hours / 12.0))

@@ -154,15 +154,19 @@ STATUS_MESSAGE_TEMPLATE = """
 
 
 def get_ai_providers_status(ai_engine) -> str:
-    """Format status AI providers."""
+    """Format status AI providers.
+
+    Menggunakan statistik pemakaian saja — TANPA tes koneksi live per provider.
+    Test live memanggil API tiap provider (timeout 30s x 5 provider) sehingga
+    perintah /status bisa hang berlarut-larut saat provider sedang down.
+    """
     stats = ai_engine.get_stats()
     lines = []
     for provider in stats.get("available_providers", []):
         name = stats.get("provider_names", {}).get(provider, provider)
         usage = stats.get("provider_usage", {}).get(provider, 0)
-        # Test connection
-        test = ai_engine.test_connection(provider)
-        icon = "✅" if test["status"] == "ok" else "❌"
+        # Tidak ada live test: cukup tampilkan konfigurasi & pemakaian.
+        icon = "✅" if usage > 0 else "🟡"
         lines.append(f"  {icon} {name}: {usage}x dipakai")
     if not lines:
         lines.append("  ❌ Tidak ada provider terkonfigurasi")

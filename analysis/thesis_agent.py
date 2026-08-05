@@ -13,7 +13,7 @@ Takes research context and technical signals, then produces:
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from analysis.prompts import THESIS_SYSTEM, THESIS_FORMULATION_TEMPLATE
@@ -32,7 +32,7 @@ class Thesis:
     key_evidence: List[str] = field(default_factory=list)
     time_horizon: str = "short_term"  # short_term, medium_term, structural
     risk_factors: List[str] = field(default_factory=list)
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict:
         return {

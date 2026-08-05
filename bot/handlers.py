@@ -343,10 +343,22 @@ class MarketBot:
         uptime_seconds = int(time.time() - self.start_time)
         uptime_str = f"{uptime_seconds // 3600}h {(uptime_seconds % 3600) // 60}m"
 
-        ai_status = get_ai_providers_status(self.ai)
-        data_status = get_data_sources_status(self.market, self.macro, self.news)
+        # Helper ini melakukan I/O jaringan (cek Yahoo Finance, dll) — jalankan
+        # di thread agar tidak memblokir event loop Telegram.
+        ai_status, data_status, analysis_status = await asyncio.gather(
+            asyncio.to_thread(get_ai_providers_status, self.ai),
+            asyncio.to_thread(get_data_sources_status, self.market, self.macro, self.news),
+            asyncio.to_thread(get_analysis_engine_status),
+            return_exceptions=True,
+        )
+        # Satu helper gagal (mis. timeout jaringan) tidak boleh menghentikan /status
+        if isinstance(ai_status, Exception):
+            ai_status = "  ⚠️ Status provider tidak dapat dimuat"
+        if isinstance(data_status, Exception):
+            data_status = "  ⚠️ Status data tidak dapat dimuat"
+        if isinstance(analysis_status, Exception):
+            analysis_status = "  • ⬜ Multi-Agent: Tidak tersedia"
         cache_stats = cache.get_stats()
-        analysis_status = get_analysis_engine_status()
 
         status_msg = STATUS_MESSAGE_TEMPLATE.format(
             bot_status="✅ ONLINE",

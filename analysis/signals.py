@@ -12,7 +12,7 @@ Provides:
 import logging
 from enum import Enum
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ class Signal:
     confidence: float  # 0.0 to 1.0
     reason: str
     source: str  # e.g., "trend", "momentum", "volatility", "volume"
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __str__(self) -> str:
         emoji = {
@@ -54,7 +54,7 @@ class AggregatedSignal:
     confidence: float  # 0.0 to 1.0
     components: List[Signal] = field(default_factory=list)
     summary: str = ""
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict:
         """Convert to dict for prompt context."""

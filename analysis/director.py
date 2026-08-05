@@ -17,7 +17,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from analysis.prompts import (
@@ -55,7 +55,7 @@ class AnalysisResult:
     agents_executed: List[str] = field(default_factory=list)
     duration_ms: float = 0.0
     error: Optional[str] = None
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class AnalysisDirector:
