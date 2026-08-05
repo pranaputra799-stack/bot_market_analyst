@@ -80,6 +80,7 @@ async def post_init(application: Application):
         BotCommand("start", "🚀 Mulai bot"),
         BotCommand("help", "❓ Bantuan & panduan"),
         BotCommand("morning", "🌅 Morning Brief harian"),
+        BotCommand("sentiment", "🧠 Sentimen pasar"),
         BotCommand("calendar", "📅 Kalender Ekonomi"),
         BotCommand("alert", "🔔 Notifikasi event ekonomi"),
         BotCommand("status", "✅ Status sistem & API"),
@@ -221,6 +222,7 @@ def run_polling():
     application.add_handler(CommandHandler("about", bot.about_command))
     application.add_handler(CommandHandler("status", bot.status_command))
     application.add_handler(CommandHandler("morning", bot.morning_brief_command))
+    application.add_handler(CommandHandler("sentiment", bot.sentiment_command))
     application.add_handler(CommandHandler("calendar", bot.calendar_command))
     application.add_handler(CommandHandler("alert", bot.alert_command))
     application.add_handler(CommandHandler("chart", bot.chart_command))
@@ -263,6 +265,7 @@ def run_webhook():
     application.add_handler(CommandHandler("about", bot.about_command))
     application.add_handler(CommandHandler("status", bot.status_command))
     application.add_handler(CommandHandler("morning", bot.morning_brief_command))
+    application.add_handler(CommandHandler("sentiment", bot.sentiment_command))
     application.add_handler(CommandHandler("calendar", bot.calendar_command))
     application.add_handler(CommandHandler("alert", bot.alert_command))
     application.add_handler(CommandHandler("chart", bot.chart_command))

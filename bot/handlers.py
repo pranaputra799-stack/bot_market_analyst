@@ -46,6 +46,7 @@ from data.database import db
 from utils.chart_generator import ChartGenerator
 from analysis.director import AnalysisDirector
 from analysis.monitoring import metrics
+from analysis.sentiment import SentimentAnalyzer
 from bot.messages import (
     WELCOME_MESSAGE,
     HELP_MESSAGE,
@@ -260,6 +261,7 @@ class MarketBot:
         self.macro = MacroDataFetcher()
         self.news = NewsFetcher()
         self.chart = ChartGenerator()
+        self.sentiment = SentimentAnalyzer(ai_engine=self.ai, news_fetcher=self.news)
         self.start_time = time.time()
         self.total_questions = 0
 
@@ -303,6 +305,9 @@ class MarketBot:
             [
                 InlineKeyboardButton("📅 Kalender Ekonomi", callback_data="calendar"),
                 InlineKeyboardButton("❓ Bantuan", callback_data="help"),
+            ],
+            [
+                InlineKeyboardButton("🧠 Sentimen Pasar", callback_data="sentiment"),
             ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -517,6 +522,44 @@ class MarketBot:
                 except OSError:
                     pass
 
+    async def _get_sentiment_text(self, symbol: str = "FOREX") -> str:
+        """Ambil sentimen pasar terformat singkat (aman — tidak crash walau gagal)."""
+        try:
+            result = await self.sentiment.analyze(symbol, use_llm=True)
+            return self.sentiment.format_short(result)
+        except Exception as e:
+            logger.warning(f"Sentiment analysis failed: {e}")
+            return ""
+
+    async def sentiment_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler untuk /sentiment - Skor sentimen pasar berbasis berita."""
+        chat_id = update.effective_chat.id
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        text = update.message.text or ""
+        arg = text.replace("/sentiment", "").replace("/senti", "").strip().lower()
+
+        symbol = "FOREX"
+        display_name = "Pasar Forex"
+        if arg:
+            detected, dname = self.chart.get_chart_symbol_from_text(f"chart {arg}")
+            if detected:
+                symbol = detected
+                display_name = dname
+            else:
+                # Simbol tidak dikenal — tetap analisis FOREX, label jangan menyesatkan
+                display_name = f"{arg.upper()} (kategori umum: Forex)"
+
+        result = await self.sentiment.analyze(symbol, use_llm=True)
+        report = strip_markdown_asterisks(self.sentiment.format_report(result, display_name))
+
+        await safe_reply_text(
+            update.message,
+            report,
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
+
     # ===================== MORNING BRIEF =====================
 
     async def alert_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -586,11 +629,12 @@ class MarketBot:
         today = datetime.now(ZoneInfo(MORNING_BRIEF_TIMEZONE)).strftime("%A, %d %B %Y")
 
         # Gather data secara parallel
-        market_summary, macro_summary, calendar_events, news_summary = await asyncio.gather(
+        market_summary, macro_summary, calendar_events, news_summary, sentiment_text = await asyncio.gather(
             asyncio.to_thread(self.market.get_market_summary),
             asyncio.to_thread(self.macro.get_macro_summary),
             self.macro.get_economic_calendar(),
             self.news.get_news_summary("FOREX"),
+            self._get_sentiment_text("FOREX"),
         )
 
         # Format kalender ekonomi untuk morning brief (top 3 high impact)
@@ -601,7 +645,7 @@ class MarketBot:
             try:
                 # Gunakan multi-agent untuk analisis yang lebih dalam
                 analysis_prompt = self._build_morning_brief_prompt(
-                    today, market_summary, macro_summary, calendar_text, news_summary
+                    today, market_summary, macro_summary, calendar_text, news_summary, sentiment_text
                 )
 
                 result = await self.analysis_director.analyze(analysis_prompt)
@@ -630,6 +674,7 @@ class MarketBot:
                     macro_summary=macro_summary,
                     calendar_summary=calendar_text,
                     news_summary=news_summary,
+                    sentiment_summary=sentiment_text or "Sentimen pasar tidak tersedia.",
                     outlook=outlook_part,
                     catalysts=catalysts_part,
                 )
@@ -638,7 +683,7 @@ class MarketBot:
 
         # Fallback: legacy single-prompt method
         outlook_prompt = self._build_morning_brief_prompt(
-            today, market_summary, macro_summary, calendar_text, news_summary
+            today, market_summary, macro_summary, calendar_text, news_summary, sentiment_text
         )
 
         ai_response = self.ai.generate(outlook_prompt, use_cache=True, max_tokens=4096)
@@ -657,6 +702,7 @@ class MarketBot:
             macro_summary=macro_summary,
             calendar_summary=calendar_text,
             news_summary=news_summary,
+            sentiment_summary=sentiment_text or "Sentimen pasar tidak tersedia.",
             outlook=outlook,
             catalysts=catalysts,
         )
@@ -668,12 +714,14 @@ class MarketBot:
         macro_summary: str,
         calendar_text: str,
         news_summary: str,
+        sentiment_text: str = "",
     ) -> str:
         """
         Bangun prompt morning brief (dipakai path multi-agent & legacy).
         Best practice: role jelas, alur berpikir, guardrail anti-halusinasi,
         format output eksplisit, dan larangan markdown (*).
         """
+        sentiment_section = sentiment_text or "Sentimen pasar tidak tersedia."
         return (
             f"ROLE: Anda adalah analis pasar senior yang menyusun briefing pagi untuk "
             f"trader retail Indonesia yang sibuk.\n\n"
@@ -689,6 +737,8 @@ class MarketBot:
             f"DATA MAKRO:\n{macro_summary}\n\n"
             f"KALENDER EKONOMI:\n{calendar_text}\n\n"
             f"BERITA:\n{news_summary}\n\n"
+            f"SENTIMEN PASAR (skor -1 s/d +1):\n{sentiment_section}\n\n"
+            f"Gunakan skor sentimen sebagai konteks tambahan — jangan dijadikan satu-satunya dasar.\n\n"
             f"FORMAT JAWABAN (tanpa simbol * / markdown):\n"
             f"OUTLOOK:\n[prospek singkat EUR/USD, Gold, dan DXY hari ini — 3-4 kalimat]\n\n"
             f"KATALIS UTAMA:\n[3-4 katalis/level/risiko yang perlu diwaspadai hari ini]\n\n"
@@ -1053,6 +1103,20 @@ JAWABAN:"""
                     query,
                     "❌ Gagal memuat kalender ekonomi. Silakan coba lagi nanti.",
                 )
+
+        elif data == "sentiment":
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id,
+                action="typing",
+            )
+            result = await self.sentiment.analyze("FOREX", use_llm=True)
+            report = strip_markdown_asterisks(self.sentiment.format_report(result, "Pasar Forex"))
+            await safe_edit_message_text(
+                query,
+                report,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
 
         elif data == "help":
             await safe_edit_message_text(

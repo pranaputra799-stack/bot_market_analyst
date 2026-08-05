@@ -78,6 +78,11 @@ class AIFallbackEngine:
             "provider_usage": {p: 0 for p in self.fallback_order},
             "last_error": None,
         }
+        # Kunci thread-safety: _current_system/_current_max_tokens adalah state
+        # instance, dan generate() bisa dipanggil dari beberapa thread sekaligus
+        # (asyncio.to_thread di handlers/sentiment/agents). Tanpa lock, dua request
+        # paralel bisa saling menimpa system prompt.
+        self._gen_lock = threading.Lock()
 
         # Warm up daftar model free OpenRouter di background (non-blocking)
         # agar fallback ke OpenRouter langsung pakai daftar model terbaru.
@@ -123,56 +128,62 @@ class AIFallbackEngine:
                 logger.info("Using cached AI response")
                 return cached
 
-        # Coba provider satu per satu
-        for provider in self.fallback_order:
-            for attempt in range(max_retries):
-                try:
-                    logger.info(f"Trying provider: {provider} (attempt {attempt + 1}/{max_retries})")
+        # Set state + panggil provider dalam satu lock agar request paralel
+        # (dari asyncio.to_thread) tidak saling menimpa system prompt.
+        with self._gen_lock:
+            self._current_system = system_override or self.DEFAULT_SYSTEM
+            self._current_max_tokens = max_tokens
 
-                    config = PROVIDER_CONFIGS.get(provider)
-                    if not config:
-                        logger.warning(f"Provider {provider} not found in config")
-                        continue
+            # Coba provider satu per satu
+            for provider in self.fallback_order:
+                for attempt in range(max_retries):
+                    try:
+                        logger.info(f"Trying provider: {provider} (attempt {attempt + 1}/{max_retries})")
 
-                    key = self.api_keys.get(provider)
-                    if not key:
-                        logger.warning(f"No API key for {provider}")
-                        break  # Skip to next provider
+                        config = PROVIDER_CONFIGS.get(provider)
+                        if not config:
+                            logger.warning(f"Provider {provider} not found in config")
+                            continue
 
-                    response = self._call_provider(provider, prompt)
-                    if response:
-                        self.stats["successful"] += 1
-                        self.stats["provider_usage"][provider] += 1
+                        key = self.api_keys.get(provider)
+                        if not key:
+                            logger.warning(f"No API key for {provider}")
+                            break  # Skip to next provider
 
-                        # Only wrap with via tag if NOT using system_override (internal agent call)
-                        if system_override:
-                            formatted = response
-                        else:
-                            formatted = f"[via {config['name']}] 🤖\n\n{response}"
+                        response = self._call_provider(provider, prompt)
+                        if response:
+                            self.stats["successful"] += 1
+                            self.stats["provider_usage"][provider] += 1
 
-                        # Cache response
-                        if use_cache:
-                            set_cached_ai_response(cache_key, formatted)
+                            # Only wrap with via tag if NOT using system_override (internal agent call)
+                            if system_override:
+                                formatted = response
+                            else:
+                                formatted = f"[via {config['name']}] 🤖\n\n{response}"
 
-                        return formatted
+                            # Cache response
+                            if use_cache:
+                                set_cached_ai_response(cache_key, formatted)
 
-                    # Provider merespon kosong (429 / model error). Jeda exponensial
-                    # sebelum attempt berikutnya agar tidak memperparah rate limit.
-                    if attempt < max_retries - 1:
-                        wait = 2 ** attempt
-                        logger.info(f"{provider} returned empty response, retrying in {wait}s...")
-                        time.sleep(wait)
+                            return formatted
 
-                except Exception as e:
-                    logger.warning(f"{provider} attempt {attempt + 1} failed: {e}")
-                    self.stats["last_error"] = f"{provider}: {e}"
-                    if attempt < max_retries - 1:
-                        wait = 2 ** attempt  # Exponential backoff
-                        logger.info(f"Retrying in {wait}s...")
-                        time.sleep(wait)
+                        # Provider merespon kosong (429 / model error). Jeda exponensial
+                        # sebelum attempt berikutnya agar tidak memperparah rate limit.
+                        if attempt < max_retries - 1:
+                            wait = 2 ** attempt
+                            logger.info(f"{provider} returned empty response, retrying in {wait}s...")
+                            time.sleep(wait)
 
-            # Jika provider ini gagal total, log dan lanjut ke berikutnya
-            logger.info(f"{provider} exhausted, trying next provider...")
+                    except Exception as e:
+                        logger.warning(f"{provider} attempt {attempt + 1} failed: {e}")
+                        self.stats["last_error"] = f"{provider}: {e}"
+                        if attempt < max_retries - 1:
+                            wait = 2 ** attempt  # Exponential backoff
+                            logger.info(f"Retrying in {wait}s...")
+                            time.sleep(wait)
+
+                # Jika provider ini gagal total, log dan lanjut ke berikutnya
+                logger.info(f"{provider} exhausted, trying next provider...")
 
         self.stats["failed"] += 1
         error_msg = (

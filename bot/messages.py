@@ -89,6 +89,7 @@ Cukup kirim pertanyaan tentang pasar keuangan, dan saya akan menjawab dengan dat
 /start - Mulai ulang bot
 /help - Bantuan ini
 /morning - ☀️ Morning Brief harian
+/sentiment - 🧠 Sentimen pasar (contoh: /sentiment eurusd, /sentiment gold)
 /calendar - 📅 Kalender Ekonomi real-time
 /alert - 🔔 Notifikasi event ekonomi otomatis (/alert on)
 /chart - 📈 Grafik harga (contoh: /chart eurusd)
@@ -265,6 +266,8 @@ MORNING_BRIEF_TEMPLATE = """
 🌅 *MORNING BRIEF*
 📍 *{date}*
 
+{sentiment_summary}
+
 {market_summary}
 
 {macro_summary}
@@ -281,7 +284,7 @@ MORNING_BRIEF_TEMPLATE = """
 
 ---
 ⚠️ *Disclaimer:* Analisis edukasi. Bukan rekomendasi trading.
-🤖 *MarketAI Analyst* | /help | /status | /calendar
+🤖 *MarketAI Analyst* | /help | /status | /calendar | /sentiment
 """
 
 

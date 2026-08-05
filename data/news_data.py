@@ -90,6 +90,8 @@ class NewsFetcher:
                     "datetime": datetime.fromtimestamp(
                         item.get("datetime", 0), tz=ZoneInfo(MORNING_BRIEF_TIMEZONE)
                     ).strftime("%Y-%m-%d %H:%M WIB") if item.get("datetime") else "",
+                    # Simpan raw epoch untuk pembobotan kedekatan waktu di sentiment analyzer
+                    "datetime_ts": item.get("datetime", 0),
                     "sentiment": sentiment,
                     "sentiment_label": sentiment_label,
                     "related": item.get("related", ""),
