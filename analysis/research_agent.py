@@ -89,6 +89,7 @@ class ResearchAgent:
         self,
         question: str,
         intent_result: Optional[Any] = None,
+        conversation_history: str = "",
     ) -> ResearchContext:
         """
         Gather market context relevant to the user's question.
@@ -97,6 +98,7 @@ class ResearchAgent:
         Args:
             question: User's question to determine what data is needed
             intent_result: Optional IntentResult for smarter data detection
+            conversation_history: Riwayat percakapan user (untuk follow-up)
 
         Returns:
             ResearchContext with structured market data and analysis
@@ -154,7 +156,7 @@ class ResearchAgent:
         # Use LLM to analyze context and extract structure
         if context.raw_context:
             try:
-                await self._llm_analyze_context(context, question)
+                await self._llm_analyze_context(context, question, conversation_history)
             except Exception as e:
                 logger.warning(f"LLM context analysis failed: {e}")
 
@@ -188,9 +190,18 @@ class ResearchAgent:
             logger.warning(f"Calendar fetch failed: {e}")
             return ""
 
-    async def _llm_analyze_context(self, context: ResearchContext, question: str):
+    async def _llm_analyze_context(
+        self,
+        context: ResearchContext,
+        question: str,
+        conversation_history: str = "",
+    ):
         """Use LLM to extract structured insights from raw context data."""
-        cache_key = f"research_analysis:{safe_hash(question + context.raw_context[:500])}"
+        # Sertakan history dalam cache key agar analisis follow-up tidak
+        # mengambil cache yang dibuat tanpa konteks percakapan.
+        cache_key = (
+            f"research_analysis:{safe_hash(question + context.raw_context[:500] + conversation_history[:200])}"
+        )
         cached = cache.get(cache_key)
         if cached:
             try:
@@ -206,6 +217,7 @@ class ResearchAgent:
         prompt = RESEARCH_ANALYSIS_TEMPLATE.format(
             question=question,
             context_data=format_context_for_prompt(context.raw_context),
+            conversation_history=conversation_history or "Tidak ada percakapan sebelumnya.",
         )
 
         # generate() sinkron (requests) → jalankan di thread agar tidak

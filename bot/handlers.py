@@ -43,6 +43,7 @@ from data.macro_data import MacroDataFetcher
 from data.news_data import NewsFetcher
 from data.cache import cache
 from data.database import db
+from data.conversation_memory import format_history, add_exchange
 from utils.chart_generator import ChartGenerator
 from analysis.director import AnalysisDirector
 from analysis.monitoring import metrics
@@ -821,6 +822,9 @@ class MarketBot:
         user_data["last_message_time"] = time.time()
         self.total_questions += 1
 
+        # Riwayat percakapan user (untuk konteks follow-up)
+        history_text = format_history(user_id)
+
         # Typing indicator
         await context.bot.send_chat_action(
             chat_id=chat_id,
@@ -835,6 +839,9 @@ class MarketBot:
             )
         except Exception:
             progress = None
+
+        # Jawaban inti (tanpa badge/disclaimer) untuk disimpan ke memory
+        core_answer = ""
 
         try:
             if self.analysis_director and ENABLE_MULTI_AGENT:
@@ -852,13 +859,15 @@ class MarketBot:
                     if "error" not in market_data:
                         ohlcv_data = market_data.get("ohlcv", [])
 
-                # Run multi-agent analysis
+                # Run multi-agent analysis (dengan konteks percakapan)
                 result = await self.analysis_director.analyze(
                     question=user_question,
                     market_data_ohlcv=ohlcv_data,
+                    conversation_history=history_text,
                 )
 
                 final_message = result.final_response
+                core_answer = result.final_response
 
                 # Add agent signature if multiple agents were used
                 if len(result.agents_executed) > 1:
@@ -881,7 +890,7 @@ class MarketBot:
             else:
                 # ===== LEGACY: Single-prompt method =====
                 data_context = await self._gather_context(user_question)
-                prompt = self._build_prompt(user_question, data_context)
+                prompt = self._build_prompt(user_question, data_context, history_text)
 
                 answer = await asyncio.to_thread(
                     self.ai.generate,
@@ -890,10 +899,16 @@ class MarketBot:
                     use_cache=True,
                 )
 
+                core_answer = answer
                 final_message = f"{answer}{DISCLAIMER}"
 
             # Hapus simbol '*' (markdown bold) dari jawaban agar tidak tampil mentah
             final_message = strip_markdown_asterisks(final_message)
+
+            # Simpan JAWABAN INTI (tanpa badge multi-agent & disclaimer) ke memory
+            # agar kuota karakter tidak habis oleh boilerplate.
+            if core_answer:
+                add_exchange(user_id, user_question, strip_markdown_asterisks(core_answer))
 
             # Send response — edit pesan progress menjadi jawaban akhir
             if progress is not None:
@@ -1023,7 +1038,7 @@ class MarketBot:
 
         return "\n".join(parts)
 
-    def _build_prompt(self, question: str, context: str) -> str:
+    def _build_prompt(self, question: str, context: str, conversation_history: str = "") -> str:
         """
         Bangun prompt untuk AI dengan data konteks.
         (Legacy method, used when multi-agent is disabled)
@@ -1053,6 +1068,14 @@ class MarketBot:
         elif any(kw in q for kw in ["harga", "price", "berapa", "rate", "kurs", "naik", "turun"]):
             intent_instruction = "Fokus pada harga terkini, perubahan, dan konteks pergerakan."
 
+        history_section = ""
+        if conversation_history:
+            history_section = (
+                f"\n=== PERCAKAPAN SEBELUMNYA (gunakan jika pertanyaan follow-up) ===\n"
+                f"{conversation_history}\n"
+                f"=== AKHIR PERCAKAPAN ===\n"
+            )
+
         return f"""ROLE:
 Anda adalah analis pasar keuangan senior (forex, gold, makroekonomi) yang menjawab trader retail Indonesia. Target pembaca sibuk — utamakan angka, tren, dan implikasi.
 
@@ -1060,7 +1083,7 @@ Waktu saat ini: {current_time}
 
 === DATA PASAR & MAKRO TERKINI (GUNAKAN SEBAGAI REFERENSI) ===
 {context}
-=== AKHIR DATA ===
+=== AKHIR DATA ==={history_section}
 
 PERTANYAAN USER:
 "{question}"

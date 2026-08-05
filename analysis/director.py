@@ -61,6 +61,7 @@ class AnalysisResult:
     agents_executed: List[str] = field(default_factory=list)
     duration_ms: float = 0.0
     error: Optional[str] = None
+    conversation_history: str = ""
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -110,6 +111,7 @@ class AnalysisDirector:
         question: str,
         market_data_ohlcv: Optional[List[Dict]] = None,
         technical_indicators: Optional[Dict] = None,
+        conversation_history: str = "",
     ) -> AnalysisResult:
         """
         Run the full multi-agent analysis pipeline.
@@ -118,6 +120,8 @@ class AnalysisDirector:
             question: User's question to analyze
             market_data_ohlcv: Optional OHLCV data for signal analysis
             technical_indicators: Optional technical indicators
+            conversation_history: Riwayat percakapan user (format_history) untuk
+                konteks follow-up — disuntikkan ke research & synthesis prompt
 
         Returns:
             AnalysisResult with all agent outputs and final response
@@ -130,13 +134,19 @@ class AnalysisDirector:
         logger.info(f"Director: Detected intent={intent} (conf={intent_result.confidence:.0%}, entities={intent_result.detected_entities})")
 
         # Initialize result
-        result = AnalysisResult(question=question, intent=intent)
+        result = AnalysisResult(
+            question=question,
+            intent=intent,
+            conversation_history=conversation_history,
+        )
         metrics_handle = metrics.start_analysis(intent, [])
 
         try:
             # Check cache for identical question
+            # Cache key menyertakan history agar jawaban yang dikontekstualisasi
+            # percakapan user A tidak tersaji ke user lain dengan pertanyaan sama.
             if self.enable_cache:
-                cached_result = self._check_cache(question)
+                cached_result = self._check_cache(question, conversation_history)
                 if cached_result:
                     metrics.record_cache_hit()
                     metrics.complete_analysis(metrics_handle)
@@ -150,6 +160,7 @@ class AnalysisDirector:
             result.research_context = await self.research.gather(
                 question,
                 intent_result=intent_result,  # Pass intent for smarter data gathering
+                conversation_history=conversation_history,  # konteks follow-up
             )
             metrics.record_agent_time("research", (time.time() - research_start) * 1000)
 
@@ -355,6 +366,7 @@ class AnalysisDirector:
                 scenarios_output=scenario_str[:500] if scenario_str else "No scenarios",
                 confidence_output=conf_str,
                 risk_output=risk_str,
+                conversation_history=result.conversation_history,
             )
 
             response = await asyncio.to_thread(self.ai.generate, synthesis_prompt, use_cache=False)
@@ -424,9 +436,9 @@ class AnalysisDirector:
             f"⚠️ *Disclaimer:* Analisis edukasi. Bukan saran trading."
         )
 
-    def _check_cache(self, question: str) -> Optional[AnalysisResult]:
+    def _check_cache(self, question: str, conversation_history: str = "") -> Optional[AnalysisResult]:
         """Check if we have a cached result for similar question."""
-        cache_key = f"analysis:{safe_hash(question)}"
+        cache_key = f"analysis:{safe_hash(question + conversation_history[:200])}"
         cached = cache.get(cache_key)
         if cached:
             try:
@@ -446,7 +458,7 @@ class AnalysisDirector:
 
     def _cache_result(self, question: str, result: AnalysisResult):
         """Cache the analysis result."""
-        cache_key = f"analysis:{safe_hash(question)}"
+        cache_key = f"analysis:{safe_hash(question + result.conversation_history[:200])}"
         try:
             cache.set(cache_key, {
                 "intent": result.intent,

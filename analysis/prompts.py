@@ -112,6 +112,10 @@ QUESTION: {question}
 DATA KONTEKS:
 {context_data}
 
+KONTEKS PERCAKAPAN SEBELUMNYA (bisa membantu memahami pertanyaan follow-up;
+abaikan jika tidak relevan):
+{conversation_history}
+
 PANDUAN MEMBACA DATA KALENDER EKONOMI (jika bagian CALENDAR ada):
 Setiap event punya 3 nilai yang MAKNA-NYA BERBEDA:
 - Forecast: ekspektasi/konsensus pasar sebelum rilis (angka yang DIHARAPKAN).
@@ -469,6 +473,9 @@ well-structured response.
 
 USER QUESTION: {question}
 
+=== CONVERSATION HISTORY (percakapan sebelumnya) ===
+{conversation_history}
+
 === RESEARCH AGENT ===
 {research_output}
 
@@ -506,6 +513,9 @@ INSTRUCTIONS:
 6. Gunakan emoji secukupnya, poin (•/-) untuk daftar.
 7. Maksimal 600 kata.
 8. Bahasa Indonesia yang santai namun profesional.
+9. Jika pertanyaan merujuk percakapan sebelumnya (mis. "yang tadi", "kalau begitu",
+   "level support-nya di mana?"), gunakan CONVERSATION HISTORY sebagai konteks.
+   Jika tidak relevan, abaikan bagian itu.
 
 ANTI-HALLUCINATION (WAJIB):
 - JANGAN mengarang harga, tanggal, jam, atau event ekonomi yang tidak ada di data.
@@ -554,10 +564,12 @@ def build_analysis_prompt(
     scenarios_output: str = "",
     confidence_output: str = "",
     risk_output: str = "",
+    conversation_history: str = "",
 ) -> str:
     """Build the final synthesis prompt for the Director."""
     return FINAL_SYNTHESIS_TEMPLATE.format(
         question=question,
+        conversation_history=conversation_history or "Tidak ada percakapan sebelumnya.",
         research_output=research_output or "Not analyzed",
         signal_output=signal_output or "Not analyzed",
         thesis_output=thesis_output or "Not analyzed",
