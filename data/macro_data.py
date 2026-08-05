@@ -654,28 +654,34 @@ class MacroDataFetcher:
                 evt = event.get("event", "")
                 lines.append(f"{imp} {country} *{evt}*")
 
-                # Baris 2: Waktu
+                # Baris 2: Waktu + status (sudah rilis / belum)
                 evt_time = event.get("time", "")
                 if evt_time:
                     lines.append(f"   🕐 _{evt_time}_")
 
-                # Baris 3: Forecast vs Previous
+                # Baris 3: Forecast vs Previous (label konsisten: Forecast/Previous)
                 estimate = event.get("estimate")
                 prev = event.get("prev")
                 unit = event.get("unit", "")
 
                 parts = []
                 if estimate is not None and estimate != "":
-                    parts.append(f"📊 Konsensus: {estimate}{unit}")
+                    parts.append(f"📊 Forecast: {estimate}{unit}")
                 if prev is not None and prev != "":
-                    parts.append(f"📉 Sebelumnya: {prev}{unit}")
+                    parts.append(f"📉 Previous: {prev}{unit}")
                 if parts:
                     lines.append(f"   {' | '.join(parts)}")
 
-                # Baris 4: Actual value (jika sudah rilis)
+                # Baris 4: Actual (jika sudah rilis) + indikator status waktu
                 actual = event.get("actual")
-                if actual is not None and actual != "":
-                    lines.append(f"   ✅ Aktual: *{actual}{unit}*")
+                released = self._is_event_released(event)
+                if released:
+                    if actual is not None and actual != "":
+                        lines.append(f"   ✅ Sudah rilis — Actual: *{actual}{unit}*")
+                    else:
+                        lines.append("   ✅ Sudah rilis (nilai aktual belum tersedia)")
+                else:
+                    lines.append("   ⏳ Belum rilis")
 
                 lines.append("")
                 shown += 1
@@ -686,6 +692,21 @@ class MacroDataFetcher:
             lines.append("✅ Tidak ada rilis data high-impact terjadwal dalam periode ini.\n")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _is_event_released(event: Dict) -> bool:
+        """
+        Cek apakah event sudah lewat waktu rilisnya (berdasarkan _dt_utc WIB-aware).
+        Jika _dt_utc tidak ada, fallback: ada nilai actual berarti sudah rilis.
+        """
+        dt_utc = event.get("_dt_utc")
+        if dt_utc is not None:
+            try:
+                return dt_utc <= datetime.now(timezone.utc)
+            except TypeError:
+                pass
+        actual = event.get("actual")
+        return actual is not None and actual != ""
 
     async def get_economic_calendar(
         self,

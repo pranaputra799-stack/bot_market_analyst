@@ -112,6 +112,18 @@ QUESTION: {question}
 DATA KONTEKS:
 {context_data}
 
+PANDUAN MEMBACA DATA KALENDER EKONOMI (jika bagian CALENDAR ada):
+Setiap event punya 3 nilai yang MAKNA-NYA BERBEDA:
+- Forecast: ekspektasi/konsensus pasar sebelum rilis (angka yang DIHARAPKAN).
+- Previous: nilai rilis sebelumnya (acuan perbandingan).
+- Actual: nilai yang BENAR-BENAR sudah dirilis (HANYA ada jika event sudah lewat dan
+  ditandai "Sudah rilis — Actual: ..." di data; event lewat tanpa nilai memakai tanda
+  "Sudah rilis (nilai aktual belum tersedia)"; event mendatang ditandai "Belum rilis"
+  dan TIDAK punya Actual).
+Gunakan ketiganya untuk menilai "surprise": Actual vs Forecast yang meleset jauh
+(mis. Actual 2.1% vs Forecast 3.0%) adalah katalis kuat; Actual yang sesuai ekspektasi
+umumnya sudah "harga-in" oleh pasar.
+
 Berikan analisis dalam JSON yang VALID dan LENGKAP (tanpa teks lain di luar JSON),
 sesuai skema berikut:
 {{
@@ -127,6 +139,7 @@ sesuai skema berikut:
 
 ATURAN:
 - JANGAN mengarang angka/harga yang tidak ada di data di atas.
+- Jangan menyebut event belum rilis sebagai "sudah rilis" dan sebaliknya — ikuti status di data.
 - Jika data kosong, isi field dengan null (bukan teks karangan).
 - Jangan pakai simbol * atau **.
 - Jawab dalam Bahasa Indonesia.
@@ -429,13 +442,14 @@ Output JSON yang VALID, sesuai skema:
             "event": "string — nama event/data (HANYA yang ada di data kalender)",
             "date": "string — tanggal dari data, atau \"Tidak tersedia\" jika tidak ada",
             "impact": "string — high|medium|low",
-            "what_it_means": "string — dampak potensial"
+            "what_it_means": "string — dampak potensial (bandingkan Actual vs Forecast vs Previous bila tersedia; event belum rilis = ekspektasi pasar)"
         }}
     ],
     "summary": "string — ringkasan risiko 2 kalimat"
 }}
 
 RULES:
+- Pahami makna nilai kalender: Actual = nilai yang sudah rilis, Forecast = konsensus pasar, Previous = nilai sebelumnya. "Surprise" besar (Actual vs Forecast) = risiko/katalis tinggi.
 - JANGAN menebak event/tanggal yang tidak ada di data. Jika kalender kosong, isi "catalyst_calendar": [].
 - Jangan pakai simbol * atau **.
 - ⚠️ INGAT: Ini analisis EDUKASI, bukan saran trading.
