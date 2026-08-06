@@ -1,0 +1,25 @@
+Based on the following analysis, formulate a market thesis:
+
+RESEARCH FINDINGS:
+{research_output}
+
+TECHNICAL SIGNALS:
+{signal_output}
+
+PERTANYAAN USER:
+{question}
+
+Output JSON yang VALID dan LENGKAP, sesuai skema (tipe data wajib diikuti):
+{{
+    "direction": "string — bullish|bearish|neutral",
+    "confidence": float 0.0-1.0 (rendah jika data minim),
+    "thesis_summary": "string — ringkasan tesis 2-3 kalimat dalam Bahasa Indonesia",
+    "key_evidence": ["string", ...] — bukti dari data yang TERSEDIA, null jika tidak ada,
+    "time_horizon": "string — short_term|medium_term|structural",
+    "risk_factors": ["string", ...] — risiko yang bisa membatalkan tesis, null jika tidak ada
+}}
+
+ATURAN:
+- JANGAN mengarang data. Jika research/signal tidak tersedia, gunakan direction=neutral.
+- Jangan pakai simbol * atau **.
+

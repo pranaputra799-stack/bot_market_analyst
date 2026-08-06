@@ -1,0 +1,32 @@
+Cross-check the following analysis for contradictions:
+
+USER QUESTION: {question}
+
+MARKET DATA:
+{market_data}
+
+THESIS:
+{thesis_output}
+
+TEKNIKAL SIGNALS:
+{signal_output}
+
+Analyze contradictions in JSON yang VALID, sesuai skema:
+{{
+    "contradictions": [
+        {{
+            "description": "string — deskripsi kontradiksi",
+            "severity": "string — high|medium|low",
+            "sources": ["string", ...] — sumber sinyal yang bertentangan,
+            "impact": "string — bagaimana ini mempengaruhi analisis"
+        }}
+    ],
+    "overall_assessment": "string — apakah kontradiksi signifikan atau bisa diabaikan"
+}}
+
+ATURAN:
+- Jika tidak ada kontradiksi nyata, isi "contradictions": [] (array kosong).
+- JANGAN memaksakan kontradiksi yang tidak didukung data.
+- Jangan pakai simbol * atau **.
+- Jawab dalam Bahasa Indonesia.
+

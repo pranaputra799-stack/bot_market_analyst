@@ -1,12 +1,27 @@
 """
 Prompt Loader — single source of truth untuk semua template prompt bot.
 
-Seluruh template prompt analisis tinggal di folder `prompts/` sebagai file .txt:
+Seluruh template prompt bot tinggal di folder `prompts/` sebagai file .txt:
 
-    prompts/market_analysis.txt      → analisis pasar/teknikal (path legacy)
-    prompts/technical_analysis.txt   → analisis korelasi antar instrumen
-    prompts/macro_explanation.txt    → penjelasan data makroekonomi
-    prompts/morning_brief.txt        → morning brief harian
+    market_analysis.txt               → analisis pasar/teknikal (path legacy)
+    technical_analysis.txt            → analisis korelasi antar instrumen
+    macro_explanation.txt             → penjelasan data makroekonomi
+    morning_brief.txt                 → morning brief harian
+    director_system.txt               → orchestrator multi-agent (Director)
+    research_system.txt               → agent Research (system prompt)
+    research_analysis_template.txt    → agent Research (prompt analisis)
+    signals_system.txt                → agent Signals (system prompt)
+    thesis_system.txt                 → agent Thesis (system prompt)
+    thesis_formulation_template.txt   → agent Thesis (prompt formulasi)
+    contradiction_system.txt          → agent Contradiction (system prompt)
+    contradiction_template.txt        → agent Contradiction (prompt analisis)
+    scenarios_system.txt              → agent Scenarios (system prompt)
+    scenarios_template.txt            → agent Scenarios (prompt skenario)
+    confidence_system.txt             → agent Confidence (system prompt)
+    confidence_template.txt           → agent Confidence (prompt skor)
+    risk_system.txt                   → agent Risk Gates (system prompt)
+    risk_template.txt                 → agent Risk Gates (prompt asesmen)
+    final_synthesis_template.txt      → sintesis jawaban akhir multi-agent
 
 Edit file .txt → perilaku bot berubah TANPA mengubah kode (edit-and-restart,
 atau panggil reload_prompts() di runtime).
@@ -27,6 +42,8 @@ import logging
 import threading
 from pathlib import Path
 from typing import Dict, List
+
+from prompts._agent_defaults import AGENT_DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -223,13 +240,12 @@ Gunakan emoji secukupnya agar mudah dibaca. Jawab dalam Bahasa Indonesia.
 JANGAN gunakan simbol * atau **.""",
 }
 
+# Fallback prompt agent multi-agent — sumber: file prompts/*.txt, salinan di
+# prompts/_agent_defaults.py (dijaga sinkron oleh test_defaults_in_sync_with_files).
+DEFAULT_PROMPTS.update(AGENT_DEFAULTS)
+
 # Template yang didukung (nama → nama file .txt)
-PROMPT_NAMES: List[str] = [
-    "market_analysis",
-    "technical_analysis",
-    "macro_explanation",
-    "morning_brief",
-]
+PROMPT_NAMES: List[str] = list(DEFAULT_PROMPTS.keys())
 
 _cache: Dict[str, str] = {}
 _cache_lock = threading.Lock()

@@ -1,5 +1,6 @@
 """Unit tests untuk prompts/loader.py (single source of truth prompt) + wiring ke handlers."""
 
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -116,6 +117,74 @@ class TestPromptLoader(unittest.TestCase):
                 loader.DEFAULT_PROMPTS[name].strip(),
                 f"DEFAULT_PROMPTS[{name}] tidak sinkron dengan {name}.txt",
             )
+
+
+# Semua placeholder yang dipakai template agent multi-agent
+AGENT_KWARGS = dict(
+    question="q", context_data="d", conversation_history="h",
+    research_output="r", signal_output="s", indicators_output="i",
+    thesis_output="t", contradiction_output="c", scenarios_output="sc",
+    confidence_output="cf", risk_output="rk", market_data="m",
+    NO_MARKDOWN_RULE="NO",
+)
+
+AGENT_NAMES = [
+    "director_system", "research_system", "research_analysis_template",
+    "signals_system", "thesis_system", "thesis_formulation_template",
+    "contradiction_system", "contradiction_template", "scenarios_system",
+    "scenarios_template", "confidence_system", "confidence_template",
+    "risk_system", "risk_template", "final_synthesis_template",
+]
+
+
+# Placeholder {identifier} yang belum terisi (kurung kurawal JSON skema TIDAK
+# dihitung — itu bagian dari contoh output, bukan placeholder).
+_UNFILLED = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
+
+
+class TestAgentPrompts(unittest.TestCase):
+    """Template agent multi-agent (dipindah ke prompts/*.txt) tetap berfungsi."""
+
+    def test_agent_prompts_render_all_placeholders_filled(self):
+        for name in AGENT_NAMES:
+            prompt = format_prompt(name, **AGENT_KWARGS)
+            self.assertGreater(len(prompt), 100, f"{name} terlalu pendek")
+            self.assertIsNone(
+                _UNFILLED.search(prompt), f"placeholder belum terisi: {name}"
+            )
+
+    def test_agent_system_prompts_have_timestamp_suffix(self):
+        # system prompt agent diformat dengan NO_MARKDOWN_RULE + timestamp saat import
+        from analysis.prompts import (
+            DIRECTOR_SYSTEM, RESEARCH_SYSTEM, THESIS_SYSTEM,
+        )
+        for sp in (DIRECTOR_SYSTEM, RESEARCH_SYSTEM, THESIS_SYSTEM):
+            self.assertIn("Current date and time:", sp)
+            self.assertNotIn("{NO_MARKDOWN_RULE}", sp)  # placeholder sudah diformat
+
+    def test_agent_templates_format_at_call_site(self):
+        # Template (bukan system prompt) tetap bisa di-.format seperti sebelum refactor
+        from analysis.prompts import RESEARCH_ANALYSIS_TEMPLATE, FINAL_SYNTHESIS_TEMPLATE
+
+        p = RESEARCH_ANALYSIS_TEMPLATE.format(
+            question="level support-nya di mana?",
+            context_data="Data pasar",
+            conversation_history="User: analisis EUR/USD",
+        )
+        self.assertIn("KONTEKS PERCAKAPAN SEBELUMNYA", p)
+        self.assertIn("EUR/USD", p)
+        self.assertIn('"price_context"', p)  # skema JSON tetap utuh ({{ }} → { })
+        self.assertNotIn("{question}", p)
+        self.assertNotIn("{context_data}", p)
+
+        f = FINAL_SYNTHESIS_TEMPLATE.format(
+            question="q", conversation_history="h", research_output="r",
+            signal_output="s", indicators_output="i", thesis_output="t",
+            contradiction_output="c", scenarios_output="sc",
+            confidence_output="cf", risk_output="rk", NO_MARKDOWN_RULE="NO",
+        )
+        self.assertNotIn("{question}", f)
+        self.assertNotIn("{NO_MARKDOWN_RULE}", f)
 
 
 class TestPromptWiring(unittest.TestCase):

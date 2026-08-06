@@ -57,7 +57,8 @@ tests/                   → Unit tests (unittest / pytest-compatible)
 
 ## 📝 Prompts — Single Source of Truth
 
-Semua template prompt analisis disimpan sebagai file `.txt` di folder `prompts/`:
+Semua template prompt bot disimpan sebagai file `.txt` di folder `prompts/` — termasuk
+prompt agent multi-agent (sebelumnya inline di `analysis/prompts.py`):
 
 | File | Dipakai untuk |
 |---|---|
@@ -65,12 +66,22 @@ Semua template prompt analisis disimpan sebagai file `.txt` di folder `prompts/`
 | `technical_analysis.txt` | Analisis korelasi antar instrumen (DXY vs Gold vs FX) |
 | `macro_explanation.txt` | Penjelasan data makroekonomi (CPI, NFP, Fed, GDP, dll) |
 | `morning_brief.txt` | Morning brief harian |
+| `director_system.txt` | Orchestrator pipeline multi-agent (Director) |
+| `research_system.txt` / `research_analysis_template.txt` | Agent Research |
+| `signals_system.txt` | Agent Signals |
+| `thesis_system.txt` / `thesis_formulation_template.txt` | Agent Thesis |
+| `contradiction_system.txt` / `contradiction_template.txt` | Agent Contradiction |
+| `scenarios_system.txt` / `scenarios_template.txt` | Agent Scenarios |
+| `confidence_system.txt` / `confidence_template.txt` | Agent Confidence |
+| `risk_system.txt` / `risk_template.txt` | Agent Risk Gates |
+| `final_synthesis_template.txt` | Sintesis jawaban akhir multi-agent |
 
 **Edit file `.txt` → perilaku bot berubah tanpa mengubah kode** (restart bot, atau
 panggil `prompts.loader.reload_prompts()` di runtime untuk dev hot-reload).
 Placeholder `{NAMA}` diisi otomatis oleh `prompts/loader.py`; jika sebuah file
 hilang/tidak terbaca, bot otomatis memakai template bawaan sebagai fallback
-sehingga tetap berjalan normal.
+sehingga tetap berjalan normal. Catatan: template agent memakai kurung kurawal
+ganda (`{{ }}`) untuk contoh skema JSON — biarkan apa adanya saat mengedit.
 
 ## 🚀 Setup Lokal
 

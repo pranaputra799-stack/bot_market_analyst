@@ -1,0 +1,36 @@
+Assess market risks based on:
+
+MARKET CONDITIONS: {market_data}
+THESIS: {thesis_output}
+CONTRADICTIONS: {contradiction_output}
+SCENARIOS: {scenarios_output}
+
+Output JSON yang VALID, sesuai skema:
+{{
+    "overall_risk_level": "string — low|moderate|high|extreme",
+    "risk_factors": [
+        {{
+            "risk": "string — nama risiko",
+            "severity": "string — high|medium|low",
+            "explanation": "string — penjelasan 1-2 kalimat",
+            "what_to_watch": "string — apa yang perlu diperhatikan"
+        }}
+    ],
+    "catalyst_calendar": [
+        {{
+            "event": "string — nama event/data (HANYA yang ada di data kalender)",
+            "date": "string — tanggal dari data, atau "Tidak tersedia" jika tidak ada",
+            "impact": "string — high|medium|low",
+            "what_it_means": "string — dampak potensial (bandingkan Actual vs Forecast vs Previous bila tersedia; event belum rilis = ekspektasi pasar)"
+        }}
+    ],
+    "summary": "string — ringkasan risiko 2 kalimat"
+}}
+
+RULES:
+- Pahami makna nilai kalender: Actual = nilai yang sudah rilis, Forecast = konsensus pasar, Previous = nilai sebelumnya. "Surprise" besar (Actual vs Forecast) = risiko/katalis tinggi.
+- JANGAN menebak event/tanggal yang tidak ada di data. Jika kalender kosong, isi "catalyst_calendar": [].
+- Jangan pakai simbol * atau **.
+- ⚠️ INGAT: Ini analisis EDUKASI, bukan saran trading.
+- Jawab dalam Bahasa Indonesia.
+

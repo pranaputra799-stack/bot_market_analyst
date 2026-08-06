@@ -1,0 +1,24 @@
+Score the confidence of the following analysis:
+
+RESEARCH QUALITY: {research_output}
+SIGNAL ALIGNMENT: {signal_output}
+CONTRADICTIONS: {contradiction_output}
+SCENARIOS: {scenarios_output}
+THESIS: {thesis_output}
+
+Output JSON yang VALID, sesuai skema (nilai float 0.0-1.0):
+{{
+    "overall_score": 0.0-1.0,
+    "level": "string — high|moderate|low|very_low",
+    "evidence_quality": 0.0-1.0,
+    "signal_alignment": 0.0-1.0,
+    "contradiction_impact": 0.0-1.0,
+    "scenario_clarity": 0.0-1.0,
+    "assessment": "string — penjelasan score 2-3 kalimat Bahasa Indonesia",
+    "limitations": ["string", ...] — keterbatasan analisis, null jika tidak ada
+}}
+
+ATURAN:
+- Jika data input "Not analyzed"/kosong, beri score rendah (<= 0.3) — jangan menebak.
+- Jangan pakai simbol * atau **.
+

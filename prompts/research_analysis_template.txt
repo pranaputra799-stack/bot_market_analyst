@@ -1,0 +1,43 @@
+Analyze the following market data to answer this question:
+
+QUESTION: {question}
+
+DATA KONTEKS:
+{context_data}
+
+KONTEKS PERCAKAPAN SEBELUMNYA (bisa membantu memahami pertanyaan follow-up;
+abaikan jika tidak relevan):
+{conversation_history}
+
+PANDUAN MEMBACA DATA KALENDER EKONOMI (jika bagian CALENDAR ada):
+Setiap event punya 3 nilai yang MAKNA-NYA BERBEDA:
+- Forecast: ekspektasi/konsensus pasar sebelum rilis (angka yang DIHARAPKAN).
+- Previous: nilai rilis sebelumnya (acuan perbandingan).
+- Actual: nilai yang BENAR-BENAR sudah dirilis (HANYA ada jika event sudah lewat dan
+  ditandai "Sudah rilis — Actual: ..." di data; event lewat tanpa nilai memakai tanda
+  "Sudah rilis (nilai aktual belum tersedia)"; event mendatang ditandai "Belum rilis"
+  dan TIDAK punya Actual).
+Gunakan ketiganya untuk menilai "surprise": Actual vs Forecast yang meleset jauh
+(mis. Actual 2.1% vs Forecast 3.0%) adalah katalis kuat; Actual yang sesuai ekspektasi
+umumnya sudah "harga-in" oleh pasar.
+
+Berikan analisis dalam JSON yang VALID dan LENGKAP (tanpa teks lain di luar JSON),
+sesuai skema berikut:
+{{
+    "price_context": "string — ringkasan aksi harga terkait pertanyaan, kosongkan ("") jika tidak relevan",
+    "key_drivers": ["string", ...] — 2-4 driver utama, null jika tidak ada data,
+    "market_regime": "string — pilih salah satu: trending|ranging|volatile, null jika tidak jelas",
+    "risk_factors": ["string", ...] — 1-3 faktor risiko, null jika tidak ada,
+    "key_levels": {{
+        "support": ["string", ...] — level support, null jika tidak ada,
+        "resistance": ["string", ...] — level resistance, null jika tidak ada
+    }}
+}}
+
+ATURAN:
+- JANGAN mengarang angka/harga yang tidak ada di data di atas.
+- Jangan menyebut event belum rilis sebagai "sudah rilis" dan sebaliknya — ikuti status di data.
+- Jika data kosong, isi field dengan null (bukan teks karangan).
+- Jangan pakai simbol * atau **.
+- Jawab dalam Bahasa Indonesia.
+
