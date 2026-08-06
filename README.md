@@ -83,6 +83,20 @@ hilang/tidak terbaca, bot otomatis memakai template bawaan sebagai fallback
 sehingga tetap berjalan normal. Catatan: template agent memakai kurung kurawal
 ganda (`{{ }}`) untuk contoh skema JSON — biarkan apa adanya saat mengedit.
 
+### Preview prompt (dev CLI)
+
+```bash
+cd app/bot-telegram
+python -m prompts.loader --list                        # daftar semua template
+python -m prompts.loader --show market_analysis       # template mentah (raw)
+python -m prompts.loader --show market_analysis --sample   # terisi data contoh
+python -m prompts.loader --show morning_brief --sample --data DATE="Kamis, 07 Agu"
+```
+
+`--sample` merender template dengan data contoh (`prompts.loader.SAMPLE_DATA`),
+`--data KEY=VALUE` menimpa placeholder tertentu (bisa diulang). Untuk system
+prompt agent, preview sama persis dengan output produksi (termasuk timestamp).
+
 ## 🚀 Setup Lokal
 
 ```bash

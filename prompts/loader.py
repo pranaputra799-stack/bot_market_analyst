@@ -1,6 +1,12 @@
 """
 Prompt Loader — single source of truth untuk semua template prompt bot.
 
+Dev CLI untuk preview prompt:
+    python -m prompts.loader --list
+    python -m prompts.loader --show market_analysis
+    python -m prompts.loader --show market_analysis --sample
+    python -m prompts.loader --show morning_brief --sample --data DATE="Kamis, 07 Agu 2026"
+
 Seluruh template prompt bot tinggal di folder `prompts/` sebagai file .txt:
 
     market_analysis.txt               → analisis pasar/teknikal (path legacy)
@@ -38,10 +44,11 @@ Jika file .txt hilang / tidak terbaca, dipakai DEFAULT_PROMPTS sebagai fallback
 darurat (kontennya identik dengan file .txt) agar bot tetap berjalan.
 """
 
+import argparse
 import logging
 import threading
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from prompts._agent_defaults import AGENT_DEFAULTS
 
@@ -318,3 +325,182 @@ def reload_prompts() -> None:
 def prompt_names() -> List[str]:
     """Nama-nama template prompt yang didukung."""
     return list(PROMPT_NAMES)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEV CLI — preview template prompt (bantu editing prompt)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# System prompt agent diproses saat import analysis.prompts (with_timestamp +
+# NO_MARKDOWN_RULE) — preview memakai konstanta produksi agar sama persis.
+_AGENT_SYSTEM_PROMPTS = {
+    "director_system": "DIRECTOR_SYSTEM",
+    "research_system": "RESEARCH_SYSTEM",
+    "signals_system": "SIGNALS_SYSTEM",
+    "thesis_system": "THESIS_SYSTEM",
+    "contradiction_system": "CONTRADICTION_SYSTEM",
+    "scenarios_system": "SCENARIOS_SYSTEM",
+    "confidence_system": "CONFIDENCE_SYSTEM",
+    "risk_system": "RISK_SYSTEM",
+}
+
+_PROMPT_DESCRIPTIONS = {
+    "market_analysis": "Analisis pasar/teknikal (path legacy)",
+    "technical_analysis": "Analisis korelasi antar instrumen (DXY vs Gold vs FX)",
+    "macro_explanation": "Penjelasan data makroekonomi (CPI, NFP, Fed, GDP)",
+    "morning_brief": "Morning brief harian",
+    "director_system": "Orchestrator pipeline multi-agent (system prompt)",
+    "research_system": "Agent Research — system prompt",
+    "research_analysis_template": "Agent Research — prompt analisis konteks (JSON)",
+    "signals_system": "Agent Signals — system prompt",
+    "thesis_system": "Agent Thesis — system prompt",
+    "thesis_formulation_template": "Agent Thesis — prompt formulasi tesis (JSON)",
+    "contradiction_system": "Agent Contradiction — system prompt",
+    "contradiction_template": "Agent Contradiction — prompt deteksi konflik (JSON)",
+    "scenarios_system": "Agent Scenarios — system prompt",
+    "scenarios_template": "Agent Scenarios — prompt skenario (JSON)",
+    "confidence_system": "Agent Confidence — system prompt",
+    "confidence_template": "Agent Confidence — prompt skor keyakinan (JSON)",
+    "risk_system": "Agent Risk Gates — system prompt",
+    "risk_template": "Agent Risk Gates — prompt asesmen risiko (JSON)",
+    "final_synthesis_template": "Sintesis jawaban akhir multi-agent",
+}
+
+# Data contoh untuk semua placeholder di seluruh template (user-facing + agent).
+SAMPLE_DATA: Dict[str, str] = {
+    # ── user-facing ──
+    "QUESTION": "Analisis teknikal EUR/USD hari ini?",
+    "USER_QUESTION": "Analisis teknikal EUR/USD hari ini?",
+    "CONTEXT": (
+        "📊 DATA EUR/USD:\n"
+        "• Harga: 1.0850 (+0.12%)\n"
+        "• High 52w: 1.1275 | Low 52w: 1.0450\n"
+        "📈 RSI(14): 58.3 (netral)\n"
+        "• MACD: positif, di atas signal line"
+    ),
+    "CONVERSATION_HISTORY": (
+        "\n=== PERCAKAPAN SEBELUMNYA (gunakan jika pertanyaan follow-up) ===\n"
+        'User: "analisis teknikal EUR/USD"\n'
+        "Bot: bias bullish, support 1.0800\n"
+        "=== AKHIR PERCAKAPAN ===\n"
+    ),
+    "CURRENT_TIME": "2026-08-06 09:30 WIB",
+    "INTENT_INSTRUCTION": "Fokus pada analisis teknikal: level support/resistance, indikator, dan trend.",
+    "INSTRUMENT": "EUR/USD",
+    "INSTRUMENTS": "EUR/USD, XAU/USD, DXY",
+    "DATE": "Kamis, 06 Agustus 2026",
+    "market_data": "📊 EUR/USD 1.0850 (+0.12%) | Gold 2.350 (-0.3%) | DXY 104.2 (+0.1%)",
+    "macro_data": "🏛️ CPI YoY 3.2% | Fed Funds Rate 4.25% | Unemployment 3.9%",
+    "calendar_data": "📅 NFP — 15:30 WIB (Forecast 180K, Previous 165K) — Belum rilis",
+    "news_data": "📰 Dolar melemah setelah data inflasi AS melandai.",
+    "sentiment_data": "+0.35 (bullish moderat)",
+    # ── agent ──
+    "question": "level support-nya di mana?",
+    "context_data": "Data pasar: EUR/USD 1.0850, Gold 2.350, DXY 104.2",
+    "conversation_history": 'User: "analisis teknikal EUR/USD"\nBot: level support 1.0800, resistance 1.0950',
+    "research_output": "Pasar menguat; RSI netral; berita mendukung EUR.",
+    "signal_output": "Signal: bullish (confidence: 65%) — EMA20 > EMA50",
+    "indicators_output": "RSI 58.3 | MACD positif | Pivot 1.0835 | R1 1.0870 S1 1.0800",
+    "thesis_output": "direction: bullish, confidence: 0.65 — support 1.0800, target 1.1000",
+    "contradiction_output": "[medium] Harga naik tapi volume menurun",
+    "scenarios_output": "Bull Case: 40% | Bear Case: 25% | Base Case: 35%",
+    "confidence_output": "Level: MODERATE (62%) — data cukup konsisten",
+    "risk_output": "Level: MODERATE — event NFP Jumat berisiko high impact",
+    "NO_MARKDOWN_RULE": (
+        "FORMAT OUTPUT: JANGAN gunakan simbol markdown (*, **, _, #) pada jawaban. "
+        "Gunakan emoji, angka, bullet (•/-), dan baris baru untuk struktur. "
+        "Jawab dalam Bahasa Indonesia yang santai namun profesional."
+    ),
+}
+
+
+def render_preview(name: str, data: Optional[Dict[str, str]] = None) -> str:
+    """
+    Render preview sebuah prompt untuk keperluan editing.
+
+    - System prompt agent (tanpa override) → output persis produksi
+      (timestamp + NO_MARKDOWN_RULE sudah diproses saat import).
+    - Template lain → diisi SAMPLE_DATA (+ override `data`).
+    """
+    if name not in PROMPT_NAMES:
+        raise ValueError(f"Template '{name}' tidak dikenal.")
+    # Catatan: untuk system prompt agent, preview hanya identik dgn produksi
+    # bila TANPA override (--data) — dengan override, template mentah dirender
+    # via format_prompt (tanpa timestamp).
+    if data:
+        merged = {**SAMPLE_DATA, **data}
+        return format_prompt(name, **merged)
+    if name in _AGENT_SYSTEM_PROMPTS:
+        try:
+            import analysis.prompts as _analysis_prompts
+
+            return getattr(_analysis_prompts, _AGENT_SYSTEM_PROMPTS[name])
+        except (ImportError, AttributeError) as e:  # pragma: no cover
+            logger.warning("Gagal memuat system prompt produksi '%s': %s", name, e)
+    return format_prompt(name, **SAMPLE_DATA)
+
+
+def cli(argv: Optional[List[str]] = None) -> str:
+    """
+    CLI dev untuk preview prompt. Mengembalikan teks yang dicetak ke stdout.
+
+    Contoh:
+        python -m prompts.loader --list
+        python -m prompts.loader --show market_analysis
+        python -m prompts.loader --show market_analysis --sample
+        python -m prompts.loader --show morning_brief --sample --data DATE="Kamis, 07 Agu"
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m prompts.loader",
+        description="Preview template prompt (single source of truth di prompts/*.txt).",
+        add_help=True,
+    )
+    parser.add_argument("--show", metavar="NAME", help="Tampilkan template prompt bernama NAME")
+    parser.add_argument("--sample", action="store_true", help="Render dengan data contoh (placeholder terisi)")
+    parser.add_argument("--data", action="append", default=[], metavar="KEY=VALUE",
+                        help="Override nilai placeholder (bisa diulang)")
+    parser.add_argument("--list", action="store_true", help="Daftar semua template prompt")
+    args = parser.parse_args(argv)
+
+    if args.list:
+        lines = ["Template prompt yang tersedia (prompts/*.txt):"]
+        for name in prompt_names():
+            desc = _PROMPT_DESCRIPTIONS.get(name, "")
+            lines.append(f"  {name:36s} {desc}")
+        lines.append("")
+        lines.append("Contoh: python -m prompts.loader --show market_analysis --sample")
+        return "\n".join(lines)
+
+    if not args.show:
+        return (
+            "Gunakan: python -m prompts.loader --show <nama> [--sample] [--data KEY=VALUE]\n"
+            "         python -m prompts.loader --list\n"
+            "Jalankan '--list' untuk melihat semua template yang tersedia."
+        )
+
+    if args.show not in PROMPT_NAMES:
+        valid = ", ".join(prompt_names())
+        raise SystemExit(f"Template '{args.show}' tidak dikenal. Yang tersedia: {valid}")
+
+    data: Dict[str, str] = {}
+    for kv in args.data:
+        if "=" not in kv:
+            raise SystemExit(f"--data '{kv}' tidak valid — format: --data KEY=VALUE")
+        key, _, value = kv.partition("=")
+        data[key.strip()] = value
+
+    if args.sample or data:
+        return render_preview(args.show, data)
+    return load_prompt(args.show)
+
+
+if __name__ == "__main__":
+    # Windows console memakai cp1252 secara default — emoji/UTF-8 di prompt
+    # tidak bisa di-encode. Paksa UTF-8 agar preview tetap tampil penuh.
+    import sys as _sys
+
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    print(cli())

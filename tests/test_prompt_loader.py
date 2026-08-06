@@ -187,6 +187,96 @@ class TestAgentPrompts(unittest.TestCase):
         self.assertNotIn("{NO_MARKDOWN_RULE}", f)
 
 
+class TestPromptCLI(unittest.TestCase):
+    """Dev CLI: python -m prompts.loader --show/--list/--sample/--data."""
+
+    def test_cli_list_lists_all(self):
+        out = loader.cli(["--list"])
+        for name in loader.prompt_names():
+            self.assertIn(name, out)
+
+    def test_cli_show_raw_keeps_placeholders(self):
+        out = loader.cli(["--show", "morning_brief"])
+        self.assertIn("{DATE}", out)
+        self.assertIn("{market_data}", out)
+
+    def test_cli_show_sample_fills_placeholders(self):
+        out = loader.cli(["--show", "market_analysis", "--sample"])
+        self.assertIn("Analisis teknikal EUR/USD hari ini?", out)  # dari SAMPLE_DATA
+        self.assertNotIn("{QUESTION}", out)
+        self.assertNotIn("{CONTEXT}", out)
+
+    def test_cli_show_agent_system_sample_matches_production(self):
+        # System prompt agent → sama persis dgn konstanta produksi (timestamp + rule)
+        from analysis.prompts import DIRECTOR_SYSTEM, RESEARCH_SYSTEM
+
+        out = loader.cli(["--show", "director_system", "--sample"])
+        self.assertIn("Analysis Director", out)
+        self.assertIn("Current date and time:", out)
+        self.assertEqual(out, DIRECTOR_SYSTEM)
+        self.assertEqual(loader.cli(["--show", "research_system", "--sample"]), RESEARCH_SYSTEM)
+
+    def test_cli_data_override(self):
+        out = loader.cli(["--show", "market_analysis", "--sample", "--data", "QUESTION=Test?"])
+        self.assertIn('"Test?"', out)
+        self.assertNotIn("{QUESTION}", out)
+
+    def test_cli_unknown_name(self):
+        with self.assertRaises(SystemExit) as ctx:
+            loader.cli(["--show", "nope"])
+        self.assertIn("tidak dikenal", str(ctx.exception))
+        self.assertIn("market_analysis", str(ctx.exception))  # daftar template valid
+
+    def test_cli_invalid_data_format(self):
+        with self.assertRaises(SystemExit) as ctx:
+            loader.cli(["--show", "market_analysis", "--data", "BAD"])
+        self.assertIn("KEY=VALUE", str(ctx.exception))
+
+    def test_cli_no_args_prints_usage(self):
+        out = loader.cli([])
+        self.assertIn("--show", out)
+
+    def test_render_preview_covers_all_templates(self):
+        # Semua template harus bisa di-render dgn data contoh tanpa placeholder tersisa
+        for name in loader.prompt_names():
+            prompt = loader.render_preview(name)
+            self.assertGreater(len(prompt), 50, f"{name} terlalu pendek")
+            self.assertIsNone(_UNFILLED.search(prompt), f"placeholder belum terisi: {name}")
+
+    def test_render_preview_unknown_name(self):
+        with self.assertRaises(ValueError):
+            loader.render_preview("nope")
+
+    def test_python_m_entrypoint(self):
+        # Verifikasi `python -m prompts.loader` benar-benar jalan (cwd = root repo)
+        import subprocess
+        import sys
+
+        repo_root = Path(__file__).resolve().parent.parent
+        proc = subprocess.run(
+            [sys.executable, "-m", "prompts.loader", "--list"],
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
+            cwd=str(repo_root),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("market_analysis", proc.stdout)
+
+    def test_python_m_entrypoint_show_sample(self):
+        # Preview ter-render (emoji UTF-8) tidak crash walau console cp1252
+        import subprocess
+        import sys
+
+        repo_root = Path(__file__).resolve().parent.parent
+        proc = subprocess.run(
+            [sys.executable, "-m", "prompts.loader", "--show", "morning_brief", "--sample"],
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
+            cwd=str(repo_root),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("📊", proc.stdout)
+        self.assertNotIn("{DATE}", proc.stdout)
+
+
 class TestPromptWiring(unittest.TestCase):
     """Verifikasi handlers memakai loader (single source of truth)."""
 
