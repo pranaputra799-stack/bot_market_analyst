@@ -7,6 +7,7 @@ PROVIDER_CONFIGS = {
     "groq": {
         "name": "Groq",
         "url": "https://api.groq.com/openai/v1/chat/completions",
+        # Fallback 1 setelah OpenRouter (banyak model gratis di tier free).
         # mixtral-8x7b-32768 & llama-3.1-70b-versatile sudah discontinued (400 decommissioned).
         # llama-3.3-70b-versatile juga dijadwalkan pensiun 2026-08-16, jadi model utama
         # dipindah ke openai/gpt-oss-120b (model produksi terbaru Groq).
@@ -33,10 +34,11 @@ PROVIDER_CONFIGS = {
     "openrouter": {
         "name": "OpenRouter",
         "url": "https://openrouter.ai/api/v1/chat/completions",
-        # Model free yang terverifikasi stabil (200). OpenRouter punya BANYAK
-        # model gratis (:free / $0). auto_discover_free = True membuat engine
-        # otomatis menarik daftar model free terkini dari API OpenRouter
-        # sehingga bot tetap jalan walau Groq/Gemini sedang down.
+        # PRIMARY provider — HANYA model GRATIS (:free / $0). OpenRouter punya
+        # BANYAK model gratis. auto_discover_free = True membuat engine otomatis
+        # menarik daftar model free terkini dari API OpenRouter sehingga bot
+        # selalu memakai model free terbaru dan biaya AI tetap $0.
+        # Model utama & fallback di bawah ini semua ber-suffix :free.
         # CATATAN: beberapa model :free bisa diblokir guardrail privacy akun
         # kecuali data policy diubah di https://openrouter.ai/settings/privacy
         # (set ke "Allow all" agar semua model free bisa dipakai).

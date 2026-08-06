@@ -1,12 +1,12 @@
 """
 AI Fallback Engine - Inti dari sistem AI dengan multi-provider fallback.
 Mekanisme:
-  Groq (primary) -> OpenRouter (fallback 1, banyak model free) -> Gemini (fallback 2) -> Cerebras (fallback 3) -> Mistral (fallback 4)
+  OpenRouter (PRIMARY, model GRATIS :free / $0) -> Groq -> Gemini -> Cerebras -> Mistral
 
 Setiap provider punya rate limit dan karakteristik berbeda.
 Bot secara otomatis mencoba provider berikutnya jika satu provider gagal.
 OpenRouter memakai daftar model free (suffix :free / $0) yang di-discovery
-langsung dari API sehingga bot tetap jalan walau Groq/Gemini sedang down.
+langsung dari API sehingga biaya AI tetap $0 selama model free tersedia.
 """
 import asyncio
 import json
@@ -20,6 +20,7 @@ import requests
 from config.settings import (
     GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY,
     CEREBRAS_API_KEY, MISTRAL_API_KEY, AI_FALLBACK_ORDER,
+    AI_MAX_TOTAL_WAIT_SECONDS, AI_REQUEST_TIMEOUT,
 )
 from config.providers import PROVIDER_CONFIGS
 from data.cache import get_cached_ai_response, set_cached_ai_response, safe_hash
@@ -95,7 +96,7 @@ class AIFallbackEngine:
             except Exception:
                 pass
 
-    def generate(self, prompt: str, max_retries: int = 3, use_cache: bool = True, system_override: Optional[str] = None, max_tokens: int = 4096) -> str:
+    def generate(self, prompt: str, max_retries: int = 3, use_cache: bool = True, system_override: Optional[str] = None, max_tokens: int = 4096, max_total_wait: Optional[float] = None) -> str:
         """
         Generate response dengan fallback otomatis.
 
@@ -105,6 +106,9 @@ class AIFallbackEngine:
             use_cache: Apakah menggunakan cache untuk pertanyaan identik
             system_override: System prompt khusus untuk menggantikan default
             max_tokens: Batas token output (4096 agar teks tidak terpotong)
+            max_total_wait: Batas waktu total (detik) sebelum menyerah. Default
+                dari AI_MAX_TOTAL_WAIT_SECONDS — menjamin user tidak menunggu
+                menit-menit saat semua provider down/rate-limit.
 
         Returns:
             String response dari AI
@@ -124,10 +128,23 @@ class AIFallbackEngine:
                 logger.info("Using cached AI response")
                 return cached
 
+        # Budget waktu total: berhenti mencoba provider lain setelah deadline
+        # tercapai agar latensi maksimal respons tetap wajar (user tidak menunggu
+        # terlalu lama saat semua provider sedang gangguan).
+        effective_budget = max_total_wait if max_total_wait and max_total_wait > 0 else AI_MAX_TOTAL_WAIT_SECONDS
+        deadline = time.time() + effective_budget
+
         # Coba provider satu per satu. system & max_tokens dikirim per-request
         # sehingga request paralel dari thread berbeda tidak saling menimpa.
         for provider in self.fallback_order:
             for attempt in range(max_retries):
+                # Cek deadline sebelum tiap attempt
+                if time.time() >= deadline:
+                    logger.warning(
+                        f"AI total wait budget ({effective_budget:.0f}s) exceeded — stopping fallback"
+                    )
+                    break
+
                 try:
                     logger.info(f"Trying provider: {provider} (attempt {attempt + 1}/{max_retries})")
 
@@ -161,20 +178,22 @@ class AIFallbackEngine:
                     # Provider merespon kosong (429 / model error). Jeda exponensial
                     # sebelum attempt berikutnya agar tidak memperparah rate limit.
                     if attempt < max_retries - 1:
-                        wait = 2 ** attempt
-                        logger.info(f"{provider} returned empty response, retrying in {wait}s...")
+                        wait = min(2 ** attempt, max(0.0, deadline - time.time()))
+                        logger.info(f"{provider} returned empty response, retrying in {wait:.0f}s...")
                         time.sleep(wait)
 
                 except Exception as e:
                     logger.warning(f"{provider} attempt {attempt + 1} failed: {e}")
                     self.stats["last_error"] = f"{provider}: {e}"
                     if attempt < max_retries - 1:
-                        wait = 2 ** attempt  # Exponential backoff
-                        logger.info(f"Retrying in {wait}s...")
+                        wait = min(2 ** attempt, max(0.0, deadline - time.time()))  # Exponential backoff + budget
+                        logger.info(f"Retrying in {wait:.0f}s...")
                         time.sleep(wait)
 
             # Jika provider ini gagal total, log dan lanjut ke berikutnya
             logger.info(f"{provider} exhausted, trying next provider...")
+            if time.time() >= deadline:
+                break
 
         self.stats["failed"] += 1
         error_msg = (
@@ -187,9 +206,11 @@ class AIFallbackEngine:
         )
         return error_msg
 
-    async def generate_async(self, prompt: str, max_retries: int = 3, use_cache: bool = True, system_override: Optional[str] = None, max_tokens: int = 4096) -> str:
+    async def generate_async(self, prompt: str, max_retries: int = 3, use_cache: bool = True, system_override: Optional[str] = None, max_tokens: int = 4096, max_total_wait: Optional[float] = None) -> str:
         """Async version of generate."""
-        return await asyncio.to_thread(self.generate, prompt, max_retries, use_cache, system_override, max_tokens)
+        return await asyncio.to_thread(
+            self.generate, prompt, max_retries, use_cache, system_override, max_tokens, max_total_wait
+        )
 
     def _call_provider(self, provider: str, prompt: str, system: str, max_tokens: int) -> Optional[str]:
         """
@@ -252,7 +273,7 @@ class AIFallbackEngine:
                     config["url"],
                     json=payload,
                     headers=config["headers"](key),
-                    timeout=30,
+                    timeout=AI_REQUEST_TIMEOUT,
                 )
 
                 if resp.status_code == 429:
@@ -356,7 +377,7 @@ class AIFallbackEngine:
                     url,
                     json=payload,
                     headers=config["headers"](key),
-                    timeout=30,
+                    timeout=AI_REQUEST_TIMEOUT,
                 )
 
                 if resp.status_code == 429:

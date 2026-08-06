@@ -279,6 +279,55 @@ def strip_markdown_asterisks(text: str) -> str:
     return text
 
 
+# Kata kunci pertanyaan HARGA sederhana — dijawab INSTAN dari data (tanpa AI)
+# agar user tidak menunggu pipeline multi-agent untuk cek harga biasa.
+_PRICE_QUERY_KEYWORDS = (
+    "harga", "price", "berapa", "rate", "kurs", "nilai", "quote",
+    "spot", "live price", "harga sekarang", "harga saat ini",
+)
+# Jika pertanyaan mengandung kata ini, BUKAN cek harga sederhana — serahkan
+# ke pipeline analisis penuh (teknikal, fundamental, prediksi, edukasi, dll).
+_ANALYSIS_EXCLUDE_KEYWORDS = (
+    "analisis", "teknikal", "support", "resistance", "rsi", "macd",
+    "prediksi", "forecast", "ramalan", "kenapa", "mengapa", "sebab",
+    "dampak", "korelasi", "hubungan", "banding", "perbedaan", "vs",
+    "berita", "sentimen", "chart", "grafik", "cara", "belajar",
+    "apa itu", "pengertian", "definisi", "risiko", "jadwal",
+    "mana yang", "naik apa turun", "masih bisa", "akan naik", "akan turun",
+)
+
+
+def detect_fast_price_query(text: str):
+    """
+    Deteksi pertanyaan harga sederhana yang bisa dijawab INSTAN tanpa AI.
+
+    Contoh yang cocok:
+      "berapa harga eurusd?", "harga gold sekarang", "rate usd/jpy",
+      "harga bitcoin", "kurs eurusd", "spot eurusd"
+
+    Contoh yang TIDAK cocok (harus lewat pipeline analisis penuh):
+      "kenapa gold naik?", "analisis teknikal eurusd", "berapa prediksi gold?"
+
+    Returns:
+        Tuple (yahoo_symbol, display_name) atau None jika bukan pertanyaan harga.
+    """
+    if not text:
+        return None
+    q = text.lower().strip()
+
+    # Harus mengandung kata kunci harga
+    if not any(kw in q for kw in _PRICE_QUERY_KEYWORDS):
+        return None
+    # Jangan sentuh pertanyaan yang butuh analisis (bukan sekadar cek harga)
+    if any(kw in q for kw in _ANALYSIS_EXCLUDE_KEYWORDS):
+        return None
+
+    symbol, display_name = ChartGenerator.get_chart_symbol_from_text(q)
+    if not symbol:
+        return None
+    return symbol, display_name
+
+
 class MarketBot:
     """
     Main bot class untuk menangani semua interaksi Telegram.
@@ -333,11 +382,12 @@ class MarketBot:
                 InlineKeyboardButton("📈 Chart Gold", callback_data="chart_gold"),
             ],
             [
-                InlineKeyboardButton("📅 Kalender Ekonomi", callback_data="calendar"),
-                InlineKeyboardButton("❓ Bantuan", callback_data="help"),
+                InlineKeyboardButton("🌍 Overview Pasar", callback_data="overview"),
+                InlineKeyboardButton("🧠 Sentimen Pasar", callback_data="sentiment"),
             ],
             [
-                InlineKeyboardButton("🧠 Sentimen Pasar", callback_data="sentiment"),
+                InlineKeyboardButton("📅 Kalender Ekonomi", callback_data="calendar"),
+                InlineKeyboardButton("❓ Bantuan", callback_data="help"),
             ],
             [
                 InlineKeyboardButton("🔔 Langganan Brief", callback_data="subscribe"),
@@ -652,6 +702,44 @@ class MarketBot:
                 "❌ Gagal memuat kalender ekonomi. Silakan coba lagi nanti.",
             )
 
+    async def _build_overview_message(self) -> str:
+        """
+        Bangun pesan overview pasar (dipakai perintah /overview & tombol menu).
+        Data dari cache (10 menit) → respons instan tanpa menunggu AI.
+
+        Returns:
+            String pesan siap kirim (tidak pernah raise — fallback aman).
+        """
+        try:
+            summary = await asyncio.to_thread(self.market.get_market_summary)
+            now_str = datetime.now(ZoneInfo(MORNING_BRIEF_TIMEZONE)).strftime("%A, %d %B %Y %H:%M")
+            return (
+                f"🌍 *MARKET OVERVIEW*\n"
+                f"🕐 {now_str} WIB\n\n"
+                f"{summary}\n\n"
+                f"💡 Kirim /chart <simbol> untuk grafik, atau tanyakan analisis "
+                f"spesifik (mis. \"analisis eurusd\").\n"
+                f"{DISCLAIMER}"
+            )
+        except Exception as e:
+            logger.error(f"Overview error: {e}")
+            return "❌ Gagal memuat overview pasar. Silakan coba lagi nanti."
+
+    async def overview_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Handler untuk perintah /overview - Ringkasan cepat semua instrumen utama.
+        Dibaca dari cache (10 menit), jadi responsnya INSTAN tanpa menunggu AI.
+        """
+        chat_id = update.effective_chat.id
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+        message = await self._build_overview_message()
+        await safe_reply_text(
+            update.message,
+            message,
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
+
     async def morning_brief_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler untuk perintah /morning - Morning Brief harian."""
         await context.bot.send_chat_action(
@@ -821,6 +909,24 @@ class MarketBot:
 
         user_data["last_message_time"] = time.time()
         self.total_questions += 1
+
+        # ===== FAST PATH: pertanyaan harga sederhana (tanpa AI) =====
+        # Cek harga biasa ("berapa harga eurusd?") dijawab INSTAN dari data
+        # cache — user tidak perlu menunggu pipeline multi-agent (5-15 detik).
+        fast_hit = detect_fast_price_query(user_question)
+        if fast_hit:
+            symbol, display_name = fast_hit
+            fast_answer = await self._format_fast_price_answer(symbol, display_name)
+            if fast_answer:
+                add_exchange(user_id, user_question, strip_markdown_asterisks(fast_answer))
+                await safe_reply_text(
+                    update.message,
+                    fast_answer,
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True,
+                )
+                return
+            # Gagal ambil data → lanjut ke pipeline analisis penuh
 
         # Riwayat percakapan user (untuk konteks follow-up)
         history_text = format_history(user_id)
@@ -1015,6 +1121,50 @@ class MarketBot:
 
         return "\n\n".join(context_parts) if context_parts else "Tidak ada data spesifik yang ditemukan."
 
+    async def _format_fast_price_answer(self, symbol: str, display_name: str) -> Optional[str]:
+        """
+        Format jawaban harga instan dari data cache (tanpa AI call).
+
+        Returns:
+            String jawaban siap kirim, atau None jika data tidak tersedia
+            (caller akan fallback ke pipeline analisis penuh).
+        """
+        try:
+            data = await asyncio.to_thread(
+                self.market.get_yahoo_data, symbol, period="2d", interval="1h"
+            )
+        except Exception as e:
+            logger.warning(f"Fast price fetch failed for {symbol}: {e}")
+            return None
+
+        price = data.get("current_price")
+        if "error" in data or price is None:
+            return None
+
+        change = data.get("change_pct")
+        arrow = "🟢" if change and change > 0 else "🔴" if change and change < 0 else "⚪"
+        change_str = f"{change:+.2f}%" if change is not None else ""
+
+        # Rentang 5 sesi terakhir dari OHLCV (untuk konteks singkat)
+        ohlcv = data.get("ohlcv", [])
+        range_str = ""
+        if ohlcv:
+            highs = [d.get("high") for d in ohlcv if d.get("high") is not None]
+            lows = [d.get("low") for d in ohlcv if d.get("low") is not None]
+            if highs and lows:
+                range_str = (
+                    f"\n📊 Rentang 5 sesi: {format_price(min(lows), symbol)} – "
+                    f"{format_price(max(highs), symbol)}"
+                )
+
+        return (
+            f"💱 *{display_name}* — Harga Terkini\n"
+            f"{arrow} Harga: *{format_price(price, symbol)}* ({change_str})"
+            f"{range_str}\n\n"
+            f"⚡ Jawaban instan dari data pasar (delay 15-20 mnt).\n"
+            f"💡 Kirim \"analisis {display_name.lower()}\" untuk analisis lengkap."
+        )
+
     def _format_market_data(self, data: Dict) -> str:
         """Format data market untuk dimasukkan ke prompt."""
         parts = []
@@ -1123,6 +1273,19 @@ JAWABAN:"""
             await safe_edit_message_text(
                 query,
                 brief,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+
+        elif data == "overview":
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id,
+                action="typing",
+            )
+            message = await self._build_overview_message()
+            await safe_edit_message_text(
+                query,
+                message,
                 parse_mode="Markdown",
                 disable_web_page_preview=True,
             )
@@ -1406,4 +1569,4 @@ JAWABAN:"""
                 )
                 logger.info(f"Morning brief sent to chat {chat_id}")
             except Exception as e:
-                    logger.error(f"Failed to send morning brief to {chat_id}: {e}")
+                logger.error(f"Failed to send morning brief to {chat_id}: {e}")

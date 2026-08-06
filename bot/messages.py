@@ -20,6 +20,7 @@ Saya adalah asisten analisis pasar keuangan berbasis AI dengan *Multi-Agent Anal
 • 🔗 Korelasi antar instrumen (DXY vs Gold, dll)
 • 🌅 *Morning Brief* harian (kirim /morning)
 • 📅 *Kalender Ekonomi* high-impact bulan ini (kirim /calendar)
+• 🌍 *Overview pasar* semua instrumen utama (kirim /overview)
 • 📈 *Grafik harga* (kirim /chart gold, /chart eurusd, dll)
 
 🧠 *Multi-Agent Analysis:*
@@ -45,6 +46,7 @@ Saya adalah asisten analisis pasar keuangan berbasis AI dengan *Multi-Agent Anal
 /calendar - 📅 Kalender Ekonomi
 /alert - 🔔 Notifikasi event ekonomi (on/off)
 /chart - 📈 Grafik harga (contoh: /chart eurusd)
+/overview - 🌍 Overview semua instrumen utama
 /status - Status sistem & API
 /about - Tentang bot ini
 
@@ -92,6 +94,7 @@ Cukup kirim pertanyaan tentang pasar keuangan, dan saya akan menjawab dengan dat
 /unsubscribe - 🔕 Berhenti langganan Morning Brief
 /sentiment - 🧠 Sentimen pasar (contoh: /sentiment eurusd, /sentiment gold)
 /calendar - 📅 Kalender Ekonomi high-impact bulan ini
+/overview - 🌍 Overview semua instrumen utama (harga instan)
 /alert - 🔔 Notifikasi event ekonomi otomatis (/alert on)
 /chart - 📈 Grafik harga (contoh: /chart eurusd)
 /status - ✅ Cek status API & sistem
@@ -111,7 +114,7 @@ ABOUT_MESSAGE = """
 *Tanggal:* Juli 2026
 
 *Fitur Utama:*
-• ✅ Multi-AI Provider (Groq, Gemini, OpenRouter, Cerebras, Mistral)
+• ✅ Multi-AI Provider (OpenRouter primary — model gratis, Groq, Gemini, Cerebras, Mistral)
 • ✅ Multi-Source Data (Yahoo Finance, Alpha Vantage, Finnhub)
 • ✅ Data Makroekonomi (FRED, World Bank)
 • ✅ Berita & Sentimen Pasar

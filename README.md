@@ -7,7 +7,7 @@ Dibuat untuk trader retail Indonesia — semua jawaban dalam Bahasa Indonesia, b
 ## ✨ Fitur
 
 - **Multi-Agent Analysis** 🧠 — Pipeline 7 agent: Research → Signals → Thesis → Contradiction → Scenarios → Confidence → Risk Gates
-- **Multi-AI Provider** — Groq (primary) → OpenRouter → Gemini → Cerebras → Mistral, fallback otomatis saat satu provider down/rate-limit. OpenRouter auto-discover model gratis (`:free`)
+- **Multi-AI Provider** — OpenRouter (primary, **hanya model gratis** `:free`/`$0`) → Groq → Gemini → Cerebras → Mistral, fallback otomatis saat satu provider down/rate-limit. OpenRouter auto-discover model gratis (`:free`)
 - **Multi-Source Data** 📊 — Yahoo Finance, Alpha Vantage, Finnhub, Exchange Rate API
 - **Data Makroekonomi** 🏛️ — FRED (resmi & gratis): CPI, NFP, Fed Rate, GDP, dll
 - **Kalender Ekonomi** 📅 — Jadwal rilis BLS/Fed real-time via FRED, dikonversi ke WIB, lengkap dengan Forecast/Previous/Actual
@@ -65,7 +65,9 @@ pip install -r requirements.txt
 
 # 3. Konfigurasi
 cp .env.example .env
-# Isi minimal: TELEGRAM_BOT_TOKEN + minimal 1 API key AI (Groq direkomendasikan)
+# Isi minimal: TELEGRAM_BOT_TOKEN + OPENROUTER_API_KEY (primary, model gratis)
+# Set data policy OpenRouter ke "Allow all" agar semua model free bisa dipakai
+# https://openrouter.ai/settings/privacy
 
 # 4. Jalankan (polling untuk development)
 python main.py
@@ -76,8 +78,8 @@ python main.py
 | Variabel | Wajib | Keterangan |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | ✅ | Token dari @BotFather |
-| `GROQ_API_KEY` | opsi | AI primary — https://console.groq.com/keys |
-| `OPENROUTER_API_KEY` | opsi | Fallback, banyak model gratis — https://openrouter.ai/keys |
+| `OPENROUTER_API_KEY` | ✅ (recommended) | AI primary — hanya model gratis (`:free`/`$0`) — https://openrouter.ai/keys |
+| `GROQ_API_KEY` | opsi | Fallback — https://console.groq.com/keys |
 | `GEMINI_API_KEY` | opsi | Fallback — https://aistudio.google.com/app/apikey |
 | `FRED_API_KEY` | opsi | Kalender ekonomi real-time resmi — https://fred.stlouisfed.org |
 | `FINNHUB_KEY` | opsi | Berita & sentimen |
@@ -85,6 +87,8 @@ python main.py
 | `SUPABASE_CACHE_ENABLED` | opsi | Aktifkan cache persisten Supabase (`true`/`false`, default `true`) |
 | `CACHE_MAX_ENTRIES` | opsi | Batas entri memory cache (default `5000`) |
 | `SENTRY_DSN` | opsi | Error tracking (kosongkan untuk menonaktifkan) |
+| `AI_MAX_TOTAL_WAIT_SECONDS` | opsi | Batas waktu total satu permintaan AI (default `60`) |
+| `AI_REQUEST_TIMEOUT` | opsi | Timeout per request ke satu AI provider (default `30`) |
 | `MORNING_BRIEF_CHAT_IDS` | opsi | Chat ID penerima morning brief otomatis |
 | `ECONOMIC_ALERT_ENABLED` | opsi | Notifikasi event ekonomi (`true`/`false`) |
 
@@ -150,6 +154,7 @@ Test mencakup logika murni (tanpa network): sentiment analyzer, signal engine, s
 | `/calendar` | Kalender ekonomi high-impact bulan ini |
 | `/alert on\|off` | Notifikasi event ekonomi otomatis |
 | `/chart <simbol>` | Grafik harga (contoh: `/chart gold`, `/chart eurusd`) |
+| `/overview` | Ringkasan instan semua instrumen utama (tanpa AI) |
 | `/status` | Status sistem, AI provider, dan data source |
 | `/about` | Informasi bot |
 

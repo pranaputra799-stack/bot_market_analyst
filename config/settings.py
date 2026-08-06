@@ -25,14 +25,23 @@ CEREBRAS_API_KEY = _get_key("CEREBRAS_API_KEY", "")
 MISTRAL_API_KEY = _get_key("MISTRAL_API_KEY", "")
 
 # Fallback order - akan dicoba berurutan sampai ada yang sukses.
-# OpenRouter (banyak model free) dijadikan fallback utama setelah Groq
-# agar bot tetap responsif saat Groq/Gemini sedang rate-limit / down.
+# OpenRouter (PRIMARY — auto-discover model GRATIS `:free` / $0) dipakai
+# lebih dulu, lalu Groq -> Gemini -> Cerebras -> Mistral sebagai cadangan.
 # Bisa di-override via env AI_FALLBACK_ORDER (pisahkan dengan koma).
 AI_FALLBACK_ORDER = [
     x.strip() for x in os.getenv(
-        "AI_FALLBACK_ORDER", "groq,openrouter,gemini,cerebras,mistral"
+        "AI_FALLBACK_ORDER", "openrouter,groq,gemini,cerebras,mistral"
     ).split(",") if x.strip()
 ]
+
+# Batas waktu total maksimal SATU permintaan AI (detik).
+# Jika semua provider gagal/rate-limit beruntun, bot berhenti mencoba setelah
+# budget ini habis dan langsung mengembalikan pesan error yang ramah — user
+# tidak pernah menunggu menit-menit saat semua provider sedang down.
+AI_MAX_TOTAL_WAIT_SECONDS = float(os.getenv("AI_MAX_TOTAL_WAIT_SECONDS", "60"))
+# Timeout per request ke satu provider (detik). Lebih kecil = fallback lebih cepat
+# saat provider hang, tapi berisiko memotong response model lambat.
+AI_REQUEST_TIMEOUT = float(os.getenv("AI_REQUEST_TIMEOUT", "30"))
 
 # ===================== DATA PROVIDERS =====================
 ALPHA_VANTAGE_KEY = _get_key("ALPHA_VANTAGE_KEY", "")

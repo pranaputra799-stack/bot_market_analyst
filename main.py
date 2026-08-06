@@ -102,6 +102,7 @@ async def post_init(application: Application):
         BotCommand("alert", "🔔 Notifikasi event ekonomi"),
         BotCommand("status", "✅ Status sistem & API"),
         BotCommand("chart", "📈 Grafik harga"),
+        BotCommand("overview", "🌍 Overview pasar"),
         BotCommand("subscribe", "🔔 Langganan Morning Brief"),
         BotCommand("unsubscribe", "🔕 Berhenti langganan"),
         BotCommand("about", "ℹ️ Tentang bot ini"),
@@ -237,25 +238,11 @@ def setup_scheduler(application: Application, bot: MarketBot):
         logger.warning("JobQueue not available, morning brief & event alerts scheduling disabled. Install pytz if needed.")
 
 
-def run_polling():
-    """Jalankan bot dengan metode polling (untuk development)."""
-    logger.info("Starting bot in polling mode...")
-
-    # Build application
-    application = (
-        Application.builder()
-        .token(TELEGRAM_TOKEN)
-        .post_init(post_init)
-        .build()
-    )
-
-    # Inisialisasi bot
-    bot = MarketBot()
-
-    # Scheduler
-    setup_scheduler(application, bot)
-
-    # Register handlers
+def register_handlers(application: Application, bot: MarketBot):
+    """
+    Daftarkan semua handler (perintah, callback, pesan) ke application.
+    Dipakai bersama oleh mode polling & webhook agar tidak dobel.
+    """
     application.add_handler(CommandHandler("start", bot.start))
     application.add_handler(CommandHandler("help", bot.help_command))
     application.add_handler(CommandHandler("about", bot.about_command))
@@ -265,12 +252,35 @@ def run_polling():
     application.add_handler(CommandHandler("calendar", bot.calendar_command))
     application.add_handler(CommandHandler("alert", bot.alert_command))
     application.add_handler(CommandHandler("chart", bot.chart_command))
+    application.add_handler(CommandHandler("overview", bot.overview_command))
     application.add_handler(CommandHandler("subscribe", bot.subscribe_command))
     application.add_handler(CommandHandler("unsubscribe", bot.unsubscribe_command))
     application.add_handler(CallbackQueryHandler(bot.handle_callback))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message)
     )
+
+
+def build_application():
+    """Buat Application + MarketBot + scheduler, lalu daftarkan semua handler."""
+    application = (
+        Application.builder()
+        .token(TELEGRAM_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
+
+    bot = MarketBot()
+    setup_scheduler(application, bot)
+    register_handlers(application, bot)
+    return application
+
+
+def run_polling():
+    """Jalankan bot dengan metode polling (untuk development)."""
+    logger.info("Starting bot in polling mode...")
+
+    application = build_application()
 
     # Start polling
     logger.info("Bot is polling... Press Ctrl+C to stop.")
@@ -291,31 +301,7 @@ def run_webhook():
     logger.info(f"Starting bot in webhook mode on port {PORT}...")
     logger.info(f"Webhook URL: {WEBHOOK_URL}/{TELEGRAM_TOKEN[:8]}...")
 
-    application = (
-        Application.builder()
-        .token(TELEGRAM_TOKEN)
-        .post_init(post_init)
-        .build()
-    )
-
-    bot = MarketBot()
-    setup_scheduler(application, bot)
-
-    application.add_handler(CommandHandler("start", bot.start))
-    application.add_handler(CommandHandler("help", bot.help_command))
-    application.add_handler(CommandHandler("about", bot.about_command))
-    application.add_handler(CommandHandler("status", bot.status_command))
-    application.add_handler(CommandHandler("morning", bot.morning_brief_command))
-    application.add_handler(CommandHandler("sentiment", bot.sentiment_command))
-    application.add_handler(CommandHandler("calendar", bot.calendar_command))
-    application.add_handler(CommandHandler("alert", bot.alert_command))
-    application.add_handler(CommandHandler("chart", bot.chart_command))
-    application.add_handler(CommandHandler("subscribe", bot.subscribe_command))
-    application.add_handler(CommandHandler("unsubscribe", bot.unsubscribe_command))
-    application.add_handler(CallbackQueryHandler(bot.handle_callback))
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message)
-    )
+    application = build_application()
 
     # Setup webhook
     application.run_webhook(
