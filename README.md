@@ -47,10 +47,30 @@ data/
   database.py            → Supabase REST (opsional): user & subscriber
 config/
   settings.py            → Semua konfigurasi dari environment variables
+prompts/
+  loader.py              → Loader template prompt (single source of truth)
+  *.txt                  → Template prompt analisis — edit di sini tanpa ubah kode
 utils/
   chart_generator.py     → Chart lokal (matplotlib, dark theme)
 tests/                   → Unit tests (unittest / pytest-compatible)
 ```
+
+## 📝 Prompts — Single Source of Truth
+
+Semua template prompt analisis disimpan sebagai file `.txt` di folder `prompts/`:
+
+| File | Dipakai untuk |
+|---|---|
+| `market_analysis.txt` | Analisis pasar/teknikal (path legacy) |
+| `technical_analysis.txt` | Analisis korelasi antar instrumen (DXY vs Gold vs FX) |
+| `macro_explanation.txt` | Penjelasan data makroekonomi (CPI, NFP, Fed, GDP, dll) |
+| `morning_brief.txt` | Morning brief harian |
+
+**Edit file `.txt` → perilaku bot berubah tanpa mengubah kode** (restart bot, atau
+panggil `prompts.loader.reload_prompts()` di runtime untuk dev hot-reload).
+Placeholder `{NAMA}` diisi otomatis oleh `prompts/loader.py`; jika sebuah file
+hilang/tidak terbaca, bot otomatis memakai template bawaan sebagai fallback
+sehingga tetap berjalan normal.
 
 ## 🚀 Setup Lokal
 

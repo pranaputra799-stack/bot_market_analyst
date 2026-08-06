@@ -48,6 +48,7 @@ from utils.chart_generator import ChartGenerator
 from analysis.director import AnalysisDirector
 from analysis.indicators import compute_indicators, format_key_levels, format_indicators_for_prompt
 from utils.validators import sanitize_text
+from prompts.loader import format_prompt
 from analysis.monitoring import metrics
 from analysis.sentiment import SentimentAnalyzer
 from bot.messages import (
@@ -942,36 +943,20 @@ class MarketBot:
     ) -> str:
         """
         Bangun prompt morning brief (dipakai path multi-agent & legacy).
-        Best practice: role jelas, alur berpikir, guardrail anti-halusinasi,
-        format output eksplisit, dan larangan markdown (*).
+
+        Konten prompt DIAMBIL dari `prompts/morning_brief.txt` (single source
+        of truth) — edit file tersebut untuk mengubah perilaku tanpa mengubah
+        kode. Fallback ke template bawaan bila file tidak tersedia.
         """
         sentiment_section = sentiment_text or "Sentimen pasar tidak tersedia."
-        return (
-            f"ROLE: Anda adalah analis pasar senior yang menyusun briefing pagi untuk "
-            f"trader retail Indonesia yang sibuk.\n\n"
-            f"Hari ini tanggal {today}.\n\n"
-            f"ALUR BERPIKIR:\n"
-            f"1) Tinjau data di bawah.\n"
-            f"2) Tentukan prospek EUR/USD, Gold (XAU/USD), dan DXY hari ini.\n"
-            f"3) Identifikasi katalis & risiko hari ini — khususnya dari KALENDER EKONOMI.\n"
-            f"4) Tulis OUTLOOK (3-4 kalimat) dan KATALIS UTAMA (3-4 poin).\n\n"
-            f"PENTING: Jangan mengarang event ekonomi. Hanya sebutkan event yang benar-benar ada "
-            f"di KALENDER EKONOMI. Jika tidak ada event terjadwal, tulis 'Tidak ada rilis data besar hari ini'.\n\n"
-            f"PANDUAN MEMBACA KALENDER: Setiap event punya 3 nilai berbeda — 'Forecast' = "
-            f"ekspektasi/konsensus pasar, 'Previous' = nilai rilis sebelumnya, 'Actual' = nilai yang "
-            f"sudah rilis (hanya ada untuk event bertanda 'Sudah rilis'; event bertanda 'Belum rilis' "
-            f"tidak punya Actual). Nilai yang meleset jauh antara Actual vs Forecast adalah katalis "
-            f"kuat hari itu — sorot jika ada.\n\n"
-            f"DATA PASAR:\n{market_summary}\n\n"
-            f"DATA MAKRO:\n{macro_summary}\n\n"
-            f"KALENDER EKONOMI:\n{calendar_text}\n\n"
-            f"BERITA:\n{news_summary}\n\n"
-            f"SENTIMEN PASAR (skor -1 s/d +1):\n{sentiment_section}\n\n"
-            f"Gunakan skor sentimen sebagai konteks tambahan — jangan dijadikan satu-satunya dasar.\n\n"
-            f"FORMAT JAWABAN (tanpa simbol * / markdown):\n"
-            f"OUTLOOK:\n[prospek singkat EUR/USD, Gold, dan DXY hari ini — 3-4 kalimat]\n\n"
-            f"KATALIS UTAMA:\n[3-4 katalis/level/risiko yang perlu diwaspadai hari ini]\n\n"
-            f"Jawab dalam Bahasa Indonesia. JANGAN gunakan simbol * atau **."
+        return format_prompt(
+            "morning_brief",
+            DATE=today,
+            market_data=market_summary,
+            macro_data=macro_summary,
+            calendar_data=calendar_text,
+            news_data=news_summary,
+            sentiment_data=sentiment_section,
         )
 
     # ===================== MESSAGE HANDLER =====================
@@ -1406,21 +1391,33 @@ class MarketBot:
         """
         Bangun prompt untuk AI dengan data konteks.
         (Legacy method, used when multi-agent is disabled)
+
+        Konten prompt DIAMBIL dari file `prompts/*.txt` (single source of
+        truth) — pemilihan template mengikuti INTENT pertanyaan:
+
+          market_analysis      → analisis pasar/teknikal (default)
+          macro_explanation    → pertanyaan data makro (cpi, nfp, fed, gdp, ...)
+          technical_analysis   → pertanyaan korelasi antar instrumen
+
+        Fallback ke template bawaan bila file .txt tidak tersedia.
         """
         current_time = datetime.now(ZoneInfo(MORNING_BRIEF_TIMEZONE)).strftime("%Y-%m-%d %H:%M WIB")
 
         # Analisis intent pertanyaan untuk prompt yang lebih relevan
         q = question.lower()
         intent_instruction = ""
+        template = "market_analysis"
 
         if any(kw in q for kw in ["teknikal", "support", "resistance", "rsi", "macd", "chart", "trend"]):
             intent_instruction = "Fokus pada analisis teknikal: level support/resistance, indikator, dan trend."
         elif any(kw in q for kw in ["nfp", "cpi", "inflasi", "gdp", "fed", "suku bunga", "tenaga kerja"]):
             intent_instruction = "Fokus pada data fundamental: dampak data makroekonomi ke pasar."
+            template = "macro_explanation"
         elif any(kw in q for kw in ["berita", "news", "sentimen", "headline"]):
             intent_instruction = "Fokus pada berita terkini dan sentimen pasar yang relevan."
         elif any(kw in q for kw in ["korelasi", "hubungan", "dampak", "pengaruh"]):
             intent_instruction = "Fokus pada hubungan/korelasi antar instrumen yang ditanyakan."
+            template = "technical_analysis"
         elif any(kw in q for kw in ["apa itu", "pengertian", "definisi", "bagaimana", "belajar"]):
             intent_instruction = "Fokus pada edukasi: jelaskan konsep dengan bahasa sederhana dan berikan contoh."
         elif any(kw in q for kw in ["bandingkan", "perbedaan", "vs", "versus"]):
@@ -1440,34 +1437,31 @@ class MarketBot:
                 f"=== AKHIR PERCAKAPAN ===\n"
             )
 
-        return f"""ROLE:
-Anda adalah analis pasar keuangan senior (forex, gold, makroekonomi) yang menjawab trader retail Indonesia. Target pembaca sibuk — utamakan angka, tren, dan implikasi.
+        # Deteksi instrumen yang dibahas (best-effort). Tidak memakai state
+        # instance — aman dipanggil dari test tanpa __init__ penuh.
+        instrument = "Pasar"
+        try:
+            pairs = self._detect_pairs(question)
+            if pairs:
+                instrument = pairs[0][0].upper()
+            else:
+                _sym, dname = ChartGenerator.get_chart_symbol_from_text(question)
+                if dname:
+                    instrument = dname
+        except Exception as e:
+            logger.debug(f"Instrument detection skipped: {e}")
 
-Waktu saat ini: {current_time}
-
-=== DATA PASAR & MAKRO TERKINI (GUNAKAN SEBAGAI REFERENSI) ===
-{context}
-=== AKHIR DATA ==={history_section}
-
-PERTANYAAN USER:
-"{question}"
-
-ALUR BERPIKIR (internal):
-1. Pahami intent pertanyaan.
-2. Ambil data relevan dari konteks; jangan mengarang angka.
-3. Susun jawaban: inti jawaban dulu (BLUF) → penjelasan singkat → kesimpulan.
-
-INSTRUKSI PENTING:
-- Jawab HANYA pertanyaan di atas, jangan membahas topik lain.
-- Gunakan data di atas hanya jika relevan dengan pertanyaan.
-- Jika pertanyaan tidak berkaitan dengan data tersedia, jawab berdasarkan pengetahuan umum.
-- {intent_instruction}
-- JANGAN mengarang harga, tanggal, atau jadwal rilis data ekonomi yang tidak ada di data.
-- Maksimal 350 kata. Gunakan Bahasa Indonesia yang santai tapi profesional.
-- JANGAN gunakan simbol markdown (*, **, _, #) — gunakan emoji, angka, dan baris baru.
-- Akhiri dengan disclaimer bahwa ini analisis edukasi, bukan rekomendasi trading.
-
-JAWABAN:"""
+        return format_prompt(
+            template,
+            QUESTION=question,
+            USER_QUESTION=question,
+            CONTEXT=context,
+            CONVERSATION_HISTORY=history_section,
+            CURRENT_TIME=current_time,
+            INTENT_INSTRUCTION=intent_instruction,
+            INSTRUMENT=instrument,
+            INSTRUMENTS=instrument,
+        )
 
     # ===================== CALLBACK QUERY HANDLER =====================
 
