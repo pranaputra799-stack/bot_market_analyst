@@ -9,10 +9,12 @@ Fokus:
 """
 
 import asyncio
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
 from ai.engine import AIFallbackEngine
+from config.providers import PROVIDER_CONFIGS
 
 
 def _make_engine():
@@ -104,6 +106,69 @@ class TestCache(unittest.TestCase):
             eng.generate_async("prompt-async", use_cache=False, system_override="SYS-ASYNC")
         )
         self.assertTrue(out.startswith("RESP[SYS-ASYNC]"), out)
+
+
+class TestRateLimitHandling(unittest.TestCase):
+    """429 harus dicatat sebagai hint + cooldown TANPA tidur di _call_provider
+    (backoff dijalankan satu kali di generate(), hindari double-wait)."""
+
+    def test_429_records_hint_and_cooldown(self):
+        eng = _make_engine()
+
+        class FakeResp:
+            status_code = 429
+            headers = {"Retry-After": "5"}
+
+            def json(self):
+                return {}
+
+        import ai.engine as engine_mod
+        original = engine_mod.requests.post
+        try:
+            engine_mod.requests.post = lambda *a, **k: FakeResp()
+            result = eng._call_openai_compatible(
+                "groq", PROVIDER_CONFIGS["groq"], "test-key", "p", "s", 1024
+            )
+        finally:
+            engine_mod.requests.post = original
+
+        self.assertIsNone(result)
+        self.assertAlmostEqual(eng._rate_limit_hints.get("groq"), 5.0)
+        self.assertGreater(eng._provider_cooldown.get("groq", 0), time.time())
+
+    def test_ordered_providers_puts_cooldown_last(self):
+        eng = _make_engine()
+        eng.fallback_order = ["openrouter", "groq", "gemini"]
+        eng._order_index = {p: i for i, p in enumerate(eng.fallback_order)}
+        eng._provider_cooldown["groq"] = time.time() + 30
+        order = eng._ordered_providers()
+        self.assertEqual(order[0], "openrouter")
+        self.assertEqual(order[-1], "groq")
+
+    def test_backoff_wait_uses_retry_after_hint(self):
+        eng = _make_engine()
+        eng._rate_limit_hints["groq"] = 4.0
+        deadline = time.time() + 60
+        wait = eng._backoff_wait("groq", 0, deadline)
+        self.assertAlmostEqual(wait, 4.0)
+        # Hint tetap tersimpan agar thread lain ikut menghormati Retry-After
+        self.assertEqual(eng._rate_limit_hints.get("groq"), 4.0)
+
+    def test_backoff_wait_skips_when_hint_exceeds_budget(self):
+        eng = _make_engine()
+        eng._rate_limit_hints["groq"] = 10.0
+        deadline = time.time() + 3  # sisa budget 3 detik < hint 10 detik
+        wait = eng._backoff_wait("groq", 0, deadline)
+        self.assertEqual(wait, 0.0)
+
+    def test_success_clears_rate_limit_state(self):
+        eng = _make_engine()
+        eng._rate_limit_hints["groq"] = 5.0
+        eng._provider_cooldown["groq"] = time.time() + 5
+        out = eng.generate("prompt-clear-hint", use_cache=False)
+        self.assertIn("prompt-clear-hint", out)
+        self.assertNotIn("groq", eng._rate_limit_hints)
+        self.assertNotIn("groq", eng._provider_cooldown)
 
 
 class TestStats(unittest.TestCase):

@@ -11,6 +11,7 @@ langsung dari API sehingga biaya AI tetap $0 selama model free tersedia.
 import asyncio
 import json
 import logging
+import random
 import threading
 import time
 from typing import Dict, List, Optional, Callable, Any
@@ -37,30 +38,32 @@ class AIFallbackEngine:
 
     DEFAULT_SYSTEM = (
         "ROLE:\n"
-        "Anda adalah analis pasar keuangan senior (spesialis forex, gold/emas, dan makroekonomi) "
-        "dengan pengalaman 20+ tahun. Target pembaca: trader retail Indonesia yang sibuk — "
-        "utamakan angka, tren, dan implikasi, tanpa jargon berlebihan.\n\n"
-        "ALUR BERPIKIR (lakukan sebelum menjawab):\n"
-        "1. Pahami pertanyaan & tentukan intent (harga, teknikal, fundamental, edukasi, dll).\n"
-        "2. Ambil data relevan dari konteks yang diberikan; pisahkan fakta vs perkiraan.\n"
-        "3. Nilai risiko & level penting yang relevan dengan pertanyaan.\n"
-        "4. Susun jawaban: inti jawaban dulu (BLUF), lalu penjelasan singkat, lalu kesimpulan.\n\n"
-        "ATURAN WAJIB:\n"
-        "1. Jawab HANYA pertanyaan yang diajukan user, jangan membahas topik lain.\n"
-        "2. Gunakan data konteks sebagai referensi, bukan topik utama.\n"
-        "3. Jika pertanyaan tidak berkaitan dengan data yang tersedia, jawab berdasarkan pengetahuan umum.\n"
-        "4. Jawab dalam Bahasa Indonesia yang santai namun profesional.\n"
-        "5. JANGAN mengarang data harga, tanggal, jam rilis, atau event ekonomi. Gunakan hanya data "
-        "yang ada di konteks. Jika data tidak tersedia, katakan 'data tidak tersedia'.\n"
-        "6. JANGAN menebak jadwal rilis data ekonomi. Hanya sebutkan event yang benar-benar ada di "
-        "data kalender; jika tidak ada, katakan tidak ada rilis besar terjadwal.\n"
-        "7. JANGAN menjanjikan kepastian profit — ini analisis edukasi, bukan rekomendasi trading.\n\n"
-        "FORMAT JAWABAN:\n"
-        "- JANGAN gunakan simbol markdown (*, **, _, #) — gunakan emoji, angka, dan baris baru.\n"
-        "- Gunakan emoji secukupnya dan bullet (•/-) agar mudah dibaca.\n"
-        "- Maksimal 350 kata untuk jawaban chat, kecuali diminta lebih panjang.\n"
-        "- Akhiri dengan disclaimer singkat bahwa ini analisis edukasi, bukan rekomendasi trading."
+        "Anda adalah Chief Financial Analyst & Market Strategist senior (spesialis Gold/XAUUSD, Forex, Crypto, dan Makroekonomi Global) "
+        "dengan pengalaman 20+ tahun. Target pembaca: trader & investor Indonesia — "
+        "utamakan kejelasan tren, angka presisi, skenario bullish/bearish, serta level harga krusial.\n\n"
+        "ALUR BERPIKIR METODIK (Chain-of-Thought):\n"
+        "1. Identifikasi Intent & Aset: Pahami pertanyaan user, instrumen, serta horizon waktu (short-term/intraday/swing).\n"
+        "2. Sintesis Data Multidimensi: Hubungkan data teknikal (RSI, MACD, Pivot), makroekonomi (Fed rate, CPI, NFP), serta korelasi intermarket (DXY & US Yields).\n"
+        "3. Evaluasi Risiko & Skenario: Tentukan Key Support & Resistance, pemicu breakout/reversal, serta level invalidasi skenario.\n"
+        "4. Formulasi Jawaban (BLUF): Sajikan kesimpulan utama di awal (Bottom Line Up Front), diikuti rincian analisis & level acuan.\n\n"
+        "KERANGKA ANALISIS INSTITUSIONAL:\n"
+        "1. Breakdown Pasar Menyeluruh: ulas struktur trend (HH/HL atau sebaliknya), momentum, volatilitas, dan fase pasar.\n"
+        "2. Korelasi Intermarket: hubungkan DXY, Gold (XAU/USD), dan FX bila relevan — gold umumnya inverse DXY, USD/JPY sensitif terhadap US yields.\n"
+        "3. Multi-Skenario: selalu sajikan 3 skenario — Bullish, Bearish, dan Base — dengan probabilitas masing-masing (total harus 100%).\n"
+        "4. Pivot Levels: gunakan level pivot (Pivot, R1-R3, S1-S3) sebagai acuan support/resistance intraday bila data harga tersedia.\n"
+        "5. Risk/Reward (R:R): untuk ide trade, hitung jarak entry→target dibanding entry→stop-loss, dan sebutkan level invalidasi skenario.\n\n"
+        "ATURAN WAJIB & KUALITAS JAWABAN CERDAS:\n"
+        "1. Berikan analisis tajam, mendalam, dan actionable. Hindari jawaban generik.\n"
+        "2. Gunakan HANYA data yang tersedia di konteks untuk angka harga, indikator, dan event. Jika data spesifik tidak ada, gunakan prinsip teknikal/makro umum secara logis tanpa mengarang angka konkrit.\n"
+        "3. Jawab dalam Bahasa Indonesia yang lugas, profesional, dan mudah dipahami.\n"
+        "4. Cantumkan selalu Key Support, Key Resistance, dan Bias Tren bila menganalisis harga.\n"
+        "5. JANGAN gunakan simbol markdown (*, **, _, #) — gunakan emoji, angka, bullet (•/-), dan baris baru agar tampilan di Telegram bersih dan rapi.\n"
+        "6. Maksimal 380 kata agar respons tetap fokus dan padat informasi.\n"
+        "7. Akhiri dengan disclaimer edukatif singkat (analisis edukasi, bukan rekomendasi trading)."
     )
+
+    # Backoff dasar (detik) sebelum dikali 2^attempt + jitter saat retry.
+    BACKOFF_BASE_SECONDS = 1.0
 
     def __init__(self, fallback_order: Optional[List[str]] = None):
         self.fallback_order = fallback_order or AI_FALLBACK_ORDER
@@ -78,6 +81,12 @@ class AIFallbackEngine:
             "provider_usage": {p: 0 for p in self.fallback_order},
             "last_error": None,
         }
+        # State rate-limit per provider (aman dibaca/ditulis lintas thread di GIL):
+        # - _provider_cooldown: provider → timestamp sampai kapan dihindari (429).
+        # - _rate_limit_hints:   provider → durasi tunggu (detik) yang diminta server.
+        self._provider_cooldown: Dict[str, float] = {}
+        self._rate_limit_hints: Dict[str, float] = {}
+        self._order_index: Dict[str, int] = {p: i for i, p in enumerate(self.fallback_order)}
         # Catatan thread-safety: system_override & max_tokens dikirim PER-REQUEST
         # (bukan state instance), sehingga generate() aman dipanggil paralel dari
         # banyak thread (asyncio.to_thread di handlers/sentiment/agents) tanpa
@@ -136,7 +145,10 @@ class AIFallbackEngine:
 
         # Coba provider satu per satu. system & max_tokens dikirim per-request
         # sehingga request paralel dari thread berbeda tidak saling menimpa.
-        for provider in self.fallback_order:
+        # Urutan provider bersifat dinamis: provider yang baru kena rate-limit
+        # (429) dipindah ke belakang antrean agar request berikutnya langsung
+        # mencoba provider yang sehat.
+        for provider in self._ordered_providers():
             for attempt in range(max_retries):
                 # Cek deadline sebelum tiap attempt
                 if time.time() >= deadline:
@@ -160,6 +172,10 @@ class AIFallbackEngine:
 
                     response = self._call_provider(provider, prompt, system, max_tokens)
                     if response:
+                        # Provider sehat — bersihkan state rate-limit lama (jika ada)
+                        self._rate_limit_hints.pop(provider, None)
+                        self._provider_cooldown.pop(provider, None)
+
                         self.stats["successful"] += 1
                         self.stats["provider_usage"][provider] += 1
 
@@ -175,10 +191,14 @@ class AIFallbackEngine:
 
                         return formatted
 
-                    # Provider merespon kosong (429 / model error). Jeda exponensial
-                    # sebelum attempt berikutnya agar tidak memperparah rate limit.
+                    # Provider merespon kosong (429 / model error). Backoff dihitung
+                    # SATU KALI di sini (hint Retry-After server bila ada, atau
+                    # exponential + jitter) dan dibatasi sisa budget waktu total.
                     if attempt < max_retries - 1:
-                        wait = min(2 ** attempt, max(0.0, deadline - time.time()))
+                        wait = self._backoff_wait(provider, attempt, deadline)
+                        if wait <= 0:
+                            logger.info(f"{provider} — sisa budget habis, pindah provider")
+                            break
                         logger.info(f"{provider} returned empty response, retrying in {wait:.0f}s...")
                         time.sleep(wait)
 
@@ -186,7 +206,9 @@ class AIFallbackEngine:
                     logger.warning(f"{provider} attempt {attempt + 1} failed: {e}")
                     self.stats["last_error"] = f"{provider}: {e}"
                     if attempt < max_retries - 1:
-                        wait = min(2 ** attempt, max(0.0, deadline - time.time()))  # Exponential backoff + budget
+                        wait = self._backoff_wait(provider, attempt, deadline)
+                        if wait <= 0:
+                            break
                         logger.info(f"Retrying in {wait:.0f}s...")
                         time.sleep(wait)
 
@@ -229,11 +251,56 @@ class AIFallbackEngine:
         key = self.api_keys[provider]
 
         if config["payload_template"] == "gemini":
-            return self._call_gemini(config, key, prompt, system, max_tokens)
+            return self._call_gemini(provider, config, key, prompt, system, max_tokens)
         else:
-            return self._call_openai_compatible(config, key, prompt, system, max_tokens)
+            return self._call_openai_compatible(provider, config, key, prompt, system, max_tokens)
 
-    def _call_openai_compatible(self, config: Dict, key: str, prompt: str, system: str, max_tokens: int) -> Optional[str]:
+    def _ordered_providers(self) -> List[str]:
+        """
+        Urutan fallback dinamis: provider yang sedang cooldown (baru kena 429)
+        dipindah ke belakang antrean, provider sehat dicoba lebih dulu.
+        """
+        now = time.time()
+        # Bersihkan cooldown (dan hint-nya) yang sudah lewat agar dict tetap ramping
+        stale = [p for p, ts in self._provider_cooldown.items() if ts <= now]
+        for p in stale:
+            self._provider_cooldown.pop(p, None)
+            self._rate_limit_hints.pop(p, None)
+        return sorted(
+            self.fallback_order,
+            key=lambda p: (self._provider_cooldown.get(p, 0.0) > now, self._order_index.get(p, 0)),
+        )
+
+    def _backoff_wait(self, provider: str, attempt: int, deadline: float) -> float:
+        """
+        Hitung durasi tunggu sebelum retry (detik).
+
+        Prioritas:
+        1. Hint Retry-After dari server (429) — dipakai bersama (TIDAK dikonsumsi)
+           agar thread lain ikut menghormati Retry-After; dibersihkan saat provider
+           berhasil atau cooldown-nya lewat.
+        2. Exponential backoff (2^attempt) + jitter acak agar request paralel
+           dari banyak user tidak retry serentak (thundering herd).
+        Hasil dibatasi sisa budget waktu total; 0 berarti tidak ada sisa waktu.
+        """
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return 0.0
+        hint = self._rate_limit_hints.get(provider)
+        if hint:
+            # Tidak cukup sisa budget untuk menghormati Retry-After server →
+            # langsung pindah ke provider berikutnya (bukan menyia-nyiakan retry).
+            if hint >= remaining:
+                return 0.0
+            wait = hint
+        else:
+            wait = min(
+                self.BACKOFF_BASE_SECONDS * (2 ** attempt) * random.uniform(0.5, 1.0),
+                remaining,
+            )
+        return max(0.0, wait)
+
+    def _call_openai_compatible(self, provider: str, config: Dict, key: str, prompt: str, system: str, max_tokens: int) -> Optional[str]:
         """
         Panggil API dengan format OpenAI-compatible.
         Digunakan oleh: Groq, OpenRouter, Cerebras, Mistral
@@ -279,11 +346,12 @@ class AIFallbackEngine:
                 if resp.status_code == 429:
                     logger.warning(f"{config['name']} rate limited (429) with {model}")
                     # 429 adalah kuota per-akun (TPM/RPM) — ganti model TIDAK membantu.
-                    # Hormati Retry-After lalu hentikan percobaan ke model lain;
-                    # loop attempt/provider di generate() yang melanjutkan.
+                    # Catat hint Retry-After + cooldown provider; backoff (termasuk
+                    # tunggu) dijalankan SATU KALI di generate() agar tidak double-wait.
                     wait = self._retry_after_wait(resp)
-                    logger.info(f"{config['name']} rate limited — waiting {wait:.0f}s before retry")
-                    time.sleep(wait)
+                    self._rate_limit_hints[provider] = wait
+                    self._provider_cooldown[provider] = time.time() + wait
+                    logger.info(f"{config['name']} rate limited — retry hint {wait:.0f}s recorded")
                     return None
 
                 if resp.status_code != 200:
@@ -316,7 +384,7 @@ class AIFallbackEngine:
 
         return None
 
-    def _call_gemini(self, config: Dict, key: str, prompt: str, system: str, max_tokens: int) -> Optional[str]:
+    def _call_gemini(self, provider: str, config: Dict, key: str, prompt: str, system: str, max_tokens: int) -> Optional[str]:
         """
         Panggil Google Gemini API.
         Format berbeda dari OpenAI-compatible.
@@ -383,10 +451,11 @@ class AIFallbackEngine:
                 if resp.status_code == 429:
                     logger.warning(f"Gemini rate limited (429) with {model}")
                     # Sama seperti provider OpenAI-compatible: 429 = kuota akun,
-                    # tunggu Retry-After lalu serahkan ke loop attempt/provider.
+                    # catat hint + cooldown; backoff di generate() (hindari double-wait).
                     wait = self._retry_after_wait(resp)
-                    logger.info(f"Gemini rate limited — waiting {wait:.0f}s before retry")
-                    time.sleep(wait)
+                    self._rate_limit_hints[provider] = wait
+                    self._provider_cooldown[provider] = time.time() + wait
+                    logger.info(f"Gemini rate limited — retry hint {wait:.0f}s recorded")
                     return None
 
                 if resp.status_code != 200:
@@ -452,6 +521,10 @@ class AIFallbackEngine:
                 for p in self.fallback_order
                 if p in PROVIDER_CONFIGS
             },
+            "degraded_providers": [
+                p for p in self.fallback_order
+                if self._provider_cooldown.get(p, 0.0) > time.time()
+            ],
         }
 
     def test_connection(self, provider: str) -> Dict:

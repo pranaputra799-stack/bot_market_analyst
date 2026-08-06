@@ -364,8 +364,8 @@ class MarketBot:
         user = update.effective_user
         logger.info(f"User {user.id} ({user.first_name}) started the bot")
         
-        # Simpan/update user ke database
-        db.upsert_user(user.id, user.username, user.first_name)
+        # Simpan/update user ke database (async — jangan blokir event loop)
+        await db.upsert_user_async(user.id, user.username, user.first_name)
 
         # Keyboard untuk quick actions
         keyboard = [
@@ -465,11 +465,11 @@ class MarketBot:
         """Handler untuk perintah /subscribe - Berlangganan Morning Brief."""
         chat_id = update.effective_chat.id
         
-        if db.is_subscribed(chat_id):
+        if await db.is_subscribed_async(chat_id):
             await safe_reply_text(update.message, "✅ Anda sudah berlangganan Morning Brief.")
             return
             
-        if db.add_subscriber(chat_id):
+        if await db.add_subscriber_async(chat_id):
             await safe_reply_text(update.message, "🎉 Berhasil! Anda sekarang akan menerima Morning Brief setiap pagi.")
         else:
             await safe_reply_text(update.message, "❌ Gagal mendaftar langganan. Database mungkin belum dikonfigurasi.")
@@ -478,11 +478,11 @@ class MarketBot:
         """Handler untuk perintah /unsubscribe - Berhenti berlangganan Morning Brief."""
         chat_id = update.effective_chat.id
         
-        if not db.is_subscribed(chat_id):
+        if not await db.is_subscribed_async(chat_id):
             await safe_reply_text(update.message, "⚠️ Anda memang belum berlangganan Morning Brief.")
             return
             
-        if db.remove_subscriber(chat_id):
+        if await db.remove_subscriber_async(chat_id):
             await safe_reply_text(update.message, "👋 Berhasil berhenti langganan Morning Brief.")
         else:
             await safe_reply_text(update.message, "❌ Gagal membatalkan langganan. Database mungkin belum dikonfigurasi.")
@@ -1387,7 +1387,7 @@ JAWABAN:"""
 
         elif data == "subscribe":
             chat_id = update.effective_chat.id
-            subscribed = await asyncio.to_thread(db.add_subscriber, chat_id)
+            subscribed = await db.add_subscriber_async(chat_id)
             if subscribed:
                 await query.message.reply_text(
                     "🎉 Berhasil berlangganan Morning Brief harian!\n"
@@ -1401,7 +1401,7 @@ JAWABAN:"""
 
         elif data == "unsubscribe":
             chat_id = update.effective_chat.id
-            removed = await asyncio.to_thread(db.remove_subscriber, chat_id)
+            removed = await db.remove_subscriber_async(chat_id)
             if removed:
                 await query.message.reply_text(
                     "👋 Berhasil berhenti berlangganan Morning Brief.\n"
@@ -1560,7 +1560,7 @@ JAWABAN:"""
         if MORNING_BRIEF_CHAT_IDS:
             env_chat_ids = [int(x.strip()) for x in MORNING_BRIEF_CHAT_IDS.split(",") if x.strip()]
             
-        db_chat_ids = db.get_all_subscribers()
+        db_chat_ids = await db.get_all_subscribers_async()
         
         # Buat unique list
         chat_ids = list(set(env_chat_ids + db_chat_ids))

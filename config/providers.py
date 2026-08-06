@@ -12,7 +12,11 @@ PROVIDER_CONFIGS = {
         # llama-3.3-70b-versatile juga dijadwalkan pensiun 2026-08-16, jadi model utama
         # dipindah ke openai/gpt-oss-120b (model produksi terbaru Groq).
         "model": "openai/gpt-oss-120b",
-        "fallback_models": ["openai/gpt-oss-20b", "llama-3.3-70b-versatile"],
+        "fallback_models": [
+            "openai/gpt-oss-20b",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",  # model tercepat Groq — fallback darurat saat 120b/70b rate-limit
+        ],
         "headers": lambda key: {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json"
@@ -24,9 +28,10 @@ PROVIDER_CONFIGS = {
         "name": "Google Gemini",
         "url": "https://generativelanguage.googleapis.com/v1beta/models/",
         "model": "gemini-2.0-flash",
-        # gemini-2.5-flash mengembalikan 404 untuk user baru; hanya gunakan model
-        # 2.0 yang terverifikasi (429 = valid, hanya rate limit).
-        "fallback_models": ["gemini-2.0-flash-lite"],
+        # gemini-2.5-flash mengembalikan 404 untuk sebagian user baru; tetap
+        # didaftarkan sebagai fallback terakhir karena aktif untuk akun lain
+        # (404 hanya dilewati engine). Prioritas tetap model 2.0 terverifikasi.
+        "fallback_models": ["gemini-2.0-flash-lite", "gemini-2.5-flash"],
         "headers": lambda key: {"Content-Type": "application/json"},
         "payload_template": "gemini",
         "rate_limit": 60,

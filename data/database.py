@@ -1,7 +1,13 @@
 """
 Database operations via Supabase REST API.
 Menggunakan requests langsung ke REST API untuk menghindari konflik dependency httpx.
+
+Async-safe: semua operasi yang dipanggil dari handler Telegram (asyncio)
+memakai varian *_async yang menjalankan request sinkron di thread terpisah
+(asyncio.to_thread) agar event loop tetap responsif saat banyak user mengirim
+pesan bersamaan.
 """
+import asyncio
 import logging
 import requests
 from config.settings import SUPABASE_URL, SUPABASE_KEY
@@ -97,6 +103,31 @@ class Database:
         except Exception as e:
             logger.error(f"Error removing subscriber: {e}")
             return False
+
+    # ===================== ASYNC WRAPPERS =====================
+    # Handler Telegram (python-telegram-bot v20) berjalan di event loop asyncio.
+    # Varian *_async memindahkan operasi sinkron ke thread pool sehingga tidak
+    # memblokir event loop saat banyak user berinteraksi bersamaan.
+
+    @staticmethod
+    async def upsert_user_async(user_id: int, username: str, first_name: str) -> bool:
+        return await asyncio.to_thread(Database.upsert_user, user_id, username, first_name)
+
+    @staticmethod
+    async def get_all_subscribers_async() -> list:
+        return await asyncio.to_thread(Database.get_all_subscribers)
+
+    @staticmethod
+    async def is_subscribed_async(chat_id: int) -> bool:
+        return await asyncio.to_thread(Database.is_subscribed, chat_id)
+
+    @staticmethod
+    async def add_subscriber_async(chat_id: int) -> bool:
+        return await asyncio.to_thread(Database.add_subscriber, chat_id)
+
+    @staticmethod
+    async def remove_subscriber_async(chat_id: int) -> bool:
+        return await asyncio.to_thread(Database.remove_subscriber, chat_id)
 
 
 db = Database()

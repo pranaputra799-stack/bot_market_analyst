@@ -75,6 +75,64 @@ class TestConversationMemory(unittest.TestCase):
         self.assertEqual(cm.get_history(999), [])
 
 
+class TestContextTracking(unittest.TestCase):
+    """Konteks multi-turn: fokus aset & arah tren agar follow-up ambigu
+    ("support-nya berapa?", "bagaimana targetnya?") tetap punya konteks."""
+
+    def setUp(self):
+        cm.clear(2001)
+        cm.clear(2002)
+
+    def tearDown(self):
+        cm.clear(2001)
+        cm.clear(2002)
+
+    def test_extract_asset_focus(self):
+        self.assertEqual(cm.extract_asset_focus("analisis teknikal eurusd"), "EUR/USD")
+        self.assertEqual(cm.extract_asset_focus("berapa harga gold?"), "XAU/USD (Gold)")
+        self.assertEqual(cm.extract_asset_focus("harga emas sekarang"), "XAU/USD (Gold)")
+        self.assertEqual(cm.extract_asset_focus("analisis usd/jpy"), "USD/JPY")
+        self.assertIsNone(cm.extract_asset_focus("support-nya berapa?"))
+        self.assertIsNone(cm.extract_asset_focus(None))
+
+    def test_extract_asset_focus_no_false_positive(self):
+        # Word boundary: "gold" ≠ "goldman", "eth" ≠ "method"
+        self.assertIsNone(cm.extract_asset_focus("analisis saham goldman sachs"))
+        self.assertIsNone(cm.extract_asset_focus("metode analisis teknikal"))
+
+    def test_extract_trend_direction(self):
+        self.assertEqual(cm.extract_trend_direction("Bias bullish, target naik ke 1.1000"), "bullish")
+        self.assertEqual(cm.extract_trend_direction("tren turun, resistance kuat"), "bearish")
+        self.assertEqual(cm.extract_trend_direction("harga bergerak sideways"), "sideways")
+        self.assertIsNone(cm.extract_trend_direction("apa itu CPI?"))
+        self.assertIsNone(cm.extract_trend_direction(None))
+
+    def test_add_exchange_updates_context_automatically(self):
+        cm.add_exchange(2001, "analisis teknikal eurusd", "Bias bullish. Support 1.0800, resistance 1.0950.")
+        ctx = cm.get_context(2001)
+        self.assertEqual(ctx["asset_focus"], "EUR/USD")
+        self.assertEqual(ctx["direction"], "bullish")
+
+    def test_set_context_keeps_existing_fields(self):
+        cm.set_context(2002, asset_focus="XAU/USD (Gold)")
+        cm.set_context(2002, direction="bearish")
+        ctx = cm.get_context(2002)
+        self.assertEqual(ctx["asset_focus"], "XAU/USD (Gold)")
+        self.assertEqual(ctx["direction"], "bearish")
+
+    def test_format_history_includes_context_section(self):
+        cm.add_exchange(2001, "analisis teknikal eurusd", "Bias bullish, target 1.1000")
+        text = cm.format_history(2001)
+        self.assertIn("KONTEKS PERCAKAPAN TERAKHIR", text)
+        self.assertIn("Fokus aset: EUR/USD", text)
+        self.assertIn("Arah tren: bullish", text)
+
+    def test_clear_removes_context(self):
+        cm.add_exchange(2001, "analisis eurusd", "bullish")
+        cm.clear(2001)
+        self.assertEqual(cm.get_context(2001), {})
+
+
 class TestPromptIntegration(unittest.TestCase):
     def test_research_template_accepts_history(self):
         prompt = RESEARCH_ANALYSIS_TEMPLATE.format(

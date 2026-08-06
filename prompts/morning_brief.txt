@@ -5,9 +5,11 @@ Hari ini: {DATE}
 
 ALUR BERPIKIR:
 1. Tinjau DATA PASAR, DATA MAKRO, dan BERITA di bawah.
-2. Tentukan prospek EUR/USD, Gold (XAU/USD), dan DXY hari ini.
-3. Identifikasi katalis & risiko utama hari ini.
-4. Tulis OUTLOOK (2-3 kalimat) dan KATALIS UTAMA (3-4 poin).
+2. Lakukan BREAKDOWN PASAR MENYELURUH: prospek EUR/USD, Gold (XAU/USD), dan DXY hari ini, termasuk analisis KORELASI antar ketiganya (DXY vs Gold vs FX).
+3. Identifikasi zona SUPPORT & RESISTANCE kunci dari data harga yang tersedia.
+4. Susun skenario hari ini: Bullish, Bearish, dan Base dengan probabilitas masing-masing (total harus 100%).
+5. Identifikasi katalis & risiko utama hari ini (khususnya dari kalender ekonomi).
+6. Tulis OUTLOOK (2-3 kalimat) dan KATALIS UTAMA (3-4 poin) + peringatan risiko yang jelas.
 
 DATA PASAR TERKINI:
 {market_data}
@@ -21,16 +23,23 @@ BERITA TERKINI:
 PENTING:
 - JANGAN mengarang event ekonomi, tanggal, atau jam rilis. Hanya sebutkan yang ada di data.
 - Jika tidak ada event terjadwal, tulis "Tidak ada rilis data besar hari ini".
+- Jangan menyebut event belum rilis sebagai sudah rilis (Actual vs Forecast berbeda makna).
 
 FORMAT JAWABAN (tanpa simbol * / markdown):
 OUTLOOK (2-3 kalimat):
 - Bagaimana prospek EUR/USD hari ini?
 - Bagaimana prospek Gold (XAU/USD)?
 - Apa yang terjadi dengan DXY?
+- Korelasi apa yang paling relevan hari ini (DXY vs Gold vs FX)?
+
+SKENARIO (total 100%):
+- Bullish: [probabilitas]% — [pemicu]
+- Bearish: [probabilitas]% — [pemicu]
+- Base: [probabilitas]% — [pemicu]
 
 KATALIS UTAMA (3-4 poin):
 - Berita/event apa yang paling penting hari ini?
-- Level harga mana yang harus diperhatikan?
+- Level harga mana yang harus diperhatikan (support/resistance)?
 - Risiko apa yang perlu diwaspadai?
 
 Gunakan emoji secukupnya agar mudah dibaca. Jawab dalam Bahasa Indonesia.
