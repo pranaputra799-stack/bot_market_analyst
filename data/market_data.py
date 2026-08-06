@@ -55,7 +55,7 @@ class MarketDataAggregator:
 
     # ===================== YAHOO FINANCE (Primary) =====================
 
-    def get_yahoo_data(self, symbol: str, period: str = "5d", interval: str = "1h") -> Dict:
+    def get_yahoo_data(self, symbol: str, period: str = "5d", interval: str = "1h", ohlcv_limit: int = 5) -> Dict:
         """
         Ambil data harga dari Yahoo Finance.
         Sumber utama karena unlimited dan tanpa API key.
@@ -64,11 +64,14 @@ class MarketDataAggregator:
             symbol: Simbol Yahoo Finance (e.g. EURUSD=X, GC=F)
             period: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max
             interval: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo
+            ohlcv_limit: Jumlah bar OHLCV terakhir yang disertakan. Default 5
+                (ringan, cukup untuk chart singkat); analisis teknikal butuh
+                15-50 bar → pakai 60 lewat get_ohlcv_history().
 
         Returns:
             Dict dengan data harga atau error message
         """
-        cache_key = f"yahoo:{symbol}:{period}:{interval}"
+        cache_key = f"yahoo:{symbol}:{period}:{interval}:n{ohlcv_limit}"
         cached_data = cache.get(cache_key)
         if cached_data:
             return cached_data
@@ -87,7 +90,7 @@ class MarketDataAggregator:
             # Ambil data teknikal dari history
             ohlcv_data = []
             if not hist.empty:
-                for idx, row in hist.tail(5).iterrows():
+                for idx, row in hist.tail(ohlcv_limit).iterrows():
                     ohlcv_data.append({
                         "date": idx.strftime("%Y-%m-%d %H:%M") if hasattr(idx, 'strftime') else str(idx),
                         "open": round(float(row["Open"]), 5),
@@ -167,6 +170,26 @@ class MarketDataAggregator:
             except Exception:
                 pass
             return error_result
+
+    def get_ohlcv_history(self, symbol: str, period: str = "3mo", interval: str = "1d", limit: int = 60) -> List[Dict]:
+        """
+        Ambil riwayat OHLCV dalam (hingga `limit` bar) untuk analisis teknikal.
+
+        Wrapper tipis di atas get_yahoo_data dengan cache terpisah (suffix :n),
+        jadi menganalisis sebuah instrumen tidak menambah request Yahoo baru
+        selama data masih dalam TTL cache (5 menit).
+
+        Returns:
+            List of {date, open, high, low, close, volume} atau [] jika gagal.
+        """
+        try:
+            data = self.get_yahoo_data(symbol, period=period, interval=interval, ohlcv_limit=limit)
+            if "error" in data:
+                return []
+            return data.get("ohlcv", []) or []
+        except Exception as e:
+            logger.warning(f"get_ohlcv_history failed for {symbol}: {e}")
+            return []
 
     @staticmethod
     def _safe_int(value: Any) -> int:

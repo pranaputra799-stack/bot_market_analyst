@@ -134,6 +134,11 @@ class SignalEngine:
         if momentum_signal:
             self.signals.append(momentum_signal)
 
+        # Bollinger bands (jika tersedia)
+        bb_signal = self._evaluate_bollinger(technical_indicators or {})
+        if bb_signal:
+            self.signals.append(bb_signal)
+
         # Volatility signals
         vol_signal = self._evaluate_volatility(closes, highs, lows)
         if vol_signal:
@@ -259,10 +264,23 @@ class SignalEngine:
             )
 
     def _evaluate_momentum_from_indicators(self, indicators: Dict) -> Optional[Signal]:
-        """Evaluate momentum from pre-computed technical indicators."""
+        """Evaluate momentum from pre-computed technical indicators.
+
+        Mendukung dua format indicators:
+        - Flat:  {"rsi": 55.0, "macd": 0.002, "macd_signal": 0.001}
+        - Nested: {"rsi": 55.0, "macd": {"macd": 0.002, "macd_signal": 0.001}, "stochastic": 70.0}
+          (format dari analysis.indicators.compute_indicators)
+        """
         rsi = indicators.get("rsi")
-        macd = indicators.get("macd")
-        macd_signal = indicators.get("macd_signal")
+        macd_raw = indicators.get("macd")
+
+        # Normalisasi MACD (dict nested dari compute_indicators)
+        if isinstance(macd_raw, dict):
+            macd = macd_raw.get("macd")
+            macd_signal = macd_raw.get("macd_signal")
+        else:
+            macd = macd_raw
+            macd_signal = indicators.get("macd_signal")
 
         if rsi is not None:
             if rsi > 70:
@@ -311,6 +329,61 @@ class SignalEngine:
                     source="momentum",
                 )
 
+        # Stochastic (float dari compute_indicators; defensif utk caller manual)
+        stoch = indicators.get("stochastic")
+        if not isinstance(stoch, (int, float)):
+            stoch = None
+        if stoch is not None:
+            if stoch > 80:
+                return Signal(
+                    type=SignalType.BEARISH,
+                    confidence=0.4,
+                    reason=f"Stochastic overbought ({stoch:.0f}) — ruang naik terbatas",
+                    source="momentum",
+                )
+            elif stoch < 20:
+                return Signal(
+                    type=SignalType.BULLISH,
+                    confidence=0.4,
+                    reason=f"Stochastic oversold ({stoch:.0f}) — potensi rebound",
+                    source="momentum",
+                )
+
+        return None
+
+    def _evaluate_bollinger(self, indicators: Dict) -> Optional[Signal]:
+        """Evaluate Bollinger Bands position (overextended/compressed)."""
+        bb = indicators.get("bollinger")
+        if not isinstance(bb, dict):
+            return None
+        price = indicators.get("current_price")
+        if price is None or bb.get("upper") is None or bb.get("lower") is None:
+            return None
+
+        if price >= bb["upper"]:
+            return Signal(
+                type=SignalType.BEARISH,
+                confidence=0.3,
+                reason="Harga di atas Bollinger upper band — overextended",
+                source="volatility",
+            )
+        if price <= bb["lower"]:
+            return Signal(
+                type=SignalType.BULLISH,
+                confidence=0.3,
+                reason="Harga di bawah Bollinger lower band — oversold ekstrem",
+                source="volatility",
+            )
+
+        # Band squeeze → breakout potensial
+        bandwidth = bb.get("bandwidth_pct")
+        if bandwidth is not None and bandwidth < 2.0:
+            return Signal(
+                type=SignalType.NEUTRAL,
+                confidence=0.4,
+                reason=f"Bollinger squeeze (bandwidth {bandwidth:.1f}%) — breakout potensial",
+                source="volatility",
+            )
         return None
 
     def _evaluate_momentum_price_action(self, closes: List[float]) -> Optional[Signal]:

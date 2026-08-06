@@ -550,7 +550,11 @@ class MarketBot:
             interval = "1h"
 
         data = await asyncio.to_thread(
-            self.market.get_yahoo_data, symbol, period=period, interval=interval
+            self.market.get_yahoo_data,
+            symbol,
+            period=period,
+            interval=interval,
+            ohlcv_limit=60,
         )
 
         if "error" in data or not data.get("ohlcv"):
@@ -954,16 +958,23 @@ class MarketBot:
                 # ===== NEW: Multi-Agent Analysis Pipeline =====
                 logger.info(f"Using multi-agent analysis for: {user_question[:80]}...")
 
-                # Get OHLCV data if relevant for signal analysis
+                # Get OHLCV data if relevant for signal analysis.
+                # Pakai riwayat dalam (60 bar, 3 bulan harian) agar indikator
+                # teknikal (RSI 14, MACD 26, EMA50, Bollinger) punya cukup data
+                # untuk dihitung secara matematis — bukan ditebak LLM.
                 ohlcv_data = None
                 detected_pairs = self._detect_pairs(user_question)
                 if detected_pairs:
                     pair_symbol = detected_pairs[0][1]
-                    market_data = await asyncio.to_thread(
-                        self.market.get_yahoo_data, pair_symbol, period="1mo", interval="1d"
+                else:
+                    # Fallback: deteksi simbol via chart keyword map
+                    # (mencakup "gold", "emas", "bitcoin", "dxy", dll)
+                    _sym, _name = self.chart.get_chart_symbol_from_text(user_question)
+                    pair_symbol = _sym
+                if pair_symbol:
+                    ohlcv_data = await asyncio.to_thread(
+                        self.market.get_ohlcv_history, pair_symbol, period="3mo", interval="1d", limit=60
                     )
-                    if "error" not in market_data:
-                        ohlcv_data = market_data.get("ohlcv", [])
 
                 # Run multi-agent analysis (dengan konteks percakapan)
                 result = await self.analysis_director.analyze(

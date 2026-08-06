@@ -482,6 +482,9 @@ USER QUESTION: {question}
 === TECHNICAL SIGNALS ===
 {signal_output}
 
+=== TECHNICAL INDICATORS (hitung matematis dari OHLCV — RSI, MACD, Bollinger, pivot, Fibonacci) ===
+{indicators_output}
+
 === MARKET THESIS ===
 {thesis_output}
 
@@ -559,6 +562,7 @@ def build_analysis_prompt(
     context_data: str = "",
     research_output: str = "",
     signal_output: str = "",
+    indicators_output: str = "",
     thesis_output: str = "",
     contradiction_output: str = "",
     scenarios_output: str = "",
@@ -572,6 +576,7 @@ def build_analysis_prompt(
         conversation_history=conversation_history or "Tidak ada percakapan sebelumnya.",
         research_output=research_output or "Not analyzed",
         signal_output=signal_output or "Not analyzed",
+        indicators_output=indicators_output or "Tidak ada data indikator — jangan mengarang angka RSI/MACD/level.",
         thesis_output=thesis_output or "Not analyzed",
         contradiction_output=contradiction_output or "Not analyzed",
         scenarios_output=scenarios_output or "Not analyzed",

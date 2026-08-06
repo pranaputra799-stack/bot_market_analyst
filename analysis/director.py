@@ -33,6 +33,7 @@ from analysis.confidence_agent import ConfidenceAgent, ConfidenceScore
 from analysis.risk_gates import RiskGates, RiskAssessment
 from analysis.signals import SignalEngine, AggregatedSignal, SignalType
 from analysis.intent_classifier import IntentClassifier, IntentResult
+from analysis.indicators import compute_indicators, format_indicators_for_prompt
 from analysis.monitoring import metrics
 from data.cache import cache, safe_hash
 
@@ -62,6 +63,7 @@ class AnalysisResult:
     duration_ms: float = 0.0
     error: Optional[str] = None
     conversation_history: str = ""
+    indicators_summary: str = ""  # teks indikator teknikal untuk prompt synthesis
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -171,6 +173,14 @@ class AnalysisDirector:
                 signal_start = time.time()
 
                 if market_data_ohlcv:
+                    # Hitung indikator teknikal LOKAL dari OHLCV (RSI, MACD,
+                    # Bollinger, pivot, fib, dll) agar signal engine memakai
+                    # angka nyata — bukan None seperti sebelumnya.
+                    if not technical_indicators:
+                        technical_indicators = compute_indicators(market_data_ohlcv)
+                        result.indicators_summary = format_indicators_for_prompt(
+                            technical_indicators
+                        )
                     result.signal = self.signals.evaluate_from_data(
                         market_data_ohlcv, technical_indicators
                     )
@@ -361,6 +371,7 @@ class AnalysisDirector:
                 context_data=format_context_for_prompt(research_str),
                 research_output=research_str[:800] if research_str else "No research data",
                 signal_output=signal_str[:500] if signal_str else "No signal data",
+                indicators_output=result.indicators_summary,
                 thesis_output=thesis_str[:500] if thesis_str else "No thesis",
                 contradiction_output=contra_str[:500],
                 scenarios_output=scenario_str[:500] if scenario_str else "No scenarios",
