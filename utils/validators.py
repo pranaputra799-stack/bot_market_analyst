@@ -27,8 +27,11 @@ def is_valid_amount(amount: str) -> bool:
 
 def sanitize_text(text: str, max_length: int = 500) -> str:
     """Bersihkan dan batasi panjang teks input user."""
-    # Hapus karakter kontrol
-    cleaned = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', text)
+    # Ganti karakter kontrol dengan SPASI (bukan dihapus) agar kata tidak
+    # menempel: "gold\nanalysis" → "gold analysis", bukan "goldanalysis".
+    cleaned = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", text)
+    # Rapatkan whitespace ganda (sisa newline/tab yang sudah jadi spasi)
+    cleaned = re.sub(r"\s+", " ", cleaned)
     # Batasi panjang
     return cleaned[:max_length].strip()
 

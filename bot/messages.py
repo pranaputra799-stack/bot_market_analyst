@@ -47,6 +47,7 @@ Saya adalah asisten analisis pasar keuangan berbasis AI dengan *Multi-Agent Anal
 /alert - 🔔 Notifikasi event ekonomi (on/off)
 /chart - 📈 Grafik harga (contoh: /chart eurusd)
 /overview - 🌍 Overview semua instrumen utama
+/clear - 🧹 Bersihkan konteks percakapan
 /status - Status sistem & API
 /about - Tentang bot ini
 
@@ -97,6 +98,7 @@ Cukup kirim pertanyaan tentang pasar keuangan, dan saya akan menjawab dengan dat
 /overview - 🌍 Overview semua instrumen utama (harga instan)
 /alert - 🔔 Notifikasi event ekonomi otomatis (/alert on)
 /chart - 📈 Grafik harga (contoh: /chart eurusd)
+/clear - 🧹 Bersihkan konteks percakapan
 /status - ✅ Cek status API & sistem
 /about - ℹ️ Tentang bot
 
@@ -166,13 +168,20 @@ def get_ai_providers_status(ai_engine) -> str:
     perintah /status bisa hang berlarut-larut saat provider sedang down.
     """
     stats = ai_engine.get_stats()
+    degraded = set(stats.get("degraded_providers", []))
     lines = []
     for provider in stats.get("available_providers", []):
         name = stats.get("provider_names", {}).get(provider, provider)
         usage = stats.get("provider_usage", {}).get(provider, 0)
         # Tidak ada live test: cukup tampilkan konfigurasi & pemakaian.
-        icon = "✅" if usage > 0 else "🟡"
+        if provider in degraded:
+            icon = "⚠️"  # baru kena rate-limit (cooldown)
+        else:
+            icon = "✅" if usage > 0 else "🟡"
         lines.append(f"  {icon} {name}: {usage}x dipakai")
+    if degraded:
+        lines.append("")
+        lines.append(f"  ⚠️ Rate-limited sementara: {', '.join(sorted(degraded))}")
     if not lines:
         lines.append("  ❌ Tidak ada provider terkonfigurasi")
     return "\n".join(lines)

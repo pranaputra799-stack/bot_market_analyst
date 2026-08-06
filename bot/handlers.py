@@ -43,9 +43,11 @@ from data.macro_data import MacroDataFetcher
 from data.news_data import NewsFetcher
 from data.cache import cache
 from data.database import db
-from data.conversation_memory import format_history, add_exchange
+from data.conversation_memory import format_history, add_exchange, get_context, clear
 from utils.chart_generator import ChartGenerator
 from analysis.director import AnalysisDirector
+from analysis.indicators import compute_indicators, format_key_levels, format_indicators_for_prompt
+from utils.validators import sanitize_text
 from analysis.monitoring import metrics
 from analysis.sentiment import SentimentAnalyzer
 from bot.messages import (
@@ -54,6 +56,7 @@ from bot.messages import (
     ABOUT_MESSAGE,
     STATUS_MESSAGE_TEMPLATE,
     ERROR_MESSAGE,
+    RATE_LIMIT_MESSAGE,
     DISCLAIMER,
     CHART_HELP_TEXT,
     format_price,
@@ -157,8 +160,10 @@ async def safe_reply_text(message, text: str, parse_mode: Optional[str] = "Markd
         if "too long" in str(e).lower():
             logger.info(f"Message too long ({len(text)} chars), splitting into parts...")
             result = None
-            for chunk in split_long_text(text):
-                result = await _reply_chunk(message, chunk, parse_mode, kwargs)
+            chunks = split_long_text(text)
+            for i, chunk in enumerate(chunks):
+                chunk_kwargs = kwargs if i == len(chunks) - 1 else _strip_reply_markup(kwargs)
+                result = await _reply_chunk(message, chunk, parse_mode, chunk_kwargs)
             return result
         raise
 
@@ -235,8 +240,11 @@ async def _edit_progress_message(message, text: str, parse_mode: Optional[str] =
             return None  # teks sama persis — abaikan
         if "too long" in msg:
             result = None
-            for chunk in split_long_text(text):
-                result = await _reply_chunk(message, chunk, parse_mode, kwargs)
+            chunks = split_long_text(text)
+            for i, chunk in enumerate(chunks):
+                # Hanya chunk terakhir yang membawa tombol aksi cepat
+                chunk_kwargs = kwargs if i == len(chunks) - 1 else _strip_reply_markup(kwargs)
+                result = await _reply_chunk(message, chunk, parse_mode, chunk_kwargs)
             try:
                 await message.delete()  # bersihkan pesan progress
             except Exception:
@@ -295,6 +303,58 @@ _ANALYSIS_EXCLUDE_KEYWORDS = (
     "apa itu", "pengertian", "definisi", "risiko", "jadwal",
     "mana yang", "naik apa turun", "masih bisa", "akan naik", "akan turun",
 )
+
+# ===================== QUICK ACTION BUTTONS =====================
+# Tombol aksi lanjutan di bawah jawaban analisis — memakai konteks multi-turn
+# (fokus aset dari conversation memory) untuk pertanyaan follow-up seperti
+# "support-nya berapa?" tanpa perlu menyebut instrumen lagi.
+
+# Label fokus aset (dari conversation_memory.extract_asset_focus) → simbol Yahoo
+_LABEL_TO_YAHOO = {
+    "XAU/USD (Gold)": "GC=F",
+    "XAG/USD (Silver)": "SI=F",
+    "BTC/USD (Bitcoin)": "BTC-USD",
+    "ETH/USD (Ethereum)": "ETH-USD",
+    "DXY (Dollar Index)": "DX-Y.NYB",
+    "S&P 500": "^GSPC",
+    "NASDAQ": "^IXIC",
+    "VIX": "^VIX",
+}
+
+
+def label_to_symbol(label: Optional[str]) -> Optional[str]:
+    """Konversi label fokus aset (dari conversation memory) ke simbol Yahoo Finance."""
+    if not label:
+        return None
+    if label in _LABEL_TO_YAHOO:
+        return _LABEL_TO_YAHOO[label]
+    # Label pair forex "XXX/YYY" → "XXXYYY=X"
+    m = re.match(r"^([A-Z]{3})/([A-Z]{3})$", label.strip().upper())
+    if m:
+        return f"{m.group(1)}{m.group(2)}=X"
+    return None
+
+
+def _quick_action_keyboard(symbol: Optional[str] = None):
+    """Keyboard aksi cepat — simbol ter-embed di callback agar tombol lama
+    tetap bekerja untuk instrumen yang benar walau konteks sudah berubah."""
+    sr_data = f"qa:sr:{symbol}" if symbol else "qa:sr"
+    scenario_data = f"qa:scenario:{symbol}" if symbol else "qa:scenario"
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔍 S/R & Target", callback_data=sr_data),
+            InlineKeyboardButton("🔮 Skenario", callback_data=scenario_data),
+        ],
+        [
+            InlineKeyboardButton("🧹 Bersihkan Konteks", callback_data="qa:clear"),
+        ],
+    ])
+
+
+def _strip_reply_markup(kwargs: Dict) -> Dict:
+    """Salin kwargs tanpa reply_markup — untuk chunk pesan selain yang terakhir
+    agar keyboard aksi cepat tidak muncul di setiap potongan pesan panjang."""
+    return {k: v for k, v in kwargs.items() if k != "reply_markup"}
 
 
 def detect_fast_price_query(text: str):
@@ -487,6 +547,19 @@ class MarketBot:
         else:
             await safe_reply_text(update.message, "❌ Gagal membatalkan langganan. Database mungkin belum dikonfigurasi.")
 
+    # ===================== CLEAR COMMAND =====================
+
+    async def clear_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler untuk /clear - Hapus konteks percakapan user (privasi)."""
+        user_id = update.effective_user.id
+        clear(user_id)
+        await safe_reply_text(
+            update.message,
+            "🧹 *Konteks percakapan dibersihkan.*\n\n"
+            "Saya tidak lagi mengingat percakapan sebelumnya — mulai dari nol! 😊",
+            parse_mode="Markdown",
+        )
+
     # ===================== CHART COMMAND =====================
 
     async def chart_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -592,10 +665,22 @@ class MarketBot:
             # Buat caption
             arrow = "🟢" if change and change > 0 else "🔴" if change and change < 0 else "⚪"
             change_str = f"{change:+.2f}%" if change is not None else ""
+
+            # Lampirkan level kunci (pivot + fib) pada caption chart
+            levels_line = ""
+            try:
+                ind = compute_indicators(ohlcv)
+                lv = format_key_levels(ind)
+                if lv:
+                    levels_line = f"\n{lv}"
+            except Exception:
+                pass
+
             caption = (
                 f"📈 *{display_name}*\n"
                 f"{arrow} Harga: *{format_price(current_price, symbol)}* {change_str}\n"
-                f"📊 Periode: {period} ({interval})\n"
+                f"📊 Periode: {period} ({interval})"
+                f"{levels_line}\n"
             )
 
             # Kirim file PNG langsung ke Telegram (tanpa layanan chart eksternal)
@@ -900,15 +985,16 @@ class MarketBot:
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
 
+        # Bersihkan & batasi input user (anti prompt-injection / input raksasa)
+        user_question = sanitize_text(user_question, max_length=500)
+
         logger.info(f"Question from user {user_id}: {user_question[:100]}")
 
         # Rate limiting
         user_data = context.user_data
         last_msg_time = user_data.get("last_message_time", 0)
         if time.time() - last_msg_time < 2:
-            await update.message.reply_text(
-                "⏳ Mohon tunggu sebentar sebelum mengirim pertanyaan berikutnya...",
-            )
+            await update.message.reply_text(RATE_LIMIT_MESSAGE, parse_mode="Markdown")
             return
 
         user_data["last_message_time"] = time.time()
@@ -928,9 +1014,23 @@ class MarketBot:
                     fast_answer,
                     parse_mode="Markdown",
                     disable_web_page_preview=True,
+                    reply_markup=_quick_action_keyboard(fast_hit[0]),
                 )
                 return
             # Gagal ambil data → lanjut ke pipeline analisis penuh
+
+        # Simbol untuk tombol aksi cepat: deteksi dari pertanyaan, fallback ke
+        # konteks percakapan user (agar tombol tetap relevan walau tanpa instrumen
+        # eksplisit — mis. follow-up "support-nya berapa?").
+        quick_symbol = None
+        detected_pairs = self._detect_pairs(user_question)
+        if detected_pairs:
+            quick_symbol = detected_pairs[0][1]
+        else:
+            _sym, _name = self.chart.get_chart_symbol_from_text(user_question)
+            quick_symbol = _sym
+        if not quick_symbol:
+            quick_symbol = label_to_symbol(get_context(user_id).get("asset_focus"))
 
         # Riwayat percakapan user (untuk konteks follow-up)
         history_text = format_history(user_id)
@@ -1027,13 +1127,16 @@ class MarketBot:
             if core_answer:
                 add_exchange(user_id, user_question, strip_markdown_asterisks(core_answer))
 
-            # Send response — edit pesan progress menjadi jawaban akhir
+            # Send response — edit pesan progress menjadi jawaban akhir.
+            # Tombol aksi cepat (S/R, Skenario, Bersihkan) memakai konteks
+            # multi-turn user sehingga follow-up tidak perlu sebut instrumen lagi.
             if progress is not None:
                 await _edit_progress_message(
                     progress,
                     final_message,
                     parse_mode="Markdown",
                     disable_web_page_preview=True,
+                    reply_markup=_quick_action_keyboard(quick_symbol),
                 )
             else:
                 await safe_reply_text(
@@ -1041,6 +1144,7 @@ class MarketBot:
                     final_message,
                     parse_mode="Markdown",
                     disable_web_page_preview=True,
+                    reply_markup=_quick_action_keyboard(quick_symbol),
                 )
 
         except asyncio.TimeoutError:
@@ -1168,13 +1272,107 @@ class MarketBot:
                     f"{format_price(max(highs), symbol)}"
                 )
 
+        # Level kunci instan dari OHLCV (pivot + fibonacci + bias EMA) — dihitung
+        # lokal, tanpa AI & tanpa biaya: jawaban harga langsung punya konteks S/R.
+        quick = ""
+        try:
+            ind = compute_indicators(ohlcv)
+            if ind:
+                quick_lines = []
+                rsi = ind.get("rsi")
+                if rsi is not None:
+                    zone = "overbought" if rsi > 70 else "oversold" if rsi < 30 else "netral"
+                    quick_lines.append(f"⚡ RSI(14): {rsi:.1f} ({zone})")
+                ema20 = ind.get("ema_20")
+                ema50 = ind.get("ema_50")
+                if ema20 and ema50:
+                    bias = "Bullish" if ema20 > ema50 else "Bearish"
+                    quick_lines.append(f"📈 Bias: {bias} (EMA20 {'>' if ema20 > ema50 else '<'} EMA50)")
+                levels = format_key_levels(ind)
+                if levels:
+                    quick_lines.append(levels)
+                if quick_lines:
+                    quick = "\n\n🔑 *Quick Levels:*\n" + "\n".join(quick_lines)
+        except Exception as e:
+            logger.debug(f"Quick levels skipped for {symbol}: {e}")
+
         return (
             f"💱 *{display_name}* — Harga Terkini\n"
             f"{arrow} Harga: *{format_price(price, symbol)}* ({change_str})"
-            f"{range_str}\n\n"
+            f"{range_str}{quick}\n\n"
             f"⚡ Jawaban instan dari data pasar (delay 15-20 mnt).\n"
             f"💡 Kirim \"analisis {display_name.lower()}\" untuk analisis lengkap."
         )
+
+    async def _build_quick_levels_text(self, symbol: str, asset_label: str) -> Optional[str]:
+        """Level S/R & target dari data lokal (tanpa AI) untuk tombol aksi cepat."""
+        try:
+            ohlcv = await asyncio.to_thread(
+                self.market.get_ohlcv_history, symbol, period="3mo", interval="1d", limit=60
+            )
+        except Exception as e:
+            logger.warning(f"Quick levels fetch failed for {symbol}: {e}")
+            return None
+        if not ohlcv:
+            return f"❌ Data *{asset_label}* tidak tersedia saat ini."
+
+        ind = compute_indicators(ohlcv)
+        lines = [f"🔑 *LEVEL KUNCI {asset_label.upper()}*"]
+        price = ind.get("current_price")
+        if price is not None:
+            lines.append(f"💰 Harga: {format_price(price, symbol)}")
+        rsi = ind.get("rsi")
+        if rsi is not None:
+            zone = "overbought" if rsi > 70 else "oversold" if rsi < 30 else "netral"
+            lines.append(f"⚡ RSI(14): {rsi:.1f} ({zone})")
+        levels = format_key_levels(ind)
+        if levels:
+            lines.append(levels)
+        else:
+            lines.append("ℹ️ Data belum cukup untuk menghitung level kunci.")
+        return (
+            "\n".join(lines)
+            + f"\n\n💡 Lanjut tanya: \"analisis teknikal {asset_label.lower()}\" untuk ulasan lengkap."
+        )
+
+    async def _build_scenario_followup(self, user_id: int, symbol: str, asset_label: str) -> Optional[str]:
+        """Analisis skenario (bull/bear/base) memakai konteks percakapan user."""
+        question = f"Berikan analisis skenario (Bullish/Bearish/Base dengan probabilitas total 100%) untuk {asset_label}."
+        history_text = format_history(user_id)
+        try:
+            ohlcv = await asyncio.to_thread(
+                self.market.get_ohlcv_history, symbol, period="3mo", interval="1d", limit=60
+            )
+        except Exception as e:
+            logger.warning(f"Scenario fetch failed for {symbol}: {e}")
+            ohlcv = None
+
+        if self.analysis_director and ENABLE_MULTI_AGENT:
+            try:
+                result = await self.analysis_director.analyze(
+                    question=question,
+                    market_data_ohlcv=ohlcv or None,
+                    conversation_history=history_text,
+                )
+                content = strip_markdown_asterisks(_strip_provider_prefix(result.final_response or ""))
+                if len(content) > 50:
+                    add_exchange(user_id, question, content)
+                    return f"{content}{DISCLAIMER}"
+            except Exception as e:
+                logger.warning(f"Scenario follow-up (multi-agent) failed: {e}")
+
+        # Fallback: single-prompt (tanpa multi-agent)
+        indicators_str = format_indicators_for_prompt(compute_indicators(ohlcv)) if ohlcv else "Data tidak tersedia."
+        prompt = (
+            f"Berikan analisis skenario (Bullish/Bearish/Base dengan probabilitas total 100%) "
+            f"untuk {asset_label}.\n\n"
+            f"{history_text}\n\n"
+            f"DATA INDIKATOR:\n{indicators_str}"
+        )
+        answer = await asyncio.to_thread(self.ai.generate, prompt, max_retries=3, use_cache=True)
+        content = strip_markdown_asterisks(_strip_provider_prefix(answer))
+        add_exchange(user_id, question, content)
+        return f"{content}{DISCLAIMER}"
 
     def _format_market_data(self, data: Dict) -> str:
         """Format data market untuk dimasukkan ke prompt."""
@@ -1189,8 +1387,13 @@ class MarketBot:
             parts.append(f"{arrow} Harga: {format_price(price, data.get('symbol', ''))} ({change_str})")
 
         if ohlcv:
-            parts.append(f"📈 High 5d: {ohlcv[-1].get('high', 'N/A')}")
-            parts.append(f"📉 Low 5d: {ohlcv[-1].get('low', 'N/A')}")
+            # Rentang 5 sesi SEBENARNYA (bukan bar terakhir) — dari window 5 bar
+            window = ohlcv[-5:]
+            highs = [d.get("high") for d in window if d.get("high") is not None]
+            lows = [d.get("low") for d in window if d.get("low") is not None]
+            if highs and lows:
+                parts.append(f"📈 High 5d: {max(highs)}")
+                parts.append(f"📉 Low 5d: {min(lows)}")
 
         if data.get("high_52w"):
             parts.append(f"🏆 High 52w: {data['high_52w']}")
@@ -1411,6 +1614,78 @@ JAWABAN:"""
                 await query.message.reply_text(
                     "⚠️ Kamu belum terdaftar sebagai subscriber Morning Brief."
                 )
+
+        elif data.startswith("qa:"):
+            # ===== QUICK ACTIONS — memakai konteks multi-turn user =====
+            # Callback_data: "qa:sr", "qa:scenario", "qa:clear", atau
+            # "qa:<aksi>:<simbol>" (simbol ter-embed agar tombol lama tetap
+            # bekerja untuk instrumen yang benar walau konteks sudah berubah).
+            parts = data.split(":", 2)
+            action = parts[1] if len(parts) > 1 else ""
+            embedded_symbol = parts[2] if len(parts) > 2 else None
+            user_id = query.from_user.id
+
+            # Buang tombol segera (aksi sedang diproses)
+            try:
+                await query.edit_message_reply_markup(None)
+            except Exception:
+                pass
+
+            if action == "clear":
+                clear(user_id)
+                await query.message.reply_text(
+                    "🧹 *Konteks percakapan dibersihkan.* Mulai dari nol! 😊",
+                    parse_mode="Markdown",
+                )
+                return
+
+            # Simbol: dari tombol (jika ter-embed), else dari konteks percakapan
+            if embedded_symbol:
+                symbol = embedded_symbol
+                display_label = ChartGenerator._get_display_name(symbol)
+            else:
+                display_label = get_context(user_id).get("asset_focus")
+                if not display_label:
+                    await query.message.reply_text(
+                        "ℹ️ Belum ada konteks aset. Tanyakan dulu, misalnya: "
+                        "\"analisis teknikal eurusd\" atau \"harga gold\".\n\n"
+                        "Setelah itu tombol aksi cepat ini bisa dipakai. 👍",
+                        parse_mode="Markdown",
+                    )
+                    return
+                symbol = label_to_symbol(display_label)
+                if not symbol:
+                    await query.message.reply_text(
+                        f"ℹ️ Instrumen *{display_label}* belum mendukung aksi cepat ini.",
+                        parse_mode="Markdown",
+                    )
+                    return
+
+            if action == "sr":
+                text = await self._build_quick_levels_text(symbol, display_label)
+            elif action == "scenario":
+                try:
+                    await context.bot.send_chat_action(
+                        chat_id=update.effective_chat.id, action="typing"
+                    )
+                except Exception:
+                    pass
+                text = await self._build_scenario_followup(user_id, symbol, display_label)
+            else:
+                text = None
+
+            if text:
+                await query.message.reply_text(
+                    text,
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True,
+                )
+            else:
+                await query.message.reply_text(
+                    "❌ Gagal memuat data. Silakan coba lagi sebentar lagi.",
+                    parse_mode="Markdown",
+                )
+            return
 
         elif data == "help":
             await safe_edit_message_text(

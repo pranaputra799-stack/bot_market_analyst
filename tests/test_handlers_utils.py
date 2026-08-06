@@ -2,7 +2,12 @@
 
 import unittest
 
-from bot.handlers import split_long_text, strip_markdown_asterisks, TG_MAX_MESSAGE_CHARS
+from bot.handlers import (
+    split_long_text,
+    strip_markdown_asterisks,
+    label_to_symbol,
+    TG_MAX_MESSAGE_CHARS,
+)
 
 
 class TestSplitLongText(unittest.TestCase):
@@ -31,6 +36,55 @@ class TestSplitLongText(unittest.TestCase):
         self.assertIn("CCC", joined)
         for c in chunks:
             self.assertLessEqual(len(c), TG_MAX_MESSAGE_CHARS)
+
+
+class TestSanitizeText(unittest.TestCase):
+    """sanitize_text harus mengganti kontrol char dengan spasi, bukan menghapus
+    (agar kata tidak menempel: 'gold\\nanalysis' → 'gold analysis')."""
+
+    def test_newlines_replaced_not_concatenated(self):
+        from utils.validators import sanitize_text
+
+        self.assertEqual(
+            sanitize_text("kenapa gold naik\napa penyebabnya?"),
+            "kenapa gold naik apa penyebabnya?",
+        )
+
+    def test_tabs_replaced(self):
+        from utils.validators import sanitize_text
+
+        self.assertEqual(sanitize_text("harga\tgold"), "harga gold")
+
+    def test_truncation(self):
+        from utils.validators import sanitize_text
+
+        out = sanitize_text("x" * 600)
+        self.assertLessEqual(len(out), 500)
+
+
+class TestLabelToSymbol(unittest.TestCase):
+    """Label fokus aset (dari conversation memory) → simbol Yahoo Finance."""
+
+    def test_pair_labels(self):
+        self.assertEqual(label_to_symbol("EUR/USD"), "EURUSD=X")
+        self.assertEqual(label_to_symbol("USD/JPY"), "USDJPY=X")
+        self.assertEqual(label_to_symbol("USD/IDR"), "USDIDR=X")
+        self.assertEqual(label_to_symbol("gbp/usd"), "GBPUSD=X")  # case-insensitive
+
+    def test_special_labels(self):
+        self.assertEqual(label_to_symbol("XAU/USD (Gold)"), "GC=F")
+        self.assertEqual(label_to_symbol("XAG/USD (Silver)"), "SI=F")
+        self.assertEqual(label_to_symbol("BTC/USD (Bitcoin)"), "BTC-USD")
+        self.assertEqual(label_to_symbol("ETH/USD (Ethereum)"), "ETH-USD")
+        self.assertEqual(label_to_symbol("DXY (Dollar Index)"), "DX-Y.NYB")
+        self.assertEqual(label_to_symbol("S&P 500"), "^GSPC")
+        self.assertEqual(label_to_symbol("NASDAQ"), "^IXIC")
+        self.assertEqual(label_to_symbol("VIX"), "^VIX")
+
+    def test_invalid_labels(self):
+        self.assertIsNone(label_to_symbol(None))
+        self.assertIsNone(label_to_symbol(""))
+        self.assertIsNone(label_to_symbol("saham"))
 
 
 class TestStripMarkdownAsterisks(unittest.TestCase):
