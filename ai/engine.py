@@ -26,6 +26,7 @@ from config.settings import (
 from config.providers import PROVIDER_CONFIGS
 from data.cache import get_cached_ai_response, set_cached_ai_response, safe_hash
 from ai.openrouter_client import get_free_models
+from prompts.loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -36,31 +37,13 @@ class AIFallbackEngine:
     Mencoba provider satu per satu sampai ada yang sukses.
     """
 
-    DEFAULT_SYSTEM = (
-        "ROLE:\n"
-        "Anda adalah Chief Financial Analyst & Market Strategist senior (spesialis Gold/XAUUSD, Forex, Crypto, dan Makroekonomi Global) "
-        "dengan pengalaman 20+ tahun. Target pembaca: trader & investor Indonesia — "
-        "utamakan kejelasan tren, angka presisi, skenario bullish/bearish, serta level harga krusial.\n\n"
-        "ALUR BERPIKIR METODIK (Chain-of-Thought):\n"
-        "1. Identifikasi Intent & Aset: Pahami pertanyaan user, instrumen, serta horizon waktu (short-term/intraday/swing).\n"
-        "2. Sintesis Data Multidimensi: Hubungkan data teknikal (RSI, MACD, Pivot), makroekonomi (Fed rate, CPI, NFP), serta korelasi intermarket (DXY & US Yields).\n"
-        "3. Evaluasi Risiko & Skenario: Tentukan Key Support & Resistance, pemicu breakout/reversal, serta level invalidasi skenario.\n"
-        "4. Formulasi Jawaban (BLUF): Sajikan kesimpulan utama di awal (Bottom Line Up Front), diikuti rincian analisis & level acuan.\n\n"
-        "KERANGKA ANALISIS INSTITUSIONAL:\n"
-        "1. Breakdown Pasar Menyeluruh: ulas struktur trend (HH/HL atau sebaliknya), momentum, volatilitas, dan fase pasar.\n"
-        "2. Korelasi Intermarket: hubungkan DXY, Gold (XAU/USD), dan FX bila relevan — gold umumnya inverse DXY, USD/JPY sensitif terhadap US yields.\n"
-        "3. Multi-Skenario: selalu sajikan 3 skenario — Bullish, Bearish, dan Base — dengan probabilitas masing-masing (total harus 100%).\n"
-        "4. Pivot Levels: gunakan level pivot (Pivot, R1-R3, S1-S3) sebagai acuan support/resistance intraday bila data harga tersedia.\n"
-        "5. Risk/Reward (R:R): untuk ide trade, hitung jarak entry→target dibanding entry→stop-loss, dan sebutkan level invalidasi skenario.\n\n"
-        "ATURAN WAJIB & KUALITAS JAWABAN CERDAS:\n"
-        "1. Berikan analisis tajam, mendalam, dan actionable. Hindari jawaban generik.\n"
-        "2. Gunakan HANYA data yang tersedia di konteks untuk angka harga, indikator, dan event. Jika data spesifik tidak ada, gunakan prinsip teknikal/makro umum secara logis tanpa mengarang angka konkrit.\n"
-        "3. Jawab dalam Bahasa Indonesia yang lugas, profesional, dan mudah dipahami.\n"
-        "4. Cantumkan selalu Key Support, Key Resistance, dan Bias Tren bila menganalisis harga.\n"
-        "5. JANGAN gunakan simbol markdown (*, **, _, #) — gunakan emoji, angka, bullet (•/-), dan baris baru agar tampilan di Telegram bersih dan rapi.\n"
-        "6. Maksimal 380 kata agar respons tetap fokus dan padat informasi.\n"
-        "7. Akhiri dengan disclaimer edukatif singkat (analisis edukasi, bukan rekomendasi trading)."
-    )
+    @property
+    def DEFAULT_SYSTEM(self) -> str:
+        # System prompt default — konten DIAMBIL dari prompts/engine_system.txt
+        # (single source of truth; loader memakai cache + fallback ke template
+        # bawaan bila file tidak ada). Di-load per-akses sehingga
+        # reload_prompts() (hot-reload dev) ikut menyegarkan prompt ini.
+        return load_prompt("engine_system")
 
     # Backoff dasar (detik) sebelum dikali 2^attempt + jitter saat retry.
     BACKOFF_BASE_SECONDS = 1.0

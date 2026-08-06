@@ -49,6 +49,7 @@ from config.settings import (
     ECONOMIC_ALERT_DIGEST_HOUR,
     ECONOMIC_ALERT_DIGEST_MINUTE,
     ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES,
+    PRICE_ALERT_CHECK_MINUTES,
     BOT_USERNAME,
     BOT_NAME,
     PORT,
@@ -100,6 +101,7 @@ async def post_init(application: Application):
         BotCommand("sentiment", "🧠 Sentimen pasar"),
         BotCommand("calendar", "📅 Kalender Ekonomi"),
         BotCommand("alert", "🔔 Notifikasi event ekonomi"),
+        BotCommand("pa", "🎯 Alert harga (target)"),
         BotCommand("status", "✅ Status sistem & API"),
         BotCommand("clear", "🧹 Bersihkan konteks"),
         BotCommand("chart", "📈 Grafik harga"),
@@ -140,6 +142,19 @@ async def event_reminder_callback(context):
     bot_instance = context.application.bot_data.get("market_bot")
     if bot_instance:
         await bot_instance.check_event_reminders(context.application)
+
+
+async def price_alert_callback(context):
+    """
+    Callback untuk mengecek alert harga per-user (/pa).
+    Dipanggil berkala setiap PRICE_ALERT_CHECK_MINUTES menit.
+    """
+    bot_instance = context.application.bot_data.get("market_bot")
+    if bot_instance:
+        try:
+            await bot_instance.check_price_alerts(context.application)
+        except Exception as e:
+            logger.warning(f"Price alert check failed: {e}")
 
 
 async def cache_cleanup_callback(context):
@@ -227,6 +242,19 @@ def setup_scheduler(application: Application, bot: MarketBot):
                 f"Economic event reminders scheduled every {ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES} minutes"
             )
 
+        # ===== Price Alerts =====
+        # Alert harga per-user (/pa) diperiksa berkala; lebih cepat dari interval
+        # event reminder karena harga bergerak terus.
+        application.job_queue.run_repeating(
+            price_alert_callback,
+            interval=timedelta(minutes=PRICE_ALERT_CHECK_MINUTES),
+            first=60,  # Mulai 60 detik setelah start
+            name="price_alerts",
+        )
+        logger.info(
+            f"Price alerts scheduled every {PRICE_ALERT_CHECK_MINUTES} minutes"
+        )
+
         # Bersihkan cache kedaluwarsa (memori + Supabase) setiap 10 menit
         application.job_queue.run_repeating(
             cache_cleanup_callback,
@@ -253,6 +281,7 @@ def register_handlers(application: Application, bot: MarketBot):
     application.add_handler(CommandHandler("sentiment", bot.sentiment_command))
     application.add_handler(CommandHandler("calendar", bot.calendar_command))
     application.add_handler(CommandHandler("alert", bot.alert_command))
+    application.add_handler(CommandHandler("pa", bot.price_alert_command))
     application.add_handler(CommandHandler("chart", bot.chart_command))
     application.add_handler(CommandHandler("overview", bot.overview_command))
     application.add_handler(CommandHandler("subscribe", bot.subscribe_command))

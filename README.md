@@ -13,6 +13,7 @@ Dibuat untuk trader retail Indonesia — semua jawaban dalam Bahasa Indonesia, b
 - **Kalender Ekonomi** 📅 — Jadwal rilis BLS/Fed real-time via FRED, dikonversi ke WIB, lengkap dengan Forecast/Previous/Actual
 - **Morning Brief** 🌅 — Ringkasan pasar otomatis setiap pagi (bisa dilanggan per-user)
 - **Alert Event Ekonomi** 🔔 — Digest harian + reminder sebelum event high-impact (NFP, CPI, FOMC)
+- **Alert Harga** 🎯 — Pasang target harga per instrumen (`/pa eurusd 1.0900`), bot mengirim notifikasi saat tersentuh
 - **Sentimen Pasar** 🧠 — Skor sentimen berbasis berita (Finnhub + lexicon + LLM)
 - **Grafik Harga Lokal** 📈 — Candlestick/line chart digambar langsung di server (matplotlib), tanpa layanan eksternal
 - **Error Tracking** (opsional) — Sentry, aktif otomatis jika `SENTRY_DSN` diisi
@@ -75,6 +76,7 @@ prompt agent multi-agent (sebelumnya inline di `analysis/prompts.py`):
 | `confidence_system.txt` / `confidence_template.txt` | Agent Confidence |
 | `risk_system.txt` / `risk_template.txt` | Agent Risk Gates |
 | `final_synthesis_template.txt` | Sintesis jawaban akhir multi-agent |
+| `engine_system.txt` | System prompt default AI engine |
 
 **Edit file `.txt` → perilaku bot berubah tanpa mengubah kode** (restart bot, atau
 panggil `prompts.loader.reload_prompts()` di runtime untuk dev hot-reload).
@@ -198,6 +200,7 @@ Test mencakup logika murni (tanpa network): sentiment analyzer, signal engine, s
 | `/sentiment` | Sentimen pasar (contoh: `/sentiment eurusd`) |
 | `/calendar` | Kalender ekonomi high-impact bulan ini |
 | `/alert on\|off` | Notifikasi event ekonomi otomatis |
+| `/pa <simbol> <harga>` | 🎯 Alert harga — notifikasi saat harga menyentuh target (contoh: `/pa eurusd 1.0900`; kelola: `/pa list`, `/pa del <id>`) |
 | `/chart <simbol>` | Grafik harga (contoh: `/chart gold`, `/chart eurusd`) |
 | `/overview` | Ringkasan instan semua instrumen utama (tanpa AI) |
 | `/status` | Status sistem, AI provider, dan data source |

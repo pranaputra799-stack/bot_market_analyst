@@ -1,11 +1,14 @@
 """Unit tests untuk utilitas di bot/handlers.py (split_long_text, strip asterisks)."""
 
+import asyncio
 import unittest
 
 from bot.handlers import (
+    MarketBot,
     split_long_text,
     strip_markdown_asterisks,
     label_to_symbol,
+    _quick_action_keyboard,
     TG_MAX_MESSAGE_CHARS,
 )
 
@@ -85,6 +88,219 @@ class TestLabelToSymbol(unittest.TestCase):
         self.assertIsNone(label_to_symbol(None))
         self.assertIsNone(label_to_symbol(""))
         self.assertIsNone(label_to_symbol("saham"))
+
+
+class TestDetectPairs(unittest.TestCase):
+    """_detect_pairs harus mengenali pair dengan & tanpa garis miring."""
+
+    def _bot(self):
+        return MarketBot.__new__(MarketBot)
+
+    def test_slash_form(self):
+        bot = self._bot()
+        self.assertEqual(bot._detect_pairs("analisis eur/usd"), [("eur/usd", "EURUSD=X")])
+
+    def test_slashless_form(self):
+        bot = self._bot()
+        detected = bot._detect_pairs("analisis eurusd")
+        self.assertEqual(detected, [("eur/usd", "EURUSD=X")])
+
+    def test_slashless_with_space(self):
+        bot = self._bot()
+        self.assertEqual(bot._detect_pairs("usd jpy sekarang"), [("usd/jpy", "USDJPY=X")])
+
+    def test_multiple_pairs(self):
+        bot = self._bot()
+        detected = bot._detect_pairs("bandingkan eurusd dan xauusd")
+        symbols = [s for _, s in detected]
+        self.assertIn("EURUSD=X", symbols)
+        self.assertIn("GC=F", symbols)
+
+    def test_no_pair(self):
+        bot = self._bot()
+        self.assertEqual(bot._detect_pairs("apa itu inflasi?"), [])
+
+
+class TestQuickActionKeyboard(unittest.TestCase):
+    def test_chart_button_with_symbol(self):
+        kb = _quick_action_keyboard("EURUSD=X")
+        callbacks = [
+            btn.callback_data
+            for row in kb.inline_keyboard
+            for btn in row
+        ]
+        self.assertIn("qa:chart:EURUSD=X", callbacks)
+        self.assertIn("qa:sr:EURUSD=X", callbacks)
+        self.assertIn("qa:scenario:EURUSD=X", callbacks)
+
+    def test_chart_button_without_symbol(self):
+        kb = _quick_action_keyboard()
+        callbacks = [
+            btn.callback_data
+            for row in kb.inline_keyboard
+            for btn in row
+        ]
+        self.assertIn("qa:chart", callbacks)
+
+
+class TestPriceAlertHelpers(unittest.TestCase):
+    def test_parse_valid(self):
+        parsed = MarketBot._parse_price_alert_args("eurusd 1.0900")
+        self.assertIsNotNone(parsed)
+        symbol, display, target = parsed
+        self.assertEqual(symbol, "EURUSD=X")
+        self.assertEqual(target, 1.09)
+        self.assertIn("EUR", display)
+
+    def test_parse_gold_and_comma_decimal(self):
+        # Koma diikuti tepat 3 digit = pemisah ribuan (gaya Eropa)
+        symbol, _, target = MarketBot._parse_price_alert_args("gold 2,350")
+        self.assertEqual(symbol, "GC=F")
+        self.assertEqual(target, 2350.0)
+
+    def test_parse_number_formats(self):
+        # Titik diikuti 3 digit = ribuan (gaya Indonesia "2.350" = 2350)
+        _, _, t1 = MarketBot._parse_price_alert_args("gold 2.350")
+        self.assertEqual(t1, 2350.0)
+        # Titik dengan 4 digit = desimal (kuotasi forex "1.0900" = 1.09)
+        _, _, t2 = MarketBot._parse_price_alert_args("eurusd 1.0900")
+        self.assertEqual(t2, 1.09)
+        # Koma desimal gaya Indonesia "1,09" = 1.09
+        _, _, t3 = MarketBot._parse_price_alert_args("eurusd 1,09")
+        self.assertEqual(t3, 1.09)
+        # Ribuan bertingkat
+        _, _, t4 = MarketBot._parse_price_alert_args("btc 100,000")
+        self.assertEqual(t4, 100000.0)
+        # Nilai di bawah 1 selalu desimal walau ada 3 digit di belakang
+        _, _, t5 = MarketBot._parse_price_alert_args("gold 0,500")
+        self.assertEqual(t5, 0.5)
+        _, _, t6 = MarketBot._parse_price_alert_args("gold 0.500")
+        self.assertEqual(t6, 0.5)
+        # Kedua pemisah: titik ribuan + koma desimal (gaya Indonesia)
+        _, _, t7 = MarketBot._parse_price_alert_args("gold 2.350,50")
+        self.assertEqual(t7, 2350.5)
+        # Kedua pemisah: koma ribuan + titik desimal (gaya AS)
+        _, _, t8 = MarketBot._parse_price_alert_args("btc 1,000.50")
+        self.assertEqual(t8, 1000.5)
+
+    def test_parse_invalid(self):
+        self.assertIsNone(MarketBot._parse_price_alert_args("eurusd"))       # tanpa harga
+        self.assertIsNone(MarketBot._parse_price_alert_args("1.0900"))       # tanpa simbol
+        self.assertIsNone(MarketBot._parse_price_alert_args("eurusd abc"))   # harga bukan angka
+        self.assertIsNone(MarketBot._parse_price_alert_args(""))
+
+    def test_evaluate_above_triggers(self):
+        alerts = [{"symbol": "EURUSD=X", "target": 1.10, "direction": "above", "id": 1}]
+        triggered, remaining = MarketBot._evaluate_price_alerts(alerts, {"EURUSD=X": 1.1050})
+        self.assertEqual(len(triggered), 1)
+        self.assertEqual(triggered[0]["current_price"], 1.1050)
+        self.assertEqual(remaining, [])
+
+    def test_evaluate_below_triggers(self):
+        alerts = [{"symbol": "GC=F", "target": 2300.0, "direction": "below", "id": 2}]
+        triggered, remaining = MarketBot._evaluate_price_alerts(alerts, {"GC=F": 2295.0})
+        self.assertEqual(len(triggered), 1)
+        self.assertEqual(remaining, [])
+
+    def test_evaluate_not_crossed_keeps(self):
+        alerts = [{"symbol": "EURUSD=X", "target": 1.10, "direction": "above", "id": 1}]
+        triggered, remaining = MarketBot._evaluate_price_alerts(alerts, {"EURUSD=X": 1.0850})
+        self.assertEqual(triggered, [])
+        self.assertEqual(len(remaining), 1)
+
+    def test_evaluate_missing_price_keeps(self):
+        alerts = [{"symbol": "EURUSD=X", "target": 1.10, "direction": "above", "id": 1}]
+        triggered, remaining = MarketBot._evaluate_price_alerts(alerts, {})
+        self.assertEqual(triggered, [])
+        self.assertEqual(len(remaining), 1)
+
+
+class _FakeMessage:
+    def __init__(self, text):
+        self.text = text
+        self.replies = []
+
+    async def reply_text(self, text, **kwargs):
+        self.replies.append((text, kwargs))
+        return None
+
+
+class _FakeUpdate:
+    def __init__(self, text, user_id=9999, chat_id=777):
+        self.message = _FakeMessage(text)
+        self.effective_user = type("U", (), {"id": user_id})()
+        self.effective_chat = type("C", (), {"id": chat_id})()
+
+
+class _FakeContext:
+    def __init__(self):
+        self.bot_data = {}
+        self.bot = None
+
+
+class TestPriceAlertCommand(unittest.TestCase):
+    """Branch /pa tanpa network: usage, list, clear, del."""
+
+    def _bot(self):
+        return MarketBot.__new__(MarketBot)
+
+    def _run(self, text, ctx=None, user_id=9999):
+        bot = self._bot()
+        ctx = ctx or _FakeContext()
+        asyncio.run(bot.price_alert_command(_FakeUpdate(text, user_id=user_id), ctx))
+        return ctx
+
+    def test_usage(self):
+        upd = _FakeUpdate("/pa")
+        bot = self._bot()
+        asyncio.run(bot.price_alert_command(upd, _FakeContext()))
+        joined = "\n".join(t for t, _ in upd.message.replies)
+        self.assertIn("ALERT HARGA", joined)
+        self.assertIn("/pa eurusd 1.0900", joined)
+
+    def test_empty_list(self):
+        ctx = _FakeContext()
+        bot = self._bot()
+        upd = _FakeUpdate("/pa list")
+        asyncio.run(bot.price_alert_command(upd, ctx))
+        joined = "\n".join(t for t, _ in upd.message.replies)
+        self.assertIn("belum ada", joined.lower())
+        self.assertEqual(ctx.bot_data, {})
+
+    def test_list_clear_del(self):
+        ctx = _FakeContext()
+        # Seed alert milik user 9999 + alert user lain
+        ctx.bot_data["price_alerts"] = [
+            {"id": 1, "user_id": 9999, "chat_id": 777, "symbol": "EURUSD=X",
+             "display_name": "EUR/USD", "target": 1.10, "direction": "above"},
+            {"id": 2, "user_id": 8888, "chat_id": 888, "symbol": "GC=F",
+             "display_name": "XAU/USD (Gold)", "target": 2300.0, "direction": "below"},
+        ]
+        bot = self._bot()
+        upd = _FakeUpdate("/pa list", user_id=9999)
+        asyncio.run(bot.price_alert_command(upd, ctx))
+        joined = "\n".join(t for t, _ in upd.message.replies)
+        self.assertIn("EUR/USD", joined)
+        self.assertNotIn("Gold", joined)  # hanya alert user sendiri
+
+        # del 1 → alert 9999 hilang, alert 8888 tetap
+        upd2 = _FakeUpdate("/pa del 1", user_id=9999)
+        asyncio.run(bot.price_alert_command(upd2, ctx))
+        remaining = ctx.bot_data["price_alerts"]
+        self.assertEqual([a["id"] for a in remaining], [2])
+
+        # clear → hanya alert milik user 9999 yang dihapus (isolasi per-user,
+        # sama seperti list/del — alert user lain tidak boleh tersentuh)
+        upd3 = _FakeUpdate("/pa clear", user_id=9999)
+        asyncio.run(bot.price_alert_command(upd3, ctx))
+        remaining = ctx.bot_data["price_alerts"]
+        self.assertEqual([a["id"] for a in remaining], [2])
+
+        # user 8888 masih bisa melihat alert-nya sendiri setelah clear user lain
+        upd4 = _FakeUpdate("/pa list", user_id=8888)
+        asyncio.run(bot.price_alert_command(upd4, ctx))
+        joined4 = "\n".join(t for t, _ in upd4.message.replies)
+        self.assertIn("Gold", joined4)
 
 
 class TestStripMarkdownAsterisks(unittest.TestCase):

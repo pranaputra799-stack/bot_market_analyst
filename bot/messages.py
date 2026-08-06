@@ -97,6 +97,7 @@ Cukup kirim pertanyaan tentang pasar keuangan, dan saya akan menjawab dengan dat
 /calendar - 📅 Kalender Ekonomi high-impact bulan ini
 /overview - 🌍 Overview semua instrumen utama (harga instan)
 /alert - 🔔 Notifikasi event ekonomi otomatis (/alert on)
+/pa - 🎯 Alert harga (contoh: /pa eurusd 1.0900)
 /chart - 📈 Grafik harga (contoh: /chart eurusd)
 /clear - 🧹 Bersihkan konteks percakapan
 /status - ✅ Cek status API & sistem

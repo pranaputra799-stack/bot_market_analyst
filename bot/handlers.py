@@ -341,12 +341,14 @@ def _quick_action_keyboard(symbol: Optional[str] = None):
     tetap bekerja untuk instrumen yang benar walau konteks sudah berubah."""
     sr_data = f"qa:sr:{symbol}" if symbol else "qa:sr"
     scenario_data = f"qa:scenario:{symbol}" if symbol else "qa:scenario"
+    chart_data = f"qa:chart:{symbol}" if symbol else "qa:chart"
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔍 S/R & Target", callback_data=sr_data),
             InlineKeyboardButton("🔮 Skenario", callback_data=scenario_data),
         ],
         [
+            InlineKeyboardButton("📈 Chart", callback_data=chart_data),
             InlineKeyboardButton("🧹 Bersihkan Konteks", callback_data="qa:clear"),
         ],
     ])
@@ -387,6 +389,27 @@ def detect_fast_price_query(text: str):
     if not symbol:
         return None
     return symbol, display_name
+
+
+# ===================== PRICE ALERTS =====================
+# Alert harga per-user: bot memantau harga target dan mengirim notifikasi saat
+# tersentuh. Disimpan di bot_data (in-memory). Diperiksa berkala oleh job
+# scheduler (PRICE_ALERT_CHECK_MINUTES).
+PRICE_ALERT_MAX_PER_USER = 10
+PRICE_ALERT_MAX_TOTAL = 150
+
+PRICE_ALERT_USAGE = (
+    "🔔 *ALERT HARGA*\n\n"
+    "Bot akan mengirim notifikasi saat harga menyentuh target yang kamu pasang.\n\n"
+    "Contoh:\n"
+    "`/pa eurusd 1.0900` — notifikasi saat EUR/USD *naik* ke 1.0900\n"
+    "`/pa gold 2350` — notifikasi saat Gold *turun* ke 2350 (di bawah harga sekarang)\n\n"
+    "Kelola:\n"
+    "`/pa list` — daftar alert kamu\n"
+    "`/pa del <id>` — hapus satu alert\n"
+    "`/pa clear` — hapus semua alert kamu\n\n"
+    "⚠️ Alert tersimpan sementara di memori bot — hilang saat bot restart."
+)
 
 
 class MarketBot:
@@ -441,6 +464,10 @@ class MarketBot:
             [
                 InlineKeyboardButton("📈 Chart EUR/USD", callback_data="chart_eurusd"),
                 InlineKeyboardButton("📈 Chart Gold", callback_data="chart_gold"),
+            ],
+            [
+                InlineKeyboardButton("📈 Chart DXY", callback_data="chart_dxy"),
+                InlineKeyboardButton("📈 Chart BTC", callback_data="chart_btc"),
             ],
             [
                 InlineKeyboardButton("🌍 Overview Pasar", callback_data="overview"),
@@ -766,6 +793,287 @@ class MarketBot:
 
         context.bot_data["event_alert_subscribers"] = subscribers
 
+    # ===================== PRICE ALERTS =====================
+
+    async def price_alert_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Kelola alert harga: /pa <simbol> <harga> | /pa list | /pa del <id> | /pa clear.
+        Arah trigger otomatis ditentukan dari harga saat ini vs target.
+        """
+        text = update.message.text or ""
+        arg = text.replace("/pa", "", 1).strip()
+        chat_id = update.effective_chat.id
+        user_id = update.effective_user.id
+
+        alerts = list(context.bot_data.get("price_alerts", []))
+
+        if not arg or arg.lower() in ("help", "bantuan"):
+            await safe_reply_text(update.message, PRICE_ALERT_USAGE, parse_mode="Markdown")
+            return
+
+        if arg.lower() == "list":
+            mine = [a for a in alerts if a.get("user_id") == user_id]
+            if not mine:
+                await safe_reply_text(
+                    update.message,
+                    "🔔 *Alert harga:* belum ada.\n\nContoh: `/pa eurusd 1.0900`",
+                    parse_mode="Markdown",
+                )
+                return
+            lines = ["🔔 *Alert harga kamu:*"]
+            for a in mine:
+                direction = "naik ke" if a.get("direction") == "above" else "turun ke"
+                lines.append(
+                    f"• `{a['id']}` — {a.get('display_name', a.get('symbol'))} → {direction} "
+                    f"{format_price(a['target'], a.get('symbol', ''))}"
+                )
+            lines.append("\nHapus: `/pa del <id>`")
+            await safe_reply_text(update.message, "\n".join(lines), parse_mode="Markdown")
+            return
+
+        if arg.lower() == "clear":
+            context.bot_data["price_alerts"] = [
+                a for a in alerts if a.get("user_id") != user_id
+            ]
+            await safe_reply_text(update.message, "🧹 Semua alert harga kamu sudah dihapus.")
+            return
+
+        if arg.lower().startswith("del "):
+            try:
+                alert_id = int(arg.split()[1])
+            except (IndexError, ValueError):
+                await safe_reply_text(
+                    update.message, "Gunakan: `/pa del <id>` (lihat daftar via `/pa list`)."
+                )
+                return
+            before = len(alerts)
+            context.bot_data["price_alerts"] = [
+                a for a in alerts
+                if not (a.get("user_id") == user_id and a.get("id") == alert_id)
+            ]
+            removed = before - len(context.bot_data["price_alerts"])
+            if removed:
+                await safe_reply_text(update.message, f"🗑️ Alert `{alert_id}` dihapus.")
+            else:
+                await safe_reply_text(update.message, f"⚠️ Alert `{alert_id}` tidak ditemukan.")
+            return
+
+        # Tambah alert baru: /pa <simbol> <harga target>
+        parsed = self._parse_price_alert_args(arg)
+        if not parsed:
+            await safe_reply_text(update.message, PRICE_ALERT_USAGE, parse_mode="Markdown")
+            return
+        symbol, display_name, target = parsed
+
+        try:
+            data = await asyncio.to_thread(
+                self.market.get_yahoo_data, symbol, period="1d", interval="1h"
+            )
+        except Exception as e:
+            logger.warning(f"Price alert fetch failed for {symbol}: {e}")
+            data = {}
+        current = data.get("current_price")
+        if current is None or "error" in data:
+            await safe_reply_text(
+                update.message,
+                f"❌ Data harga *{display_name}* tidak tersedia. Coba simbol lain.",
+                parse_mode="Markdown",
+            )
+            return
+
+        mine_count = len([a for a in alerts if a.get("user_id") == user_id])
+        if mine_count >= PRICE_ALERT_MAX_PER_USER:
+            await safe_reply_text(
+                update.message,
+                f"⚠️ Maksimal {PRICE_ALERT_MAX_PER_USER} alert per user. "
+                f"Hapus dulu dengan `/pa del <id>`.",
+                parse_mode="Markdown",
+            )
+            return
+        if len(alerts) >= PRICE_ALERT_MAX_TOTAL:
+            await safe_reply_text(
+                update.message, "⚠️ Kuota alert bot sedang penuh. Coba lagi nanti."
+            )
+            return
+
+        # Arah trigger: harga sekarang < target → tunggu NAIK; sebaliknya → tunggu TURUN
+        direction = "below" if current >= target else "above"
+        alert_id = context.bot_data.get("price_alert_next_id", 1)
+        context.bot_data["price_alert_next_id"] = alert_id + 1
+        alerts.append({
+            "id": alert_id,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "symbol": symbol,
+            "display_name": display_name,
+            "target": target,
+            "direction": direction,
+            "created": time.time(),
+        })
+        context.bot_data["price_alerts"] = alerts
+
+        arrow = "🟢 naik ke" if direction == "above" else "🔴 turun ke"
+        await safe_reply_text(
+            update.message,
+            f"🔔 *Alert harga aktif!*\n\n"
+            f"{display_name} → {arrow} *{format_price(target, symbol)}*\n"
+            f"💱 Harga sekarang: {format_price(current, symbol)}\n\n"
+            f"Saya akan kabari saat target tersentuh. 📣\n"
+            f"Lihat: `/pa list` | Hapus: `/pa del {alert_id}`",
+            parse_mode="Markdown",
+        )
+
+    @staticmethod
+    def _normalize_separators(s: str, sep: str) -> str:
+        """
+        Normalisasi pemisah ribuan/desimal pada string angka.
+
+        - `sep` diikuti tepat 3 digit (dan bagian depan bukan "0.") → pemisah
+          RIBUAN ("2,350" → "2350", "1.234.567" → "1234567").
+        - Selain itu → pemisah DESIMAL ("2,35" → "2.35", "1.0900" → "1.09").
+        """
+        head, _, tail = s.partition(sep)
+        groups = tail.split(sep)
+        all_thousands = (
+            bool(head)
+            and not head.startswith("0")
+            and all(len(g) == 3 for g in groups)
+        )
+        if all_thousands:
+            return s.replace(sep, "")
+        return s.replace(sep, ".")
+
+    @staticmethod
+    def _parse_price_target(raw: str) -> Optional[float]:
+        """
+        Parse angka target harga dengan toleransi format Indonesia & internasional:
+
+        - "2,350"   → 2350.0   (koma diikuti 3 digit = ribuan, gaya Eropa)
+        - "2.350"   → 2350.0   (titik diikuti 3 digit = ribuan, gaya Indonesia)
+        - "1,234,567" → 1234567 (ribuan bertingkat)
+        - "2,35"    → 2.35     (koma desimal gaya Indonesia)
+        - "1.0900"  → 1.09     (titik desimal gaya internasional)
+        - "2.350,50" → 2350.5  (titik ribuan + koma desimal)
+        - "0,500" / "0.500" → 0.5 (nilai di bawah 1 selalu desimal)
+        """
+        s = raw.strip().replace(" ", "").replace("_", "")
+        if not s:
+            return None
+        if "," in s and "." in s:
+            # Kedua pemisah hadir — deteksi mana yang ribuan via aturan 3-digit:
+            # "2.350,50" → 2350.5 (gaya Indonesia) | "1,000.50" → 1000.5 (gaya AS)
+            if MarketBot._sep_is_thousands(s, "."):
+                s = s.replace(".", "").replace(",", ".")
+            else:
+                s = s.replace(",", "").replace(".", ".")
+        elif "," in s:
+            s = MarketBot._normalize_separators(s, ",")
+        elif "." in s:
+            s = MarketBot._normalize_separators(s, ".")
+        try:
+            return float(s)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _sep_is_thousands(s: str, sep: str) -> bool:
+        """True bila `sep` pertama di s bertindak sebagai pemisah RIBUAN
+        (diikuti tepat 3 digit, lalu bukan digit lagi): '.' di "2.350,50",
+        ',' di "1,000.50", tetapi False untuk '.' di "1.0900" (4 digit)."""
+        idx = s.find(sep)
+        if idx < 0:
+            return False
+        tail = s[idx + 1: idx + 4]
+        after = s[idx + 4: idx + 5] if len(s) > idx + 4 else ""
+        return len(tail) == 3 and tail.isdigit() and not after.isdigit()
+
+    @staticmethod
+    def _parse_price_alert_args(arg: str):
+        """Parse '/pa eurusd 1.0900' → (symbol, display_name, target) atau None."""
+        parts = arg.strip().split()
+        if len(parts) < 2:
+            return None
+        target = MarketBot._parse_price_target(parts[-1])
+        if target is None:
+            return None
+        symbol_text = " ".join(parts[:-1])
+        symbol, display_name = ChartGenerator.get_chart_symbol_from_text(f"chart {symbol_text}")
+        if not symbol:
+            return None
+        return symbol, display_name, target
+
+    @staticmethod
+    def _evaluate_price_alerts(alerts: List[Dict], prices: Dict[str, float]):
+        """
+        Evaluasi alert terhadap harga terkini (murni, tanpa I/O — mudah di-test).
+
+        Returns:
+            (triggered, remaining) — triggered berisi alert + harga saat terpicu.
+        """
+        triggered: List[Dict] = []
+        remaining: List[Dict] = []
+        for alert in alerts:
+            price = prices.get(alert.get("symbol"))
+            if price is None:
+                remaining.append(alert)  # harga belum tersedia — cek lagi nanti
+                continue
+            target = alert.get("target")
+            if alert.get("direction") == "above" and price >= target:
+                triggered.append({**alert, "current_price": price})
+            elif alert.get("direction") == "below" and price <= target:
+                triggered.append({**alert, "current_price": price})
+            else:
+                remaining.append(alert)
+        return triggered, remaining
+
+    async def check_price_alerts(self, application: Application):
+        """
+        Job scheduler: cek semua alert harga & kirim notifikasi yang terpenuhi.
+        Dipanggil berkala oleh job 'price_alerts' di main.py.
+        """
+        alerts = list(application.bot_data.get("price_alerts", []))
+        if not alerts:
+            return
+
+        # Ambil harga terkini per simbol unik SECARA PARALEL (data di-cache oleh
+        # data layer; tiap fetch jalan di thread agar tidak memblokir event loop).
+        symbol_list = list({a.get("symbol") for a in alerts if a.get("symbol")})
+        results = await asyncio.gather(
+            *[
+                asyncio.to_thread(
+                    self.market.get_yahoo_data, s, period="1d", interval="1h"
+                )
+                for s in symbol_list
+            ],
+            return_exceptions=True,
+        )
+        prices: Dict[str, float] = {}
+        for symbol, data in zip(symbol_list, results):
+            if isinstance(data, dict):
+                price = data.get("current_price")
+                if price is not None and "error" not in data:
+                    prices[symbol] = float(price)
+            else:
+                logger.warning(f"Price alert check failed for {symbol}: {data}")
+
+        triggered, remaining = self._evaluate_price_alerts(alerts, prices)
+        for alert in triggered:
+            try:
+                emoji = "🟢" if alert["direction"] == "above" else "🔴"
+                msg = (
+                    f"🎯 *ALERT HARGA TERCAPAI!*\n\n"
+                    f"{alert['display_name']} sekarang "
+                    f"{format_price(alert['current_price'], alert['symbol'])} "
+                    f"(target {format_price(alert['target'], alert['symbol'])}).\n\n"
+                    f"{emoji} Kirim `/chart {alert['symbol']}` untuk grafiknya."
+                )
+                await application.bot.send_message(
+                    chat_id=alert["chat_id"], text=msg, parse_mode="Markdown"
+                )
+            except Exception as e:
+                logger.warning(f"Price alert notify failed: {e}")
+        application.bot_data["price_alerts"] = remaining
+
     async def calendar_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler untuk perintah /calendar - Kalender Ekonomi."""
         await context.bot.send_chat_action(
@@ -1047,15 +1355,11 @@ class MarketBot:
                 # Pakai riwayat dalam (60 bar, 3 bulan harian) agar indikator
                 # teknikal (RSI 14, MACD 26, EMA50, Bollinger) punya cukup data
                 # untuk dihitung secara matematis — bukan ditebak LLM.
+                # Simbol sudah terdeteksi di atas (quick_symbol, termasuk
+                # fallback konteks multi-turn user) — pakai ulang, jangan
+                # mendeteksi dua kali.
                 ohlcv_data = None
-                detected_pairs = self._detect_pairs(user_question)
-                if detected_pairs:
-                    pair_symbol = detected_pairs[0][1]
-                else:
-                    # Fallback: deteksi simbol via chart keyword map
-                    # (mencakup "gold", "emas", "bitcoin", "dxy", dll)
-                    _sym, _name = self.chart.get_chart_symbol_from_text(user_question)
-                    pair_symbol = _sym
+                pair_symbol = quick_symbol
                 if pair_symbol:
                     ohlcv_data = await asyncio.to_thread(
                         self.market.get_ohlcv_history, pair_symbol, period="3mo", interval="1d", limit=60
@@ -1147,12 +1451,20 @@ class MarketBot:
                 await safe_reply_text(update.message, msg, parse_mode="Markdown")
 
     def _detect_pairs(self, question: str) -> list:
-        """Detect forex pairs mentioned in question."""
-        question_lower = question.lower()
+        """Detect forex pairs mentioned in question — dengan ATAU tanpa garis miring
+        ('EUR/USD', 'eurusd', maupun 'usd jpy' semuanya dikenali)."""
+        q = question.lower()
         detected = []
         for pair, symbol in YAHOO_SYMBOLS.items():
-            if pair in question_lower:
+            if pair in q:
                 detected.append((pair, symbol))
+        if not detected:
+            # Tanpa slash: "eurusd" / "usd jpy" → cocokkan tanpa spasi & garis miring
+            compact = q.replace(" ", "")
+            for pair, symbol in YAHOO_SYMBOLS.items():
+                key = pair.replace("/", "")
+                if key and key in compact:
+                    detected.append((pair, symbol))
         return detected[:3]
 
     # ===================== LEGACY CONTEXT GATHERING =====================
@@ -1541,6 +1853,12 @@ class MarketBot:
         elif data == "chart_gold":
             await self._send_chart(query, "GC=F", update.effective_chat.id, context)
 
+        elif data == "chart_dxy":
+            await self._send_chart(query, "DX-Y.NYB", update.effective_chat.id, context)
+
+        elif data == "chart_btc":
+            await self._send_chart(query, "BTC-USD", update.effective_chat.id, context)
+
         elif data.startswith("chart_"):
             symbol = data.replace("chart_", "") + "=X"
             await self._send_chart(query, symbol, update.effective_chat.id, context)
@@ -1665,6 +1983,9 @@ class MarketBot:
                 except Exception:
                     pass
                 text = await self._build_scenario_followup(user_id, symbol, display_label)
+            elif action == "chart":
+                await self._send_chart(query, symbol, update.effective_chat.id, context)
+                return
             else:
                 text = None
 

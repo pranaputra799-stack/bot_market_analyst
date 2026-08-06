@@ -88,6 +88,11 @@ ECONOMIC_ALERT_LEAD_HOURS = int(os.getenv("ECONOMIC_ALERT_LEAD_HOURS", "1"))
 # Interval pengecekan reminder (menit)
 ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES = int(os.getenv("ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES", "15"))
 
+# ===================== PRICE ALERTS =====================
+# Alert harga per-user (/pa): interval pengecekan harga target (menit).
+# Lebih kecil = notifikasi lebih cepat, tapi lebih banyak request data.
+PRICE_ALERT_CHECK_MINUTES = int(os.getenv("PRICE_ALERT_CHECK_MINUTES", "3"))
+
 # ===================== BOT SETTINGS =====================
 BOT_USERNAME = os.getenv("BOT_USERNAME", "marketai_analyst_bot")
 BOT_NAME = os.getenv("BOT_NAME", "MarketAI Analyst")
