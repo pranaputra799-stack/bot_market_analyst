@@ -97,6 +97,12 @@ CACHE_TTL_SECONDS = 300  # 5 menit untuk data harga
 CACHE_MACRO_TTL = 3600   # 1 jam untuk data makro
 CACHE_NEWS_TTL = 600     # 10 menit untuk berita
 CACHE_AI_TTL = 600       # 10 menit untuk response AI (pertanyaan identik)
+# TTL riwayat percakapan per-user (conversation memory) — default 24 jam agar
+# follow-up lintas restart tetap punya konteks. Bisa diatur via env
+# MEMORY_TTL_SECONDS (mis. 900 = 15 menit seperti versi awal). Diklem ke
+# rentang wajar 5 menit s.d. 30 hari untuk cegah salah konfigurasi.
+MEMORY_TTL_SECONDS = int(os.getenv("MEMORY_TTL_SECONDS", str(24 * 60 * 60)))
+MEMORY_TTL_SECONDS = max(5 * 60, min(MEMORY_TTL_SECONDS, 30 * 24 * 60 * 60))
 # Batas maksimal entri di memory cache — entri terlama di-evict saat penuh agar
 # RAM proses bot tetap terkendali (0 = tanpa batas).
 CACHE_MAX_ENTRIES = int(os.getenv("CACHE_MAX_ENTRIES", "5000"))

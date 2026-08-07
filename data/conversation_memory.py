@@ -18,8 +18,8 @@ Penyimpanan dua lapis:
   menambah beban RAM proses bot dan tetap ada saat bot restart.
   Aman no-op bila Supabase tidak dikonfigurasi.
 
-Catatan privasi: TTL 15 menit — data otomatis terhapus; tidak ada penyimpanan
-permanen jangka panjang.
+Catatan privasi: riwayat otomatis terhapus setelah MEMORY_TTL_SECONDS (default
+24 jam) — bukan penyimpanan permanen jangka panjang.
 """
 
 import logging
@@ -29,11 +29,14 @@ from typing import Dict, List, Optional
 
 from data.cache import cache, persistent
 from config.providers import YAHOO_SYMBOLS
+from config.settings import MEMORY_TTL_SECONDS
 
 logger = logging.getLogger(__name__)
 
 # ===================== KONFIGURASI =====================
-MEMORY_TTL = 15 * 60        # 15 menit — cukup untuk follow-up, tidak menumpuk
+# 24 jam default (env MEMORY_TTL_SECONDS) — riwayat follow-up bertahan lama,
+# termasuk lintas restart/deploy (tersimpan di app_cache Supabase).
+MEMORY_TTL = MEMORY_TTL_SECONDS
 MAX_ENTRIES = 6             # maksimal pasangan Q&A yang disimpan per user
 # Potong jawaban agar hemat token — cukup panjang agar level/angka kunci dari
 # jawaban sebelumnya (support/resistance/harga) ikut tersimpan, sehingga

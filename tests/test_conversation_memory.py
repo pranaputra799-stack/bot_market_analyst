@@ -19,6 +19,13 @@ class TestConversationMemory(unittest.TestCase):
         cm.clear(999)
         cm.clear(1000)
 
+    def test_memory_ttl_from_settings(self):
+        """TTL riwayat diambil dari settings (default 24 jam = 86400 dtk)."""
+        from config import settings
+
+        self.assertEqual(cm.MEMORY_TTL, settings.MEMORY_TTL_SECONDS)
+        self.assertEqual(settings.MEMORY_TTL_SECONDS, 24 * 60 * 60)
+
     def test_empty_history(self):
         self.assertEqual(cm.get_history(999), [])
         self.assertEqual(cm.format_history(999), "")
