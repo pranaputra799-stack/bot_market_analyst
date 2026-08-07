@@ -4,6 +4,7 @@ Menggunakan python-telegram-bot v20.x.
 Now with multi-agent analysis system from MarketLens.
 """
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -1514,16 +1515,12 @@ class MarketBot:
 
         try:
             # Kalender ekonomi BULAN INI, hanya event high impact
-            events = await self.macro.get_economic_calendar_month()
-            calendar_text = self.macro.format_calendar_text(events, max_events=15, only_high=True)
-
-            message = f"{calendar_text}\n{DISCLAIMER}"
-            await safe_reply_text(
-                update.message,
-                message,
-                parse_mode="Markdown",
-                disable_web_page_preview=True,
-            )
+            # + tombol '📊 Analisis Dampak' untuk event yang tampil
+            message, kb = await self._build_calendar_reply()
+            kwargs = {"parse_mode": "Markdown", "disable_web_page_preview": True}
+            if kb:
+                kwargs["reply_markup"] = kb
+            await safe_reply_text(update.message, message, **kwargs)
         except Exception as e:
             logger.error(f"Calendar error: {e}")
             await safe_reply_text(
@@ -2326,22 +2323,21 @@ class MarketBot:
                 action="typing",
             )
             try:
-                # Kalender ekonomi BULAN INI, hanya event high impact
-                events = await self.macro.get_economic_calendar_month()
-                calendar_text = self.macro.format_calendar_text(events, max_events=15, only_high=True)
-                message = f"{calendar_text}\n{DISCLAIMER}"
-                await safe_edit_message_text(
-                    query,
-                    message,
-                    parse_mode="Markdown",
-                    disable_web_page_preview=True,
-                )
+                # Kalender ekonomi BULAN INI + tombol analisis dampak per event
+                message, kb = await self._build_calendar_reply()
+                kwargs = {"parse_mode": "Markdown", "disable_web_page_preview": True}
+                if kb:
+                    kwargs["reply_markup"] = kb
+                await safe_edit_message_text(query, message, **kwargs)
             except Exception as e:
                 logger.error(f"Calendar callback error: {e}")
                 await safe_edit_message_text(
                     query,
                     "❌ Gagal memuat kalender ekonomi. Silakan coba lagi nanti.",
                 )
+
+        elif data.startswith("aft:"):
+            await self._handle_calendar_aftermath_button(query, data)
 
         elif data == "sentiment":
             await context.bot.send_chat_action(
@@ -3086,21 +3082,167 @@ class MarketBot:
                 f"*{event.get('event')}*.\n\n"
             )
 
+        message = await self._build_aftermath_for_event(event)
+
+        await safe_reply_text(
+            update.message,
+            f"{note}{message}",
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
+
+    # ===================== CALENDAR AFTERMATH BUTTONS =====================
+
+    @staticmethod
+    def _event_short_id(event: Dict) -> str:
+        """ID pendek stabil per event — payload callback tombol kalender (≤64 byte)."""
+        key = MarketBot._aftermath_key(event)
+        return hashlib.md5(key.encode("utf-8")).hexdigest()[:10]
+
+    @staticmethod
+    def _short_event_label(name: str) -> str:
+        """Label tombol pendek untuk nama event yang panjang (mis. 'NFP', 'CPI')."""
+        n = name or ""
+        for kw, short in (
+            ("Non-Farm Payrolls", "NFP"),
+            ("Fed Funds Rate", "FOMC"),
+            ("Unemployment Rate", "UNEMP"),
+            ("Initial Jobless Claims", "CLAIMS"),
+            ("Inflation Rate", "CPI"),
+            ("CPI", "CPI"),
+            ("PPI", "PPI"),
+            ("GDP", "GDP"),
+            ("Retail Sales", "RETAIL"),
+            ("Consumer Confidence", "CONF"),
+            ("Trade Balance", "TRADE"),
+            ("ISM", "ISM"),
+            ("PMI", "PMI"),
+        ):
+            if kw in n:
+                return short
+        # Fallback: potong kata-kata pertama (maks ±14 karakter)
+        words = n.split()
+        if not words:
+            return "EVENT"
+        label = ""
+        for w in words:
+            if len(label) + len(w) + 1 > 14:
+                break
+            label = f"{label} {w}" if label else w
+        return label.upper() or "EVENT"
+
+    @staticmethod
+    def _pick_aftermath_buttons(events: List[Dict], max_buttons: int = 5, window_days: int = 14) -> List[Dict]:
+        """
+        Pilih event untuk tombol '📊 Analisis Dampak' di kalender — hanya yang
+        paling relevan sekarang: rilis dalam window_days terakhir ATAU akan rilis
+        dalam 7 hari ke depan. Diurutkan yang paling dekat dengan waktu sekarang.
+        """
+        now = datetime.now(timezone.utc)
+        lo = now - timedelta(days=window_days)
+        hi = now + timedelta(days=7)
+        picked = []
+        for e in events or []:
+            dt = e.get("_dt_utc")
+            if not dt or dt.tzinfo is None:
+                continue
+            if not (lo <= dt <= hi):
+                continue
+            picked.append((abs((dt - now).total_seconds()), e))
+        picked.sort(key=lambda x: x[0])
+        return [e for _, e in picked[:max_buttons]]
+
+    def _build_calendar_aftermath_buttons(self, events: List[Dict], max_buttons: int = 5) -> Optional[InlineKeyboardMarkup]:
+        """
+        Keyboard '📊 Analisis Dampak' untuk event yang tampil di /calendar
+        (2 tombol per baris). None bila tidak ada event relevan.
+        Hanya event high-impact yang diberi tombol (konsisten dengan matching).
+        """
+        picked = self._pick_aftermath_buttons(
+            [e for e in (events or []) if e.get("impact") == "high"],
+            max_buttons=max_buttons,
+        )
+        if not picked:
+            return None
+        rows: List[List[InlineKeyboardButton]] = []
+        row: List[InlineKeyboardButton] = []
+        used_labels = set()
+        for e in picked:
+            label = self._short_event_label(e.get("event", ""))
+            if label in used_labels:
+                label = f"{label} {len(used_labels) + 1}"  # dedupe (mis. CPI MoM vs CPI YoY)
+            used_labels.add(label)
+            row.append(
+                InlineKeyboardButton(
+                    f"📊 {label}",
+                    callback_data=f"aft:{self._event_short_id(e)}",
+                )
+            )
+            if len(row) == 2:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        return InlineKeyboardMarkup(rows)
+
+    async def _build_aftermath_for_event(self, event: Dict) -> str:
+        """Bangun pesan analisis dampak lengkap untuk satu event (angka + pasar + AI).
+        Tidak pernah raise — fallback ke interpretasi statis bila AI/gagal."""
         try:
             market_line = await self._build_market_line()
-            message = await self._build_aftermath_message(event, market_line, manual=True)
+            return await self._build_aftermath_message(event, market_line, manual=True)
         except Exception as e:
-            logger.warning(f"Aftermath manual gagal untuk {event.get('event')}: {e}")
-            message = (
+            logger.warning(f"Aftermath gagal untuk {event.get('event')}: {e}")
+            return (
                 f"🎯 *ANALISIS DAMPAK EVENT*\n{event.get('country_emoji', '')} "
                 f"*{event.get('event', '')}*\n🕐 {event.get('time', '')}\n\n"
                 f"{self._format_event_numbers(event)}\n\n"
                 f"📰 {self._static_event_interpretation(event)}\n\n{DISCLAIMER}"
             )
 
+    async def _build_calendar_reply(self) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
+        """Bangun isi pesan /calendar + tombol analisis dampak (dipakai /calendar
+        dan tombol menu kalender)."""
+        events = await self.macro.get_economic_calendar_month()
+        calendar_text = self.macro.format_calendar_text(events, max_events=15, only_high=True)
+        message = f"{calendar_text}\n{DISCLAIMER}"
+        displayed = [e for e in events if e.get("impact") == "high"][:15]
+        kb = self._build_calendar_aftermath_buttons(displayed)
+        return message, kb
+
+    async def _handle_calendar_aftermath_button(self, query, data: str):
+        """Tombol '📊 Analisis Dampak' pada pesan /calendar → kirim analisis event.
+        Mencocokkan ulang via ID pendek (kalender di-cache, jadi stabil)."""
+        target = data.split(":", 1)[1] if ":" in data else ""
+        if not target:
+            await safe_edit_message_text(query, "⚠️ Tombol tidak valid. Kirim /calendar lagi.")
+            return
+        try:
+            events = await self.macro.get_economic_calendar_month()
+        except Exception as e:
+            logger.error(f"Aftermath button calendar fetch error: {e}")
+            await safe_edit_message_text(
+                query, "❌ Gagal memuat kalender ekonomi. Silakan coba lagi nanti."
+            )
+            return
+        event = None
+        for e in events or []:
+            if e.get("impact") != "high":
+                continue
+            if self._event_short_id(e) == target:
+                event = e
+                break
+        if event is None:
+            await safe_edit_message_text(
+                query,
+                "⚠️ Event tidak ditemukan — kalender mungkin sudah berganti bulan. "
+                "Kirim /calendar untuk daftar terbaru.",
+            )
+            return
+        message = await self._build_aftermath_for_event(event)
         await safe_reply_text(
-            update.message,
-            f"{note}{message}",
+            query.message,
+            message,
             parse_mode="Markdown",
             disable_web_page_preview=True,
         )
