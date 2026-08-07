@@ -3147,12 +3147,16 @@ class MarketBot:
             label = f"{label} {w}" if label else w
         return label.upper() or "EVENT"
 
-    def _build_calendar_aftermath_buttons(self, events: List[Dict], max_buttons: int = 15) -> Optional[InlineKeyboardMarkup]:
+    def _build_calendar_aftermath_buttons(self, events: List[Dict], max_buttons: int = 15, numbered: bool = False) -> Optional[InlineKeyboardMarkup]:
         """
         Keyboard '📊 Analisis Dampak' untuk SEMUA event high-impact yang tampil
         (urutan sama dengan daftar kalender, 3 tombol per baris agar ringkas).
         None bila tidak ada event. Hanya high-impact yang diberi tombol
         (konsisten dengan matching di callback).
+
+        Args:
+            numbered: Jika True, label tombol diberi nomor urut yang sama dengan
+                daftar kalender (dipakai /calendar agar mudah dipetakan).
         """
         picked = [e for e in (events or []) if e.get("impact") == "high"][:max_buttons]
         if not picked:
@@ -3160,14 +3164,15 @@ class MarketBot:
         rows: List[List[InlineKeyboardButton]] = []
         row: List[InlineKeyboardButton] = []
         used_labels = set()
-        for e in picked:
+        for i, e in enumerate(picked, start=1):
             label = self._short_event_label(e.get("event", ""))
             if label in used_labels:
                 label = f"{label} {len(used_labels) + 1}"  # dedupe (mis. CPI MoM vs CPI YoY)
             used_labels.add(label)
+            text = f"📊 {i}·{label}" if numbered else f"📊 {label}"
             row.append(
                 InlineKeyboardButton(
-                    f"📊 {label}",
+                    text,
                     callback_data=f"aft:{self._event_short_id(e)}",
                 )
             )
@@ -3197,10 +3202,14 @@ class MarketBot:
         """Bangun isi pesan /calendar + tombol analisis dampak (dipakai /calendar
         dan tombol menu kalender)."""
         events = await self.macro.get_economic_calendar_month()
-        calendar_text = self.macro.format_calendar_text(events, max_events=15, only_high=True)
+        # numbered=True: event berindeks (1., 2., ...) agar mudah dipetakan ke
+        # tombol '📊 Analisis Dampak' (tombol memakai nomor yang sama).
+        calendar_text = self.macro.format_calendar_text(
+            events, max_events=15, only_high=True, numbered=True
+        )
         message = f"{calendar_text}\n{DISCLAIMER}"
         displayed = [e for e in events if e.get("impact") == "high"][:15]
-        kb = self._build_calendar_aftermath_buttons(displayed)
+        kb = self._build_calendar_aftermath_buttons(displayed, numbered=True)
         if kb:
             message = f"{calendar_text}\n\n📊 *Ketuk tombol event untuk analisis dampak.*\n{DISCLAIMER}"
         return message, kb

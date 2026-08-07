@@ -608,7 +608,13 @@ class MacroDataFetcher:
         events.sort(key=lambda x: x.get("_dt_utc") or datetime.min.replace(tzinfo=timezone.utc))
         return events
 
-    def format_calendar_text(self, events: List[Dict], max_events: int = 10, only_high: bool = False) -> str:
+    def format_calendar_text(
+        self,
+        events: List[Dict],
+        max_events: int = 10,
+        only_high: bool = False,
+        numbered: bool = False,
+    ) -> str:
         """
         Format daftar event kalender ekonomi menjadi teks yang rapi.
         Waktu ditampilkan dalam WIB (UTC+7).
@@ -617,6 +623,8 @@ class MacroDataFetcher:
             events: Daftar event dari get_economic_calendar*()
             max_events: Jumlah event maksimal yang ditampilkan
             only_high: Jika True, HANYA tampilkan event high impact (untuk /calendar)
+            numbered: Jika True, tiap event diberi nomor urut (1., 2., ...) agar
+                mudah dipetakan ke tombol '📊 Analisis Dampak' di /calendar
         """
         tz_wib = ZoneInfo("Asia/Jakarta")
         today = datetime.now(tz_wib).strftime("%A, %d %B %Y")
@@ -662,11 +670,12 @@ class MacroDataFetcher:
                 if shown >= max_events:
                     break
 
-                # Baris 1: Impact + Flag + Event Name
+                # Baris 1: Nomor urut (opsional) + Impact + Flag + Event Name
                 country = event.get("country_emoji", "")
                 imp = event.get("impact_label", "📊")
                 evt = event.get("event", "")
-                lines.append(f"{imp} {country} *{evt}*")
+                num = f"{shown + 1}. " if numbered else ""
+                lines.append(f"{num}{imp} {country} *{evt}*")
 
                 # Baris 2: Waktu + status (sudah rilis / belum)
                 evt_time = event.get("time", "")

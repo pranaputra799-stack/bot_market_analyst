@@ -143,6 +143,42 @@ class TestScheduledCalendar(unittest.TestCase):
         self.assertIsInstance(text, str)
         self.assertIn("KALENDER EKONOMI", text)
 
+    def test_format_calendar_text_numbered_prefixes(self):
+        events = self.fetcher._get_scheduled_calendar("2026-08-01", "2026-08-31")
+        plain = self.fetcher.format_calendar_text(events, max_events=5, only_high=True)
+        numbered = self.fetcher.format_calendar_text(
+            events, max_events=5, only_high=True, numbered=True
+        )
+        # Versi numbered menambah prefiks "1. ", "2. ", ... pada baris event
+        self.assertNotIn("1. ", plain)
+        self.assertIn("1. ", numbered)
+        self.assertIn("2. ", numbered)
+
+    def test_format_calendar_text_numbered_caps(self):
+        # 20 event high sintetis → maksimal 15 yang ditampilkan & bernomor
+        base = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        events = [
+            {
+                "event": f"Event {i}",
+                "country": "US",
+                "country_emoji": "🇺🇸",
+                "time": f"{i} Agu 2026 19:30 WIB",
+                "_dt_utc": base + timedelta(days=i),
+                "impact": "high",
+                "impact_label": "🔥 HIGH",
+                "actual": None,
+                "estimate": None,
+                "prev": None,
+                "unit": "%",
+            }
+            for i in range(1, 21)
+        ]
+        text = self.fetcher.format_calendar_text(
+            events, max_events=15, only_high=True, numbered=True
+        )
+        self.assertIn("15. ", text)
+        self.assertNotIn("16. ", text)
+
 
 if __name__ == "__main__":
     unittest.main()

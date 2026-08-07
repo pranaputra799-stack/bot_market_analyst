@@ -225,6 +225,31 @@ class TestCalendarAftermathButtons(unittest.TestCase):
         callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
         self.assertLessEqual(len(callbacks), 15)
 
+    def test_numbered_button_labels_match_order(self):
+        events = [
+            _event("Non-Farm Payrolls (NFP) & Unemployment Rate", hours_ago=1, actual=250.0, unit="K"),
+            _event("CPI / Inflasi AS (YoY)", hours_ago=2),
+            _event("Fed Funds Rate Decision (FOMC)", hours_ago=3, actual=4.75),
+        ]
+        bot = MarketBot.__new__(MarketBot)
+        kb = bot._build_calendar_aftermath_buttons(events, numbered=True)
+        labels = [btn.text for row in kb.inline_keyboard for btn in row]
+        self.assertEqual(labels, ["📊 1·NFP", "📊 2·CPI", "📊 3·FOMC"])
+        # Callback tetap memakai ID event (bukan nomor)
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        self.assertEqual(callbacks[1], f"aft:{MarketBot._event_short_id(events[1])}")
+
+    def test_buttons_not_numbered_by_default(self):
+        # Digest & reminder tanpa nomor (daftarnya pendek, nomor tak perlu)
+        events = [
+            _event("Non-Farm Payrolls (NFP) & Unemployment Rate", hours_ago=1, actual=250.0, unit="K"),
+            _event("CPI / Inflasi AS (YoY)", hours_ago=2),
+        ]
+        bot = MarketBot.__new__(MarketBot)
+        kb = bot._build_calendar_aftermath_buttons(events)
+        labels = [btn.text for row in kb.inline_keyboard for btn in row]
+        self.assertEqual(labels, ["📊 NFP", "📊 CPI"])
+
     def test_calendar_buttons_markup(self):
         bot = MarketBot.__new__(MarketBot)
         events = [
