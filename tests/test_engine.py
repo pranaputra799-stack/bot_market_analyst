@@ -21,6 +21,7 @@ def _make_engine():
     """Engine dengan key groq palsu & _call_provider di-stub."""
     eng = AIFallbackEngine()
     eng.api_keys["groq"] = "test-key"
+    eng.throttle_min_interval_override = 0.0  # matikan throttle agar test cepat
 
     def fake_call(provider, prompt, system, max_tokens):
         return f"RESP[{system}][{max_tokens}]:{prompt}"
@@ -236,6 +237,68 @@ class TestDeadModelBlacklist(unittest.TestCase):
             engine_mod.requests.post = original
 
         self.assertEqual(eng._dead_models, {})
+
+
+class TestThrottleAnd429Skip(unittest.TestCase):
+    """Perketat beban rate limit: throttle antar request + 429 tidak di-retry."""
+
+    def test_429_skips_provider_retries(self):
+        """Setelah 429 (kuota akun habis), jangan retry provider yang sama —
+        langsung pindah provider (1 request, bukan 3)."""
+        eng = _make_engine()
+        calls = {"n": 0}
+
+        def fake_call(provider, prompt, system, max_tokens):
+            calls["n"] += 1
+            # Simulasikan 429: catat cooldown seperti _call_openai_compatible
+            eng._provider_cooldown[provider] = time.time() + 30
+            return None
+
+        eng._call_provider = fake_call
+        out = eng.generate("p-429-skip", use_cache=False, max_total_wait=30)
+        self.assertEqual(calls["n"], 1)  # tidak boleh retry provider yang 429
+        self.assertIn("semua AI provider sedang tidak tersedia", out)
+
+    def test_throttle_spaces_requests_to_same_provider(self):
+        """Dua request berurutan ke provider yang sama di-spacing sesuai
+        min_interval (mencegah thundering herd dari request paralel)."""
+        import ai.engine as engine_mod
+
+        eng = _make_engine()
+        eng.throttle_min_interval_override = 0.5
+
+        class FakeResp200:
+            status_code = 200
+            headers = {}
+
+            def json(self):
+                return {"choices": [{"message": {"content": "OK"}}]}
+
+        original = engine_mod.requests.post
+        try:
+            engine_mod.requests.post = lambda *a, **k: FakeResp200()
+            t0 = time.time()
+            r1 = eng._call_openai_compatible(
+                "groq", PROVIDER_CONFIGS["groq"], "test-key", "p", "s", 1024
+            )
+            t1 = time.time()
+            r2 = eng._call_openai_compatible(
+                "groq", PROVIDER_CONFIGS["groq"], "test-key", "p", "s", 1024
+            )
+            t2 = time.time()
+        finally:
+            engine_mod.requests.post = original
+
+        self.assertEqual(r1, "OK")
+        self.assertEqual(r2, "OK")
+        self.assertGreaterEqual(t2 - t1, 0.4, "request kedua harus menunggu jeda")
+
+    def test_throttle_disabled_with_override_zero(self):
+        """Override 0 = throttle nonaktif: no-op penuh (tanpa jeda & tanpa catatan)."""
+        eng = _make_engine()  # override 0.0 dari helper
+        eng._throttle("groq")
+        self.assertEqual(eng._last_request_at, {})
+        self.assertEqual(eng._throttle_locks, {})
 
 
 class TestStats(unittest.TestCase):

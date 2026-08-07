@@ -21,7 +21,7 @@ import requests
 from config.settings import (
     GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY,
     CEREBRAS_API_KEY, MISTRAL_API_KEY, AI_FALLBACK_ORDER,
-    AI_MAX_TOTAL_WAIT_SECONDS, AI_REQUEST_TIMEOUT,
+    AI_MAX_TOTAL_WAIT_SECONDS, AI_REQUEST_TIMEOUT, AI_MIN_INTERVAL_SECONDS,
 )
 from config.providers import PROVIDER_CONFIGS
 from data.cache import get_cached_ai_response, set_cached_ai_response, safe_hash
@@ -78,6 +78,19 @@ class AIFallbackEngine:
         self._rate_limit_hints: Dict[str, float] = {}
         # Blacklist model mati: model → timestamp 404 terakhir (lihat _DEAD_MODEL_TTL).
         self._dead_models: Dict[str, float] = {}
+        # Throttle per-provider: jeda minimum antar request ke provider yang sama.
+        # Pipeline multi-agent memanggil generate() PARALEL (asyncio.gather +
+        # asyncio.to_thread) dan banyak user bisa bertanya bersamaan — tanpa
+        # jeda ini, request serentak ke free tier (RPM ketat) langsung 429 dan
+        # cepat menghabiskan kuota harian.
+        self._throttle_locks: Dict[str, threading.Lock] = {}
+        self._last_request_at: Dict[str, float] = {}
+        # Override jeda antar request (detik). None = pakai min_interval_seconds
+        # dari config provider; 0 = nonaktif (dipakai test agar cepat).
+        # Bisa di-override via env AI_MIN_INTERVAL_SECONDS tanpa redeploy.
+        self.throttle_min_interval_override: Optional[float] = None
+        if AI_MIN_INTERVAL_SECONDS and AI_MIN_INTERVAL_SECONDS > 0:
+            self.throttle_min_interval_override = AI_MIN_INTERVAL_SECONDS
         self._order_index: Dict[str, int] = {p: i for i, p in enumerate(self.fallback_order)}
         # Catatan thread-safety: system_override & max_tokens dikirim PER-REQUEST
         # (bukan state instance), sehingga generate() aman dipanggil paralel dari
@@ -183,7 +196,19 @@ class AIFallbackEngine:
 
                         return formatted
 
-                    # Provider merespon kosong (429 / model error). Backoff dihitung
+                    # 429 = kuota AKUN habis (bukan masalah model/prompt). Retry
+                    # dalam hitungan detik hanya memperparah rate limit & membakar
+                    # request — langsung pindah ke provider berikutnya.
+                    # Catatan: check cooldown aktif dari 429 MANA PUN (termasuk
+                    # thread paralel lain) — kalau provider baru saja 429,
+                    # me-retry sekarang tetap kemungkinan besar gagal.
+                    if self._provider_cooldown.get(provider, 0.0) > time.time():
+                        logger.info(
+                            f"{provider} rate-limited (429) — skip retry, pindah provider"
+                        )
+                        break
+
+                    # Provider merespon kosong (bukan 429). Backoff dihitung
                     # SATU KALI di sini (hint Retry-After server bila ada, atau
                     # exponential + jitter) dan dibatasi sisa budget waktu total.
                     if attempt < max_retries - 1:
@@ -292,6 +317,36 @@ class AIFallbackEngine:
             )
         return max(0.0, wait)
 
+    def _throttle(self, provider: str):
+        """
+        Jeda minimum antar request HTTP ke provider yang sama (anti thundering herd).
+
+        Pipeline multi-agent menjalankan banyak generate() PARALEL dari banyak
+        thread; tanpa jeda ini, request serentak ke free tier (RPM ketat)
+        langsung kena 429 dan cepat menghabiskan kuota harian.
+
+        Spacing dihitung dari waktu MULAI request sebelumnya. Pengecekan + jeda
+        dikunci dengan threading.Lock agar antar thread tidak menembus jeda
+        bersamaan. (Request sendiri TIDAK di-pegang lock — cukup spacing awal.)
+        """
+        if self.throttle_min_interval_override is not None:
+            min_interval = self.throttle_min_interval_override
+        else:
+            min_interval = PROVIDER_CONFIGS.get(provider, {}).get("min_interval_seconds", 1.0)
+        if not min_interval or min_interval <= 0:
+            return
+
+        with self._throttle_locks.setdefault(provider, threading.Lock()):
+            try:
+                elapsed = time.time() - self._last_request_at.get(provider, 0.0)
+                wait = min_interval - elapsed
+                if wait > 0:
+                    # Batas 8 dtk agar throttle tidak menelan seluruh budget
+                    # waktu (AI_MAX_TOTAL_WAIT_SECONDS) saat banyak thread antre.
+                    time.sleep(min(wait, 8.0))
+            finally:
+                self._last_request_at[provider] = time.time()
+
     def _call_openai_compatible(self, provider: str, config: Dict, key: str, prompt: str, system: str, max_tokens: int) -> Optional[str]:
         """
         Panggil API dengan format OpenAI-compatible.
@@ -336,6 +391,8 @@ class AIFallbackEngine:
 
         for model in models:
             payload["model"] = model
+            # Jeda minimum antar request ke provider yang sama (paralel-safe)
+            self._throttle(provider)
             try:
                 resp = requests.post(
                     config["url"],
@@ -446,6 +503,8 @@ class AIFallbackEngine:
                 ]
             }
 
+            # Jeda minimum antar request ke provider yang sama (paralel-safe)
+            self._throttle(provider)
             try:
                 resp = requests.post(
                     url,
@@ -511,7 +570,9 @@ class AIFallbackEngine:
         try:
             wait = float(retry_after)
         except (TypeError, ValueError):
-            wait = 2.0
+            # Tanpa header Retry-After: cooldown 5 dtk (sebelumnya 2 dtk) —
+            # free tier butuh jeda lebih panjang agar kuota sempat pulih.
+            wait = 5.0
         return min(max(wait, 1.0), 10.0)
 
     def get_stats(self) -> Dict:

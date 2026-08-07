@@ -143,6 +143,7 @@ python main.py
 | `SENTRY_DSN` | opsi | Error tracking (kosongkan untuk menonaktifkan) |
 | `AI_MAX_TOTAL_WAIT_SECONDS` | opsi | Batas waktu total satu permintaan AI (default `60`) |
 | `AI_REQUEST_TIMEOUT` | opsi | Timeout per request ke satu AI provider (default `30`) |
+| `AI_MIN_INTERVAL_SECONDS` | opsi | Jeda minimum antar request AI (0 = default per-provider; naikkan jika free tier sering 429) |
 | `MORNING_BRIEF_CHAT_IDS` | opsi | Chat ID penerima morning brief otomatis |
 | `ECONOMIC_ALERT_ENABLED` | opsi | Notifikasi event ekonomi (`true`/`false`) |
 

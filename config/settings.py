@@ -42,6 +42,11 @@ AI_MAX_TOTAL_WAIT_SECONDS = float(os.getenv("AI_MAX_TOTAL_WAIT_SECONDS", "60"))
 # Timeout per request ke satu provider (detik). Lebih kecil = fallback lebih cepat
 # saat provider hang, tapi berisiko memotong response model lambat.
 AI_REQUEST_TIMEOUT = float(os.getenv("AI_REQUEST_TIMEOUT", "30"))
+# Jeda minimum antar request ke provider AI yang sama (detik). 0/kosong =
+# pakai nilai default per-provider (min_interval_seconds di config/providers.py).
+# Nilai > 0 menimpa semuanya — berguna mengetatkan beban rate limit free tier
+# TANPA perlu redeploy (cukup set env + restart).
+AI_MIN_INTERVAL_SECONDS = float(os.getenv("AI_MIN_INTERVAL_SECONDS", "0") or "0")
 
 # ===================== DATA PROVIDERS =====================
 ALPHA_VANTAGE_KEY = _get_key("ALPHA_VANTAGE_KEY", "")

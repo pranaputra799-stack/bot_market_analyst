@@ -23,6 +23,7 @@ PROVIDER_CONFIGS = {
         },
         "payload_template": "openai",  # OpenAI-compatible format
         "rate_limit": 30,  # requests per minute
+        "min_interval_seconds": 1.0,  # jeda minimum antar request (anti 429)
     },
     "gemini": {
         "name": "Google Gemini",
@@ -35,6 +36,7 @@ PROVIDER_CONFIGS = {
         "headers": lambda key: {"Content-Type": "application/json"},
         "payload_template": "gemini",
         "rate_limit": 60,
+        "min_interval_seconds": 1.0,  # jeda minimum antar request (anti 429)
     },
     "openrouter": {
         "name": "OpenRouter",
@@ -75,6 +77,9 @@ PROVIDER_CONFIGS = {
         },
         "payload_template": "openai",
         "rate_limit": 20,
+        # Free tier OpenRouter punya RPM ketat — jeda paling lama di antara
+        # semua provider supaya pipeline paralel tidak membakar kuota.
+        "min_interval_seconds": 3.0,
     },
     "cerebras": {
         "name": "Cerebras",
@@ -90,6 +95,7 @@ PROVIDER_CONFIGS = {
         },
         "payload_template": "openai",
         "rate_limit": 30,
+        "min_interval_seconds": 1.5,  # jeda minimum antar request (anti 429)
     },
     "mistral": {
         "name": "Mistral AI",
@@ -104,6 +110,8 @@ PROVIDER_CONFIGS = {
         },
         "payload_template": "openai",
         "rate_limit": 10,
+        # rate limit paling rendah (10 req/menit) — jeda paling longgar.
+        "min_interval_seconds": 4.0,
     }
 }
 
