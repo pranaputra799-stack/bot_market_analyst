@@ -36,7 +36,7 @@ try:
     from zoneinfo import ZoneInfo
 except ImportError:
     from backports.zoneinfo import ZoneInfo  # type: ignore
-from config.providers import YAHOO_SYMBOLS, FRED_INDICATORS
+from config.providers import YAHOO_SYMBOLS, OANDA_SYMBOLS, FRED_INDICATORS
 from ai.engine import AIFallbackEngine
 from data.market_data import MarketDataAggregator
 from data.macro_data import MacroDataFetcher
@@ -772,6 +772,412 @@ class MarketBot:
             parse_mode="Markdown",
             disable_web_page_preview=True,
         )
+
+    # ===================== RETAIL SENTIMENT (OANDA) =====================
+
+    @staticmethod
+    def _normalize_symbol_input(text: str) -> str:
+        """Normalisasi input simbol: 'EUR/USD', 'eurusd', 'eur usd' → 'eurusd'."""
+        return (text or "").strip().lower().replace("/", "").replace(" ", "").replace("-", "")
+
+    def _resolve_symbol_from_text(self, text: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Resolve teks user → (yahoo_symbol, display_name).
+
+        Urutan coba:
+        1. Keyword map chart (gold, emas, eurusd, dxy, sp500, ...).
+        2. Reverse-lookup YAHOO_SYMBOLS (semua pair yang dikenal bot).
+        3. Direct match di OANDA_SYMBOLS (mis. 'eurgbp' → EURGBP=X, 'cl' → CL=F)
+           agar simbol baru hasil perluasan instrumen tetap bisa dipakai.
+        """
+        symbol, display = self.chart.get_chart_symbol_from_text(f"chart {text}")
+        if symbol:
+            return symbol, display
+
+        norm = self._normalize_symbol_input(text)
+        if not norm:
+            return None, None
+
+        # 2) Reverse-lookup YAHOO_SYMBOLS
+        for pair, yahoo in YAHOO_SYMBOLS.items():
+            if self._normalize_symbol_input(pair) == norm:
+                return yahoo, pair.upper()
+
+        # 3) Direct match OANDA_SYMBOLS: 'eurgbp' → 'EURGBP=X', 'cl' → 'CL=F',
+        #    'n225' → '^N225' (display diformat dari simbol bila belum ada).
+        upper = norm.upper()
+        for yahoo in OANDA_SYMBOLS:
+            base = (
+                yahoo.replace("=X", "").replace("=F", "")
+                .replace("^", "").replace("-USD", "")
+            )
+            if base.lower() == norm or yahoo.lower() in (f"{norm}=x", f"{norm}=f"):
+                display = ChartGenerator._get_display_name(yahoo)
+                base_upper = yahoo.replace("=X", "").replace("=F", "").replace("^", "")
+                if display == base_upper:
+                    # Belum ada nama tampilan khusus — format manual:
+                    # EURGBP=X → EUR/GBP, CL=F → CL
+                    if yahoo.endswith("=X") and len(base_upper) == 6:
+                        display = f"{base_upper[:3]}/{base_upper[3:]}"
+                    else:
+                        display = base_upper
+                return yahoo, display
+        return None, None
+
+    async def retail_sentiment_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Handler untuk /sentimen — sentimen retail trader (OANDA Position/Order Book).
+
+        Data UNIK dari OANDA: rasio posisi LONG/SHORT trader ritel saat ini + cluster
+        pending order. Tidak tersedia di Yahoo — ini fitur andalan bot.
+
+        Usage:
+            /sentimen          → EUR/USD (default)
+            /sentimen eurusd   → pair tertentu
+            /sentimen gbpusd   → GBP/USD
+
+        Hanya pair FOREX yang punya data posisi ritel (gold/index/oil/crypto
+        tidak memiliki Position/Order Book di OANDA).
+        """
+        text = update.message.text or ""
+        arg = text.replace("/sentimen", "").strip().lower()
+
+        # Default: EUR/USD; atau deteksi dari argumen
+        yahoo_symbol = "EURUSD=X"
+        display_name = "EUR/USD"
+        if arg and arg not in ("help", "bantuan"):
+            detected, dname = self._resolve_symbol_from_text(arg)
+            if detected:
+                yahoo_symbol = detected
+                display_name = dname
+            else:
+                await safe_reply_text(
+                    update.message,
+                    "❌ Simbol tidak dikenali. Contoh: `/sentimen eurusd`, `/sentimen gbpusd`.",
+                    parse_mode="Markdown",
+                )
+                return
+
+        instrument = self.market.oanda.instrument_for(yahoo_symbol)
+        if not instrument:
+            await safe_reply_text(
+                update.message,
+                f"❌ Sentimen retail OANDA tidak tersedia untuk *{display_name}*.\n\n"
+                f"Fitur ini khusus instrumen OANDA (mis. EUR/USD, GBP/USD, USD/JPY).",
+                parse_mode="Markdown",
+            )
+            return
+
+        # Position/Order Book OANDA HANYA ada untuk pair forex — gold, index,
+        # oil, crypto tidak punya data posisi ritel. Beri tahu user dengan jelas
+        # (bukan menyarankan salah sasaran seperti "cek API key").
+        if not self.market.oanda.is_forex(instrument):
+            await safe_reply_text(
+                update.message,
+                f"ℹ️ Sentimen retail (Position/Order Book OANDA) hanya tersedia untuk "
+                f"*pair forex* — *{display_name}* bukan pair forex, jadi tidak ada "
+                f"data posisi ritel.\n\n"
+                f"Coba: `/sentimen eurusd`, `/sentimen gbpusd`, `/sentimen usdjpy`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        try:
+            sent = await asyncio.to_thread(
+                self.market.oanda.get_retail_sentiment, instrument
+            )
+        except Exception as e:
+            logger.warning(f"Retail sentiment failed for {instrument}: {e}")
+            await safe_reply_text(
+                update.message,
+                f"❌ Sentimen retail untuk *{display_name}* tidak tersedia saat ini.\n\n"
+                f"Pastikan `OANDA_API_KEY` terisi di dashboard deploy (token demo gratis: "
+                f"https://www.oanda.com/demo-account/tpa/personal_token).",
+                parse_mode="Markdown",
+            )
+            return
+
+        lines = [f"🧠 *SENTIMEN RETAIL {display_name.upper()}*\n"]
+
+        long_ratio = sent.get("long_ratio")
+        if long_ratio is not None:
+            short_ratio = sent.get("short_ratio")
+            # Kontrarian: mayoritas long → potensi koreksi turun (dan sebaliknya)
+            if long_ratio > 55:
+                note = "Mayoritas trader ritel LONG → risiko koreksi turun (kontrarian)."
+            elif long_ratio < 45:
+                note = "Mayoritas trader ritel SHORT → potensi rebound naik (kontrarian)."
+            else:
+                note = "Posisi ritel hampir seimbang — sinyal lemah."
+            lines.append(
+                f"📊 *Position Book*\n"
+                f"• Long: {long_ratio}%  • Short: {short_ratio}%\n"
+                f"💡 {note}"
+            )
+
+        buy_ratio = sent.get("buy_ratio")
+        if buy_ratio is not None:
+            sell_ratio = sent.get("sell_ratio")
+            bias = "🟢 Bullish" if buy_ratio > 50 else "🔴 Bearish"
+            lines.append(
+                f"\n📌 *Order Book* (pending order)\n"
+                f"• Buy: {buy_ratio}%  • Sell: {sell_ratio}%\n"
+                f"💡 Bias pending order: {bias} — cluster order = zona support/resistance potensial."
+            )
+
+        lines.append(
+            "\n⚠️ Sentimen ritel sering dipakai *kontrarian*: mayoritas retail biasanya "
+            "salah di titik balik pasar. Kombinasikan dengan analisis teknikal."
+        )
+        await safe_reply_text(
+            update.message,
+            "\n".join(lines),
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
+
+    # ===================== WATCHLIST (/watch) =====================
+
+    WATCH_USAGE = (
+        "👀 *WATCHLIST*\n\n"
+        "Simpan instrumen favorit kamu — bot mencatat riwayat harganya otomatis "
+        "setiap 30 menit dan riwayat itu bisa dilihat kapan pun.\n\n"
+        "Contoh:\n"
+        "`/watch add eurusd` — tambah EUR/USD\n"
+        "`/watch add gold` — tambah XAU/USD\n"
+        "`/watch list` — lihat daftar\n"
+        "`/watch del eurusd` — hapus satu\n"
+        "`/watch clear` — hapus semua"
+    )
+
+    async def watch_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler /watch — kelola watchlist per user (persisten di Supabase)."""
+        text = update.message.text or ""
+        arg = text.replace("/watch", "").strip().lower()
+        chat_id = update.effective_chat.id
+
+        if not arg or arg in ("help", "bantuan"):
+            await safe_reply_text(update.message, self.WATCH_USAGE, parse_mode="Markdown")
+            return
+
+        # ===== list =====
+        if arg == "list":
+            items = await db.get_watchlist_async(chat_id)
+            if not items:
+                await safe_reply_text(
+                    update.message,
+                    "👀 *Watchlist kamu kosong.*\n\nContoh: `/watch add eurusd`",
+                    parse_mode="Markdown",
+                )
+                return
+            lines = ["👀 *Watchlist kamu:*"]
+            for it in items:
+                label = it.get("label") or it.get("symbol", "")
+                lines.append(f"• {label}")
+            lines.append("\nHapus: `/watch del <simbol>` | Riwayat: `/riwayat <simbol>`")
+            await safe_reply_text(update.message, "\n".join(lines), parse_mode="Markdown")
+            return
+
+        # ===== clear =====
+        if arg == "clear":
+            items = await db.get_watchlist_async(chat_id)
+            ok = True
+            for it in items:
+                ok = await db.remove_watch_async(chat_id, it.get("symbol", "")) and ok
+            await safe_reply_text(
+                update.message,
+                "🧹 Watchlist kamu sudah dikosongkan." if ok else "⚠️ Gagal membersihkan watchlist (cek database).",
+            )
+            return
+
+        # ===== del <simbol> =====
+        if arg.startswith("del "):
+            symbol_text = arg[4:].strip()
+            symbol, display_name = self._resolve_symbol_from_text(symbol_text)
+            if not symbol:
+                await safe_reply_text(
+                    update.message, "❌ Simbol tidak dikenali. Contoh: `/watch del eurusd`."
+                )
+                return
+            if await db.remove_watch_async(chat_id, symbol):
+                await safe_reply_text(
+                    update.message,
+                    f"🗑️ *{display_name}* dihapus dari watchlist.",
+                    parse_mode="Markdown",
+                )
+            else:
+                await safe_reply_text(
+                    update.message,
+                    "⚠️ Gagal menghapus (cek apakah database sudah dikonfigurasi, atau "
+                    "simbol memang tidak ada di watchlist kamu).",
+                )
+            return
+
+        # ===== add <simbol> (default bila arg bukan perintah) =====
+        symbol, display_name = self._resolve_symbol_from_text(arg)
+        if not symbol:
+            await safe_reply_text(
+                update.message,
+                "❌ Simbol tidak dikenali. Contoh: `/watch add eurusd`, `/watch add gold`, "
+                "`/watch add eurgbp`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        items = await db.get_watchlist_async(chat_id)
+        if any(it.get("symbol") == symbol for it in items):
+            await safe_reply_text(
+                update.message,
+                f"✅ *{display_name}* sudah ada di watchlist kamu.",
+                parse_mode="Markdown",
+            )
+            return
+        if len(items) >= 10:
+            await safe_reply_text(
+                update.message, "⚠️ Maksimal 10 instrumen per watchlist. Hapus dulu dengan `/watch del`."
+            )
+            return
+
+        if await db.add_watch_async(chat_id, symbol, display_name):
+            await safe_reply_text(
+                update.message,
+                f"✅ *{display_name}* ditambahkan ke watchlist!\n\n"
+                f"Bot mulai mencatat riwayat harganya otomatis. Cek kapan pun: `/riwayat {arg}`.",
+                parse_mode="Markdown",
+            )
+        else:
+            await safe_reply_text(
+                update.message,
+                "❌ Gagal menyimpan watchlist. Pastikan database Supabase sudah dikonfigurasi "
+                "(`SUPABASE_URL` & `SUPABASE_KEY`) dan tabel `watchlist` sudah dibuat "
+                "(lihat migrations/supabase.sql).",
+            )
+
+    # ===================== RIWAYAT HARGA (/riwayat) =====================
+
+    async def history_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler /riwayat — tampilkan riwayat harga tersimpan (dari Supabase)."""
+        text = update.message.text or ""
+        arg = text.replace("/riwayat", "").replace("/history", "").strip().lower()
+
+        if not arg or arg in ("help", "bantuan"):
+            await safe_reply_text(
+                update.message,
+                "📜 *RIWAYAT HARGA*\n\n"
+                "Menampilkan snapshot harga yang dicatat bot (setiap 30 menit) untuk "
+                "instrumen yang ada di watchlist.\n\n"
+                "`/riwayat eurusd` — riwayat EUR/USD\n"
+                "`/riwayat gold` — riwayat XAU/USD",
+                parse_mode="Markdown",
+            )
+            return
+
+        symbol, display_name = self._resolve_symbol_from_text(arg)
+        if not symbol:
+            await safe_reply_text(
+                update.message, "❌ Simbol tidak dikenali. Contoh: `/riwayat eurusd`, `/riwayat gold`."
+            )
+            return
+
+        rows = await db.get_price_history_async(symbol, limit=48)
+        if not rows:
+            await safe_reply_text(
+                update.message,
+                f"📜 Belum ada riwayat harga untuk *{display_name}*.\n\n"
+                f"Tambahkan ke watchlist dulu: `/watch add {arg}` — bot mulai mencatat "
+                f"harga setiap 30 menit.",
+                parse_mode="Markdown",
+            )
+            return
+
+        # rows terbaru dulu (order desc) → balik agar kronologis
+        rows = list(reversed(rows))
+        prices = [float(r["price"]) for r in rows if r.get("price") is not None]
+        if not prices:
+            await safe_reply_text(update.message, "⚠️ Data riwayat tidak valid.")
+            return
+
+        first = prices[0]
+        last = prices[-1]
+        pct = round((last - first) / first * 100, 2) if first else 0.0
+        arrow = "🟢" if pct > 0 else "🔴" if pct < 0 else "⚪"
+
+        lines = [
+            f"📜 *RIWAYAT HARGA {display_name.upper()}*\n",
+            f"{arrow} Rentang: {format_price(first, symbol)} → {format_price(last, symbol)} "
+            f"({pct:+.2f}%)\n",
+        ]
+
+        # Sampel maksimal 12 titik (kronologis) agar pesan ringkas
+        step = max(1, len(rows) // 12)
+        for r in rows[::step]:
+            try:
+                ts = r["created_at"][:16].replace("T", " ")
+            except (KeyError, TypeError):
+                ts = ""
+            p = r.get("price")
+            if p is None:
+                continue
+            bid = r.get("bid")
+            ask = r.get("ask")
+            detail = f"  Bid {format_price(bid, symbol)} / Ask {format_price(ask, symbol)}" if (
+                bid is not None and ask is not None
+            ) else ""
+            lines.append(f"`{ts}`  {format_price(p, symbol)}{detail}")
+
+        lines.append(
+            "\n💡 Snapshot dicatat setiap 30 menit untuk instrumen di watchlist. "
+            "Untuk chart penuh: `/chart " + arg + "`"
+        )
+        await safe_reply_text(
+            update.message,
+            "\n".join(lines),
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
+
+    # ===================== PRICE HISTORY RECORDER (job) =====================
+
+    async def record_price_history(self, application: Application):
+        """
+        Job berkala: simpan snapshot harga untuk semua simbol di semua watchlist.
+        Dipanggil scheduler (main.py) setiap 30 menit. Data di-cache oleh data
+        layer (OANDA real-time TTL 30 dtk) sehingga biaya request sangat kecil.
+        """
+        symbols = await db.get_all_watched_symbols_async()
+        if not symbols:
+            return
+        logger.info(f"Recording price history for {len(symbols)} watched symbols...")
+
+        results = await asyncio.gather(
+            *[
+                asyncio.to_thread(
+                    self.market.get_yahoo_data, s, period="1d", interval="1h", ohlcv_limit=1
+                )
+                for s in symbols
+            ],
+            return_exceptions=True,
+        )
+        saved = 0
+        for symbol, data in zip(symbols, results):
+            if isinstance(data, Exception):
+                logger.warning(f"Price history fetch failed for {symbol}: {data}")
+                continue
+            price = data.get("current_price")
+            if price is None or "error" in data:
+                continue
+            ok = await db.save_price_snapshot_async(
+                symbol,
+                price=float(price),
+                change_pct=data.get("change_pct"),
+                bid=data.get("bid"),
+                ask=data.get("ask"),
+            )
+            if ok:
+                saved += 1
+        if saved:
+            logger.info(f"Price history: {saved}/{len(symbols)} snapshots saved")
 
     # ===================== MORNING BRIEF =====================
 
@@ -1557,6 +1963,19 @@ class MarketBot:
         arrow = "🟢" if change and change > 0 else "🔴" if change and change < 0 else "⚪"
         change_str = f"{change:+.2f}%" if change is not None else ""
 
+        # Bid/Ask + spread — tersedia saat data dari OANDA (real-time bid/ask)
+        bid = data.get("bid")
+        ask = data.get("ask")
+        spread_str = ""
+        if bid is not None and ask is not None:
+            spread = data.get("spread")
+            if spread is None:
+                spread = round(ask - bid, 8)
+            spread_str = (
+                f"\n💱 Bid {format_price(bid, symbol)} / Ask {format_price(ask, symbol)} "
+                f"(spread {spread})"
+            )
+
         # Rentang 5 sesi terakhir dari OHLCV (untuk konteks singkat)
         ohlcv = data.get("ohlcv", [])
         range_str = ""
@@ -1596,8 +2015,8 @@ class MarketBot:
         return (
             f"💱 *{display_name}* — Harga Terkini\n"
             f"{arrow} Harga: *{format_price(price, symbol)}* ({change_str})"
-            f"{range_str}{quick}\n\n"
-            f"⚡ Jawaban instan dari data pasar (delay 15-20 mnt).\n"
+            f"{spread_str}{range_str}{quick}\n\n"
+            f"⚡ Jawaban instan dari data pasar real-time.\n"
             f"💡 Kirim \"analisis {display_name.lower()}\" untuk analisis lengkap."
         )
 
@@ -1682,6 +2101,19 @@ class MarketBot:
             arrow = "🟢" if change and change > 0 else "🔴" if change and change < 0 else "⚪"
             change_str = f"{change:+.2f}%" if change is not None else "N/A"
             parts.append(f"{arrow} Harga: {format_price(price, data.get('symbol', ''))} ({change_str})")
+
+        # Spread bid/ask — hanya tersedia dari OANDA (real-time bid/ask)
+        bid = data.get("bid")
+        ask = data.get("ask")
+        if bid is not None and ask is not None:
+            spread = data.get("spread")
+            if spread is None:
+                spread = round(ask - bid, 8)
+            symbol_for_price = data.get("symbol", "")
+            parts.append(
+                f"💱 Bid/Ask: {format_price(bid, symbol_for_price)} / "
+                f"{format_price(ask, symbol_for_price)} (spread {spread})"
+            )
 
         if ohlcv:
             # Rentang 5 sesi SEBENARNYA (bukan bar terakhir) — dari window 5 bar

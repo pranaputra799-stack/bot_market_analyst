@@ -39,6 +39,40 @@ CREATE TABLE IF NOT EXISTS public.subscribers (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- ------------------------------------------------------------
+-- 4) watchlist — instrumen favorit per user (fitur /watch)
+--    Satu user boleh punya banyak simbol; satu simbol sekali per
+--    user (unique constraint dipakai PostgREST merge-duplicates).
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.watchlist (
+    chat_id    BIGINT NOT NULL,
+    symbol     TEXT NOT NULL,
+    label      TEXT DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (chat_id, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_watchlist_symbol
+    ON public.watchlist (symbol);
+
+-- ------------------------------------------------------------
+-- 5) price_history — snapshot harga berkala (fitur /riwayat)
+--    Job recorder bot menyimpan harga tiap interval; riwayat
+--    otomatis dibersihkan setelah >30 hari (job harian).
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.price_history (
+    id         BIGSERIAL PRIMARY KEY,
+    symbol     TEXT NOT NULL,
+    price      DOUBLE PRECISION NOT NULL,
+    bid        DOUBLE PRECISION,
+    ask        DOUBLE PRECISION,
+    change_pct DOUBLE PRECISION,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_history_symbol_created
+    ON public.price_history (symbol, created_at DESC);
+
 -- ============================================================
 -- RLS (Row Level Security) & GRANT
 --
@@ -54,6 +88,18 @@ CREATE TABLE IF NOT EXISTS public.subscribers (
 ALTER TABLE public.app_cache ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "app_cache_all_anon" ON public.app_cache;
 CREATE POLICY "app_cache_all_anon" ON public.app_cache
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+-- watchlist
+ALTER TABLE public.watchlist ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "watchlist_all_anon" ON public.watchlist;
+CREATE POLICY "watchlist_all_anon" ON public.watchlist
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+-- price_history
+ALTER TABLE public.price_history ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "price_history_all_anon" ON public.price_history;
+CREATE POLICY "price_history_all_anon" ON public.price_history
     FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
 -- users
@@ -73,14 +119,16 @@ CREATE POLICY "subscribers_all_anon" ON public.subscribers
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.app_cache TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.users    TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.subscribers TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.watchlist TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.price_history TO anon, authenticated, service_role;
 
 -- ============================================================
 -- Verifikasi cepat (jalankan setelah semua statement di atas):
 --
 --   select table_name from information_schema.tables
 --   where table_schema = 'public'
---   and table_name in ('app_cache', 'users', 'subscribers');
+--   and table_name in ('app_cache', 'users', 'subscribers', 'watchlist', 'price_history');
 --
--- Harus mengembalikan 3 baris. Jika sudah pernah punya tabel
+-- Harus mengembalikan 5 baris. Jika sudah pernah punya tabel
 -- users/subscribers sebelumnya, baris lama tetap aman (IF NOT EXISTS).
 -- ============================================================

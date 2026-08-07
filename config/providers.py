@@ -144,7 +144,11 @@ YAHOO_SYMBOLS = {
 # Simbol OANDA (v20) untuk instrumen yang didukung — kunci = simbol Yahoo yang
 # dipakai bot, nilai = nama instrumen OANDA (format XXX_YYY).
 # Instrumen di luar daftar ini (USD/IDR, DXY, index, crypto) tetap pakai Yahoo.
+# CATATAN: kalau instrumen tidak tersedia di akun demo (mis. beberapa crypto),
+# OANDA mengembalikan error 400 dan data layer otomatis fallback ke Yahoo —
+# aman untuk daftar yang lebih lebar.
 OANDA_SYMBOLS = {
+    # ===== Forex mayor & cross =====
     "EURUSD=X": "EUR_USD",
     "GBPUSD=X": "GBP_USD",
     "USDJPY=X": "USD_JPY",
@@ -152,10 +156,28 @@ OANDA_SYMBOLS = {
     "AUDUSD=X": "AUD_USD",
     "NZDUSD=X": "NZD_USD",
     "USDCAD=X": "USD_CAD",
-    "GC=F": "XAU_USD",         # Gold (spot OANDA — real-time)
+    "EURGBP=X": "EUR_GBP",
+    "GBPJPY=X": "GBP_JPY",
+    "EURJPY=X": "EUR_JPY",
+    "AUDJPY=X": "AUD_JPY",
+    "EURAUD=X": "EUR_AUD",
+    "USDMXN=X": "USD_MXN",
+    # ===== Logam mulia (spot OANDA — real-time) =====
+    "GC=F": "XAU_USD",         # Gold
     "XAUUSD=X": "XAU_USD",     # Gold spot
     "SI=F": "XAG_USD",         # Silver
     "XAGUSD=X": "XAG_USD",
+    # ===== Indeks (CFD OANDA) =====
+    "^GSPC": "SPX500_USD",     # S&P 500
+    "^DJI": "US30_USD",        # Dow Jones
+    "^IXIC": "NAS100_USD",     # Nasdaq
+    "^N225": "JP225_USD",      # Nikkei 225
+    # ===== Energi & komoditas (CFD OANDA) =====
+    "CL=F": "WTICO_USD",       # WTI Crude Oil
+    "BZ=F": "BCO_USD",         # Brent Crude
+    # ===== Crypto (tersedia di sebagian entity OANDA) =====
+    "BTC-USD": "BTC_USD",
+    "ETH-USD": "ETH_USD",
 }
 
 # Indikator makro FRED

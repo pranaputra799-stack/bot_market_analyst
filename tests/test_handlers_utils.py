@@ -143,6 +143,49 @@ class TestQuickActionKeyboard(unittest.TestCase):
         self.assertIn("qa:chart", callbacks)
 
 
+class TestResolveSymbolFromText(unittest.TestCase):
+    """_resolve_symbol_from_text: keyword map, reverse YAHOO_SYMBOLS, direct OANDA."""
+
+    def _bot(self):
+        from utils.chart_generator import ChartGenerator
+
+        bot = MarketBot.__new__(MarketBot)
+        bot.chart = ChartGenerator()
+        return bot
+
+    def test_keyword_map(self):
+        bot = self._bot()
+        self.assertEqual(bot._resolve_symbol_from_text("eurusd"), ("EURUSD=X", "EUR/USD"))
+        self.assertEqual(bot._resolve_symbol_from_text("emas")[0], "GC=F")
+        self.assertEqual(bot._resolve_symbol_from_text("bitcoin")[0], "BTC-USD")
+
+    def test_reverse_yahoo_symbols(self):
+        bot = self._bot()
+        symbol, display = bot._resolve_symbol_from_text("dow jones")
+        self.assertEqual(symbol, "^DJI")
+        symbol2, display2 = bot._resolve_symbol_from_text("usd/idr")
+        self.assertEqual(symbol2, "USDIDR=X")
+
+    def test_direct_oanda_symbols(self):
+        bot = self._bot()
+        symbol, display = bot._resolve_symbol_from_text("eurgbp")
+        self.assertEqual(symbol, "EURGBP=X")
+        self.assertEqual(display, "EUR/GBP")
+        symbol2, display2 = bot._resolve_symbol_from_text("cl")
+        self.assertEqual(symbol2, "CL=F")
+
+    def test_invalid(self):
+        bot = self._bot()
+        self.assertEqual(bot._resolve_symbol_from_text("xyzzy"), (None, None))
+        self.assertEqual(bot._resolve_symbol_from_text(""), (None, None))
+        self.assertEqual(bot._resolve_symbol_from_text(None), (None, None))
+
+    def test_normalize_input(self):
+        self.assertEqual(MarketBot._normalize_symbol_input("EUR/USD"), "eurusd")
+        self.assertEqual(MarketBot._normalize_symbol_input("eur usd"), "eurusd")
+        self.assertEqual(MarketBot._normalize_symbol_input(" Gold "), "gold")
+
+
 class TestPriceAlertHelpers(unittest.TestCase):
     def test_parse_valid(self):
         parsed = MarketBot._parse_price_alert_args("eurusd 1.0900")

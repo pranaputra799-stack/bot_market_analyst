@@ -31,6 +31,16 @@ _BASE_URLS = {
 
 _TIMEOUT = 10  # detik per request HTTP
 
+# Kode mata uang ISO 4217 yang dikenal OANDA. Dipakai is_forex() untuk
+# membedakan pair forex (EUR_USD) dari logam/index/komoditas yang juga
+# berformat XXX_YYY tapi bukan mata uang (XAU_USD, SPX500_USD, WTICO_USD).
+_CURRENCY_CODES = {
+    "AED", "AUD", "BGN", "BRL", "CAD", "CHF", "CNH", "CNY", "CZK",
+    "DKK", "EUR", "GBP", "HKD", "HRK", "HUF", "IDR", "ILS", "INR",
+    "ISK", "JPY", "KRW", "MXN", "MYR", "NOK", "NZD", "PLN", "RON",
+    "RUB", "SAR", "SEK", "SGD", "THB", "TRY", "TWD", "USD", "ZAR",
+}
+
 # Yahoo interval -> granularity OANDA (v20)
 _INTERVAL_TO_GRANULARITY = {
     "1m": "M1", "2m": "M2", "5m": "M5", "15m": "M15", "30m": "M30",
@@ -92,6 +102,24 @@ class OandaClient:
         """Konversi simbol Yahoo (EURUSD=X, GC=F) ke instrumen OANDA (EUR_USD, XAU_USD)."""
         return OANDA_SYMBOLS.get(yahoo_symbol)
 
+    @staticmethod
+    def is_forex(instrument: str) -> bool:
+        """
+        True bila instrumen adalah pair forex (XXX_YYY dengan dua mata uang 3 huruf).
+
+        Position/Order Book OANDA HANYA tersedia untuk forex — gold (XAU_USD),
+        index (SPX500_USD), oil (WTICO_USD), crypto (BTC_USD) tidak punya data
+        sentimen retail. Dipakai handler /sentimen untuk pesan yang akurat.
+        """
+        if not instrument or not isinstance(instrument, str):
+            return False
+        parts = instrument.split("_")
+        return (
+            len(parts) == 2
+            and parts[0] in _CURRENCY_CODES
+            and parts[1] in _CURRENCY_CODES
+        )
+
     # ===================== GRANULARITY & COUNT =====================
 
     @staticmethod
@@ -152,6 +180,10 @@ class OandaClient:
         except Exception as e:
             logger.warning(f"OANDA account discovery gagal: {e}")
         return ""
+
+    def resolve_account_id(self) -> str:
+        """Public wrapper — dipakai OandaPriceStream untuk discovery account."""
+        return self._resolve_account_id()
 
     # ===================== PRICING (REAL-TIME) =====================
 
@@ -271,6 +303,126 @@ class OandaClient:
             return float(complete[-2]["close"]) if len(complete) >= 2 else float(complete[-1]["close"])
         # Sesi hari ini masih berjalan → bandingkan dengan sesi complete terakhir
         return float(complete[-1]["close"])
+
+    # ===================== SENTIMEN RETAIL (POSITION / ORDER BOOK) =====================
+
+    def get_position_book(self, instrument: str) -> Dict:
+        """
+        Position Book OANDA — rasio posisi LONG/SHORT trader ritel saat ini.
+
+        Endpoint: GET /v3/instruments/{instrument}/positionBook
+        Dokumentasi: https://developer.oanda.com/rest-live-v20/instrument-ep/
+
+        Returns:
+            {"instrument", "time", "long_ratio", "short_ratio", "positions": [...]}
+
+        Raises:
+            Exception bila gagal (mis. instrumen tidak didukung / akun non-demo).
+        """
+        resp = self._session.get(
+            f"{self.base_url}/v3/instruments/{instrument}/positionBook",
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        book = data.get("positionBook") or {}
+        buckets = book.get("buckets") or []
+        if not buckets:
+            raise RuntimeError(f"OANDA positionBook kosong untuk {instrument}")
+
+        long_ratio = 0.0
+        for b in buckets:
+            long_ratio += float(b.get("longCount", 0))
+        total = sum(
+            float(b.get("longCount", 0)) + float(b.get("shortCount", 0)) for b in buckets
+        )
+        if total <= 0:
+            raise RuntimeError(f"OANDA positionBook tanpa data posisi untuk {instrument}")
+        long_ratio = round(long_ratio / total * 100.0, 1)
+
+        return {
+            "instrument": instrument,
+            "time": book.get("time", ""),
+            "long_ratio": long_ratio,
+            "short_ratio": round(100.0 - long_ratio, 1),
+            "positions": buckets,
+        }
+
+    def get_order_book(self, instrument: str) -> Dict:
+        """
+        Order Book OANDA — konsentrasi pending order BUY/SELL di atas/bawah harga.
+
+        Endpoint: GET /v3/instruments/{instrument}/orderBook
+
+        Returns:
+            {"instrument", "time", "buy_ratio", "sell_ratio", "price", "orders": [...]}
+
+        Raises:
+            Exception bila gagal.
+        """
+        resp = self._session.get(
+            f"{self.base_url}/v3/instruments/{instrument}/orderBook",
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        book = data.get("orderBook") or {}
+        buckets = book.get("buckets") or []
+        if not buckets:
+            raise RuntimeError(f"OANDA orderBook kosong untuk {instrument}")
+
+        buy_ratio = 0.0
+        for b in buckets:
+            buy_ratio += float(b.get("buyCount", 0))
+        total = sum(
+            float(b.get("buyCount", 0)) + float(b.get("sellCount", 0)) for b in buckets
+        )
+        if total <= 0:
+            raise RuntimeError(f"OANDA orderBook tanpa data order untuk {instrument}")
+        buy_ratio = round(buy_ratio / total * 100.0, 1)
+
+        return {
+            "instrument": instrument,
+            "time": book.get("time", ""),
+            "buy_ratio": buy_ratio,
+            "sell_ratio": round(100.0 - buy_ratio, 1),
+            "price": book.get("price", ""),
+            "orders": buckets,
+        }
+
+    def get_retail_sentiment(self, instrument: str) -> Dict:
+        """
+        Gabungan sentimen retail: position book + order book dalam satu panggilan.
+        Aman dipanggil meski salah satu endpoint gagal (mis. instrumen tidak
+        punya order book di region tertentu).
+
+        Returns:
+            {"instrument", "time", "long_ratio", "short_ratio",
+             "buy_ratio", "sell_ratio", "price"}
+        """
+        result: Dict = {"instrument": instrument}
+        try:
+            pb = self.get_position_book(instrument)
+            result.update({
+                "time": pb.get("time", ""),
+                "long_ratio": pb.get("long_ratio"),
+                "short_ratio": pb.get("short_ratio"),
+            })
+        except Exception as e:
+            logger.debug(f"positionBook gagal untuk {instrument}: {e}")
+        try:
+            ob = self.get_order_book(instrument)
+            result.update({
+                "buy_ratio": ob.get("buy_ratio"),
+                "sell_ratio": ob.get("sell_ratio"),
+                "price": ob.get("price", ""),
+            })
+        except Exception as e:
+            logger.debug(f"orderBook gagal untuk {instrument}: {e}")
+        if "long_ratio" not in result and "buy_ratio" not in result:
+            raise RuntimeError(f"Sentimen retail tidak tersedia untuk {instrument}")
+        return result
+
 
 def _test():
     """CLI dev: python -m data.oanda_client EUR_USD"""

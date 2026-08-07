@@ -9,6 +9,11 @@ Dibuat untuk trader retail Indonesia — semua jawaban dalam Bahasa Indonesia, b
 - **Multi-Agent Analysis** 🧠 — Pipeline 7 agent: Research → Signals → Thesis → Contradiction → Scenarios → Confidence → Risk Gates
 - **Multi-AI Provider** — OpenRouter (primary, **hanya model gratis** `:free`/`$0`) → Groq → Gemini → Cerebras → Mistral, fallback otomatis saat satu provider down/rate-limit. OpenRouter auto-discover model gratis (`:free`)
 - **Multi-Source Data** 📊 — OANDA (real-time utk Forex & Gold) + Yahoo Finance, Alpha Vantage, Finnhub, Exchange Rate API
+- **Streaming Harga Real-time** ⚡ — Harga bid/ask LIVE via WebSocket OANDA (daemon thread, reconnect otomatis, fallback otomatis ke REST bila streaming tidak tersedia)
+- **Instrumen OANDA Diperluas** 🌐 — selain major pair & Gold/Silver: cross pair (EUR/GBP, GBP/JPY, AUD/JPY, ...), indeks (S&P 500, Dow, Nasdaq, Nikkei), minyak (WTI, Brent), dan crypto (BTC, ETH) — semua real-time bila tersedia di akun
+- **Spread Bid/Ask** 💱 — Jawaban harga menampilkan Bid/Ask + spread (dari OANDA real-time)
+- **Sentimen Retail** 🧠 — `/sentimen` menampilkan rasio posisi Long/Short trader ritel (OANDA Position Book) + cluster pending order (Order Book) — data unik yang tidak ada di sumber lain
+- **Watchlist & Riwayat Harga** 👀 — `/watch` menyimpan instrumen favorit per user (persisten di Supabase); bot merekam snapshot harga tiap 30 menit → `/riwayat` menampilkan tren harga tersimpan
 - **Data Makroekonomi** 🏛️ — FRED (resmi & gratis): CPI, NFP, Fed Rate, GDP, dll
 - **Kalender Ekonomi** 📅 — Jadwal rilis BLS/Fed real-time via FRED, dikonversi ke WIB, lengkap dengan Forecast/Previous/Actual
 - **Morning Brief** 🌅 — Ringkasan pasar otomatis setiap pagi (bisa dilanggan per-user)
@@ -42,11 +47,12 @@ ai/
   openrouter_client.py   → Auto-discovery model gratis OpenRouter
 data/
   market_data.py         → Data harga (OANDA real-time → Yahoo → Alpha Vantage → Finnhub)
-  oanda_client.py        → Client OANDA v20 API (pricing real-time + candles)
+  oanda_client.py        → Client OANDA v20 API (pricing real-time + candles + position/order book)
+  oanda_stream.py        → Streaming harga WebSocket real-time (daemon thread)
   macro_data.py          → Data makro & kalender ekonomi (FRED, Finnhub, jadwal resmi)
   news_data.py           → Berita & sentimen (Finnhub, Marketaux, RSS)
   cache.py               → In-memory cache dengan TTL
-  database.py            → Supabase REST (opsional): user & subscriber
+  database.py            → Supabase REST (opsional): user, subscriber, watchlist & riwayat harga
 config/
   settings.py            → Semua konfigurasi dari environment variables
 prompts/
@@ -161,7 +167,10 @@ Bot memakai cache **dua lapis (hybrid)**:
   lintas restart dan tidak menambah beban RAM.
 
 **Setup sekali saja** — jalankan `migrations/supabase.sql` di Supabase SQL Editor
-(membuat tabel `app_cache`, `users`, `subscribers` + index + kebijakan RLS).
+(membuat tabel `app_cache`, `users`, `subscribers`, `watchlist`, `price_history`
++ index + kebijakan RLS). Tabel `watchlist` & `price_history` dipakai fitur
+`/watch` & `/riwayat` (snapshot harga tiap 30 menit, otomatis dibersihkan
+setelah 30 hari).
 Jika Supabase belum dikonfigurasi / tabel belum dibuat, bot otomatis jatuh ke
 mode memory-only tanpa error.
 
@@ -205,7 +214,10 @@ Test mencakup logika murni (tanpa network): sentiment analyzer, signal engine, s
 | `/morning` | Morning Brief hari ini |
 | `/subscribe` | Langganan Morning Brief otomatis |
 | `/unsubscribe` | Berhenti langganan Morning Brief |
-| `/sentiment` | Sentimen pasar (contoh: `/sentiment eurusd`) |
+| `/sentiment` | Sentimen pasar berbasis berita (contoh: `/sentiment eurusd`) |
+| `/sentimen` | Sentimen retail trader OANDA — Position/Order Book, hanya pair forex (contoh: `/sentimen eurusd`) |
+| `/watch` | Watchlist instrumen persisten (`/watch add eurusd`, `/watch list`, `/watch del eurusd`) |
+| `/riwayat` | Riwayat harga tersimpan tiap 30 menit (contoh: `/riwayat eurusd`) |
 | `/calendar` | Kalender ekonomi high-impact bulan ini |
 | `/alert on\|off` | Notifikasi event ekonomi otomatis |
 | `/pa <simbol> <harga>` | 🎯 Alert harga — notifikasi saat harga menyentuh target (contoh: `/pa eurusd 1.0900`; kelola: `/pa list`, `/pa del <id>`) |

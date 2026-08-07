@@ -53,10 +53,18 @@ class TestOandaMapping(unittest.TestCase):
         self.assertEqual(c.instrument_for("USDJPY=X"), "USD_JPY")
         self.assertEqual(c.instrument_for("GC=F"), "XAU_USD")
         self.assertEqual(c.instrument_for("SI=F"), "XAG_USD")
+        # Instrumen baru: cross pair, index, oil, crypto
+        self.assertEqual(c.instrument_for("EURGBP=X"), "EUR_GBP")
+        self.assertEqual(c.instrument_for("GBPJPY=X"), "GBP_JPY")
+        self.assertEqual(c.instrument_for("^GSPC"), "SPX500_USD")
+        self.assertEqual(c.instrument_for("^DJI"), "US30_USD")
+        self.assertEqual(c.instrument_for("CL=F"), "WTICO_USD")
+        self.assertEqual(c.instrument_for("BTC-USD"), "BTC_USD")
+        self.assertEqual(c.instrument_for("ETH-USD"), "ETH_USD")
         # Instrumen non-OANDA tidak boleh di-routing
         self.assertIsNone(c.instrument_for("USDIDR=X"))
         self.assertIsNone(c.instrument_for("DX-Y.NYB"))
-        self.assertIsNone(c.instrument_for("BTC-USD"))
+        self.assertIsNone(c.instrument_for("^VIX"))
 
     def test_granularity_for(self):
         c = OandaClient(api_key="")
@@ -92,6 +100,18 @@ class TestOandaMapping(unittest.TestCase):
         self.assertTrue(OandaClient(api_key="abc").is_configured)
         self.assertEqual(OandaClient(api_key="abc", env="practice").env_name, "Demo")
         self.assertEqual(OandaClient(api_key="abc", env="live").env_name, "Live")
+
+    def test_is_forex(self):
+        self.assertTrue(OandaClient.is_forex("EUR_USD"))
+        self.assertTrue(OandaClient.is_forex("GBP_JPY"))
+        self.assertTrue(OandaClient.is_forex("USD_IDR"))
+        # Bukan pair forex: logam, index, oil, crypto
+        self.assertFalse(OandaClient.is_forex("XAU_USD"))
+        self.assertFalse(OandaClient.is_forex("SPX500_USD"))
+        self.assertFalse(OandaClient.is_forex("WTICO_USD"))
+        self.assertFalse(OandaClient.is_forex("BTC_USD"))
+        self.assertFalse(OandaClient.is_forex(""))
+        self.assertFalse(OandaClient.is_forex(None))
 
 
 class TestOandaPreviousClose(unittest.TestCase):
@@ -153,6 +173,7 @@ class TestOandaAggregator(unittest.TestCase):
         self.assertEqual(result["current_price"], 1.0825)
         self.assertEqual(result["bid"], 1.0824)
         self.assertEqual(result["ask"], 1.0826)
+        self.assertEqual(result["spread"], round(1.0826 - 1.0824, 8))
         self.assertEqual(result["previous_close"], 1.0790)
         self.assertAlmostEqual(result["change_pct"], round((1.0825 - 1.0790) / 1.0790 * 100, 2))
         self.assertEqual(len(result["ohlcv"]), 5)
@@ -205,6 +226,101 @@ class TestOandaAggregator(unittest.TestCase):
         agg = MarketDataAggregator()
         agg.oanda = OandaClient(api_key="")  # tidak terkonfigurasi -> jalan Yahoo
         self.assertFalse(agg.oanda.is_configured)
+
+
+class _FakeResp:
+    """Respons requests stub (tanpa network)."""
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+class _FakeSession:
+    """Session stub: positionBook / orderBook -> payload sesuai URL."""
+
+    def __init__(self, position=None, order=None, fail=""):
+        self._position = position or {
+            "positionBook": {
+                "time": "2026-08-07T00:00:00Z",
+                "buckets": [
+                    {"price": "1.0800", "longCount": 60, "shortCount": 40},
+                    {"price": "1.0900", "longCount": 50, "shortCount": 50},
+                ],
+            }
+        }
+        self._order = order or {
+            "orderBook": {
+                "time": "2026-08-07T00:00:00Z",
+                "price": "1.0825",
+                "buckets": [{"price": "1.0800", "buyCount": 70, "sellCount": 30}],
+            }
+        }
+        self._fail = fail
+
+    def get(self, url, **kwargs):
+        if self._fail in ("position", "both") and "positionBook" in url:
+            raise RuntimeError("position down")
+        if self._fail in ("order", "both") and "orderBook" in url:
+            raise RuntimeError("order down")
+        if "positionBook" in url:
+            return _FakeResp(self._position)
+        if "orderBook" in url:
+            return _FakeResp(self._order)
+        raise AssertionError(f"Unexpected URL: {url}")
+
+
+class TestOandaRetailSentiment(unittest.TestCase):
+    """Position/Order book OANDA — sentimen retail (semua stub, tanpa network)."""
+
+    def _client(self, **kw):
+        c = OandaClient(api_key="test", account_id="123")
+        c._session = _FakeSession(**kw)
+        return c
+
+    def test_position_book_ratios(self):
+        c = self._client()
+        pb = c.get_position_book("EUR_USD")
+        # long: 60+50=110, short: 40+50=90, total 200 -> long 55%
+        self.assertEqual(pb["long_ratio"], 55.0)
+        self.assertEqual(pb["short_ratio"], 45.0)
+        self.assertIn("positions", pb)
+
+    def test_order_book_ratios(self):
+        c = self._client()
+        ob = c.get_order_book("EUR_USD")
+        self.assertEqual(ob["buy_ratio"], 70.0)
+        self.assertEqual(ob["sell_ratio"], 30.0)
+        self.assertEqual(ob["price"], "1.0825")
+
+    def test_retail_sentiment_merges_both(self):
+        c = self._client()
+        sent = c.get_retail_sentiment("EUR_USD")
+        self.assertEqual(sent["long_ratio"], 55.0)
+        self.assertEqual(sent["buy_ratio"], 70.0)
+        self.assertEqual(sent["instrument"], "EUR_USD")
+
+    def test_retail_sentiment_degrades_when_order_book_fails(self):
+        c = self._client(fail="order")
+        sent = c.get_retail_sentiment("EUR_USD")
+        self.assertEqual(sent["long_ratio"], 55.0)
+        self.assertNotIn("buy_ratio", sent)
+
+    def test_retail_sentiment_degrades_when_position_book_fails(self):
+        c = self._client(fail="position")
+        sent = c.get_retail_sentiment("EUR_USD")
+        self.assertNotIn("long_ratio", sent)
+        self.assertEqual(sent["buy_ratio"], 70.0)
+
+    def test_retail_sentiment_raises_when_both_fail(self):
+        c = self._client(fail="both")
+        with self.assertRaises(RuntimeError):
+            c.get_retail_sentiment("EUR_USD")
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ from config.settings import (
 from config.providers import YAHOO_SYMBOLS, OANDA_SYMBOLS
 from data.cache import cache, cached, CACHE_TTL_SECONDS
 from data.oanda_client import OandaClient
+from data.oanda_stream import oanda_stream
 
 logger = logging.getLogger(__name__)
 
@@ -94,18 +95,25 @@ class MarketDataAggregator:
         except Exception as e:
             logger.warning(f"OANDA candles gagal untuk {symbol}: {e}")
 
-        # Harga live (streaming). Kalau pricing gagal, degrade ke close candle
+        # Harga live. PRIORITAS: harga streaming WebSocket (tanpa request HTTP,
+        # paling real-time & paling hemat kuota REST). Kalau belum tersedia,
+        # fallback ke REST pricing; kalau itu pun gagal, degrade ke close candle
         # terakhir agar data tetap tersedia (candle tetap lebih fresh dari Yahoo).
         bid = ask = None
         current_price = None
-        try:
-            price = self.oanda.get_mid_price(instrument)
-            current_price = price["mid"]
-            bid, ask = price["bid"], price["ask"]
-        except Exception as e:
-            logger.warning(f"OANDA pricing gagal untuk {symbol}, pakai close candle: {e}")
-            if ohlcv:
-                current_price = ohlcv[-1]["close"]
+        stream_price = oanda_stream.get_price(instrument)
+        if stream_price:
+            current_price = stream_price["mid"]
+            bid, ask = stream_price["bid"], stream_price["ask"]
+        else:
+            try:
+                price = self.oanda.get_mid_price(instrument)
+                current_price = price["mid"]
+                bid, ask = price["bid"], price["ask"]
+            except Exception as e:
+                logger.warning(f"OANDA pricing gagal untuk {symbol}, pakai close candle: {e}")
+                if ohlcv:
+                    current_price = ohlcv[-1]["close"]
 
         if current_price is None:
             raise RuntimeError(f"OANDA tidak mengembalikan harga untuk {instrument}")
@@ -122,6 +130,10 @@ class MarketDataAggregator:
         if previous_close and previous_close > 0:
             change_pct = round(((current_price - previous_close) / previous_close) * 100, 2)
 
+        spread = None
+        if bid is not None and ask is not None:
+            spread = round(ask - bid, 8)
+
         return {
             "source": f"OANDA ({self.oanda.env_name})",
             "symbol": symbol,
@@ -129,6 +141,7 @@ class MarketDataAggregator:
             "current_price": current_price,
             "bid": bid,
             "ask": ask,
+            "spread": spread,
             "previous_close": previous_close,
             "change_pct": change_pct,
             "high_52w": None,

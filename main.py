@@ -60,6 +60,8 @@ from config.settings import (
 )
 from bot.handlers import MarketBot
 from data.cache import cache, cleanup_all
+from data.database import db
+from data.oanda_stream import start_stream
 
 # ===================== LOGGING SETUP =====================
 log_handlers = [logging.StreamHandler()]
@@ -106,6 +108,9 @@ async def post_init(application: Application):
         BotCommand("clear", "🧹 Bersihkan konteks"),
         BotCommand("chart", "📈 Grafik harga"),
         BotCommand("overview", "🌍 Overview pasar"),
+        BotCommand("sentimen", "🧠 Sentimen retail (OANDA)"),
+        BotCommand("watch", "👀 Watchlist instrumen"),
+        BotCommand("riwayat", "📜 Riwayat harga tersimpan"),
         BotCommand("subscribe", "🔔 Langganan Morning Brief"),
         BotCommand("unsubscribe", "🔕 Berhenti langganan"),
         BotCommand("about", "ℹ️ Tentang bot ini"),
@@ -155,6 +160,31 @@ async def price_alert_callback(context):
             await bot_instance.check_price_alerts(context.application)
         except Exception as e:
             logger.warning(f"Price alert check failed: {e}")
+
+
+async def price_history_recorder_callback(context):
+    """
+    Callback untuk merekam snapshot harga watchlist user (fitur /riwayat).
+    Dipanggil berkala setiap 30 menit. Data di-cache data layer (OANDA
+    real-time TTL 30 dtk) sehingga biaya request sangat kecil.
+    """
+    bot_instance = context.application.bot_data.get("market_bot")
+    if bot_instance:
+        try:
+            await bot_instance.record_price_history(context.application)
+        except Exception as e:
+            logger.warning(f"Price history recorder failed: {e}")
+
+
+async def price_history_cleanup_callback(context):
+    """
+    Bersihkan snapshot harga yang lebih tua dari 30 hari (perkecil ukuran tabel).
+    Dipanggil harian.
+    """
+    try:
+        await asyncio.to_thread(db.delete_old_price_history, 30)
+    except Exception as e:
+        logger.warning(f"Price history cleanup failed: {e}")
 
 
 async def cache_cleanup_callback(context):
@@ -263,6 +293,25 @@ def setup_scheduler(application: Application, bot: MarketBot):
             name="cache_cleanup",
         )
         logger.info("Cache cleanup scheduled every 10 minutes")
+
+        # ===== Riwayat Harga (fitur /watch & /riwayat) =====
+        # Rekam snapshot harga watchlist user setiap 30 menit; bersihkan data
+        # lebih tua dari 30 hari sekali sehari (04:00).
+        application.job_queue.run_repeating(
+            price_history_recorder_callback,
+            interval=timedelta(minutes=30),
+            first=300,  # Mulai 5 menit setelah start (beri waktu stream terkoneksi)
+            name="price_history_recorder",
+        )
+        logger.info("Price history recorder scheduled every 30 minutes")
+
+        cleanup_time = time(hour=4, minute=0, tzinfo=brief_tz)
+        application.job_queue.run_daily(
+            price_history_cleanup_callback,
+            time=cleanup_time,
+            name="price_history_cleanup",
+        )
+        logger.info("Price history cleanup scheduled daily at 04:00")
     else:
         logger.warning("JobQueue not available, morning brief & event alerts scheduling disabled. Install pytz if needed.")
 
@@ -284,6 +333,9 @@ def register_handlers(application: Application, bot: MarketBot):
     application.add_handler(CommandHandler("pa", bot.price_alert_command))
     application.add_handler(CommandHandler("chart", bot.chart_command))
     application.add_handler(CommandHandler("overview", bot.overview_command))
+    application.add_handler(CommandHandler("sentimen", bot.retail_sentiment_command))
+    application.add_handler(CommandHandler("watch", bot.watch_command))
+    application.add_handler(CommandHandler("riwayat", bot.history_command))
     application.add_handler(CommandHandler("subscribe", bot.subscribe_command))
     application.add_handler(CommandHandler("unsubscribe", bot.unsubscribe_command))
     application.add_handler(CallbackQueryHandler(bot.handle_callback))
@@ -304,6 +356,12 @@ def build_application():
     bot = MarketBot()
     setup_scheduler(application, bot)
     register_handlers(application, bot)
+
+    # Mulai streaming harga OANDA real-time (daemon thread; no-op bila
+    # OANDA_API_KEY belum di-set). Harga live langsung tersedia untuk
+    # jawaban harga & tidak membebani REST quota.
+    start_stream()
+
     return application
 
 
