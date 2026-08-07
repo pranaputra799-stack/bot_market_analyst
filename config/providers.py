@@ -44,19 +44,27 @@ PROVIDER_CONFIGS = {
         # menarik daftar model free terkini dari API OpenRouter sehingga bot
         # selalu memakai model free terbaru dan biaya AI tetap $0.
         # Model utama & fallback di bawah ini semua ber-suffix :free.
-        # CATATAN: beberapa model :free bisa diblokir guardrail privacy akun
-        # kecuali data policy diubah di https://openrouter.ai/settings/privacy
-        # (set ke "Allow all" agar semua model free bisa dipakai).
-        "model": "inclusionai/ling-3.0-flash:free",
+        # CATATAN PENTING: sebagian besar model :free diblokir guardrail privacy
+        # akun — error 404 "No endpoints available matching your guardrail
+        # restrictions and data policy". WAJIB set data policy di
+        # https://openrouter.ai/settings/privacy ke "Allow all" agar semua
+        # model free bisa dipakai. Tanpa itu, hanya sedikit model yang jalan.
+        # inclusionai/ling-3.0-flash:free sudah HAPUS dari katalog OpenRouter
+        # (kini berbayar) — jangan dipakai lagi.
+        "model": "google/gemma-4-31b-it:free",
         "fallback_models": [
             "openrouter/free",                          # auto-router: pilih model free terbaik
-            "google/gemma-4-31b-it:free",               # reasoning kuat, vision (262K ctx)
-            "google/gemma-4-26b-a4b-it:free",
             "nvidia/nemotron-3-ultra-550b-a55b:free",   # 1M context, bagus utk analisis panjang
-            "nvidia/nemotron-3-super-120b-a12b:free",
+            "google/gemma-4-26b-a4b-it:free",
             "openai/gpt-oss-20b:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
+            "inclusionai/ling-3.0-tiny:free",           # model terbaru inclusion (tiny, ringan)
             "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
             "nvidia/nemotron-3-nano-30b-a3b:free",
+            "poolside/laguna-s-2.1:free",
+            "poolside/laguna-xs-2.1:free",
+            "cohere/north-mini-code:free",
+            "nvidia/nemotron-nano-9b-v2:free",
         ],
         "auto_discover_free": True,  # tarik daftar free model terbaru dari API
         "headers": lambda key: {

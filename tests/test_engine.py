@@ -171,6 +171,73 @@ class TestRateLimitHandling(unittest.TestCase):
         self.assertNotIn("groq", eng._provider_cooldown)
 
 
+class TestDeadModelBlacklist(unittest.TestCase):
+    """Model yang 404 (hilang/tidak gratis/diblokir guardrail) di-blacklist
+    sementara agar tidak di-retry berulang di setiap generate()."""
+
+    def test_404_model_skipped_on_next_call(self):
+        import ai.engine as engine_mod
+
+        eng = _make_engine()
+
+        class FakeResp404:
+            status_code = 404
+            headers = {}
+            text = '{"error":{"message":"No endpoints available matching your guardrail restrictions"}}'
+
+            def json(self):
+                return {}
+
+        original = engine_mod.requests.post
+        calls = {"n": 0}
+        try:
+            def fake_post(*a, **k):
+                calls["n"] += 1
+                return FakeResp404()
+
+            engine_mod.requests.post = fake_post
+
+            # Panggilan 1: semua model 404 -> ter-blacklist
+            result = eng._call_openai_compatible(
+                "groq", PROVIDER_CONFIGS["groq"], "test-key", "p", "s", 1024
+            )
+            self.assertIsNone(result)
+            self.assertGreaterEqual(len(eng._dead_models), 1)
+            first_calls = calls["n"]
+
+            # Panggilan 2: model mati di-skip -> TANPA request baru
+            result2 = eng._call_openai_compatible(
+                "groq", PROVIDER_CONFIGS["groq"], "test-key", "p", "s", 1024
+            )
+            self.assertIsNone(result2)
+            self.assertEqual(calls["n"], first_calls)
+        finally:
+            engine_mod.requests.post = original
+
+    def test_429_not_blacklisted(self):
+        """429 adalah kuota, bukan model mati — TIDAK boleh masuk blacklist."""
+        import ai.engine as engine_mod
+
+        eng = _make_engine()
+
+        class FakeResp429:
+            status_code = 429
+            headers = {"Retry-After": "3"}
+            text = "rate limited"
+
+            def json(self):
+                return {}
+
+        original = engine_mod.requests.post
+        try:
+            engine_mod.requests.post = lambda *a, **k: FakeResp429()
+            eng._call_openai_compatible("groq", PROVIDER_CONFIGS["groq"], "test-key", "p", "s", 1024)
+        finally:
+            engine_mod.requests.post = original
+
+        self.assertEqual(eng._dead_models, {})
+
+
 class TestStats(unittest.TestCase):
     def test_get_stats_shape(self):
         eng = _make_engine()

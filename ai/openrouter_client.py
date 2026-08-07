@@ -37,18 +37,24 @@ class OpenRouterClient:
     BASE_URL = "https://openrouter.ai/api/v1"
 
     # Daftar model free statis (fallback bila API discovery gagal).
+    # Disinkronkan dengan katalog OpenRouter per 2026-08 (inclusionai/
+    # ling-3.0-flash:free sudah dihapus dari katalog — kini berbayar).
     # Endpoint lain bisa diblokir guardrail privacy akun kecuali data policy
     # diubah di https://openrouter.ai/settings/privacy (Allow all).
     FREE_MODELS = [
         "openrouter/free",  # auto-router: pilih model free terbaik otomatis
-        "inclusionai/ling-3.0-flash:free",
         "google/gemma-4-31b-it:free",
-        "google/gemma-4-26b-a4b-it:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",  # 1M context
-        "nvidia/nemotron-3-super-120b-a12b:free",
+        "google/gemma-4-26b-a4b-it:free",
         "openai/gpt-oss-20b:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "inclusionai/ling-3.0-tiny:free",
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
         "nvidia/nemotron-3-nano-30b-a3b:free",
+        "poolside/laguna-s-2.1:free",
+        "poolside/laguna-xs-2.1:free",
+        "cohere/north-mini-code:free",
+        "nvidia/nemotron-nano-9b-v2:free",
     ]
 
     def __init__(self, api_key: Optional[str] = None):

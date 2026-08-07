@@ -48,6 +48,13 @@ class AIFallbackEngine:
     # Backoff dasar (detik) sebelum dikali 2^attempt + jitter saat retry.
     BACKOFF_BASE_SECONDS = 1.0
 
+    # Model yang pernah 404 (tidak ada / tidak gratis / diblokir guardrail)
+    # di-skip selama TTL ini — mencegah request berulang ke model mati yang
+    # hanya menghasilkan spam log + latensi (tanpa memperbaiki hasil).
+    # Setelah TTL lewat, model dicoba lagi (berguna bila katalog/privacy berubah
+    # tanpa restart bot).
+    _DEAD_MODEL_TTL = 600  # 10 menit
+
     def __init__(self, fallback_order: Optional[List[str]] = None):
         self.fallback_order = fallback_order or AI_FALLBACK_ORDER
         self.api_keys = {
@@ -69,6 +76,8 @@ class AIFallbackEngine:
         # - _rate_limit_hints:   provider → durasi tunggu (detik) yang diminta server.
         self._provider_cooldown: Dict[str, float] = {}
         self._rate_limit_hints: Dict[str, float] = {}
+        # Blacklist model mati: model → timestamp 404 terakhir (lihat _DEAD_MODEL_TTL).
+        self._dead_models: Dict[str, float] = {}
         self._order_index: Dict[str, int] = {p: i for i, p in enumerate(self.fallback_order)}
         # Catatan thread-safety: system_override & max_tokens dikirim PER-REQUEST
         # (bukan state instance), sehingga generate() aman dipanggil paralel dari
@@ -300,6 +309,15 @@ class AIFallbackEngine:
                     models.append(m)
             models = models[:20]  # batasi agar fallback tidak lambat saat semua gagal
 
+        # Skip model yang masih dalam blacklist 404 (hemat waktu & spam log).
+        now = time.time()
+        stale = [m for m, ts in self._dead_models.items() if now - ts > self._DEAD_MODEL_TTL]
+        for m in stale:
+            self._dead_models.pop(m, None)
+        models = [m for m in models if now - self._dead_models.get(m, 0.0) > self._DEAD_MODEL_TTL]
+        if not models:
+            return None
+
         payload = {
             "model": models[0],
             "messages": [
@@ -338,6 +356,11 @@ class AIFallbackEngine:
                     return None
 
                 if resp.status_code != 200:
+                    if resp.status_code == 404:
+                        # Model hilang / tidak gratis / diblokir guardrail privacy
+                        # ("No endpoints available...") — blacklist sementara agar
+                        # request berikutnya langsung skip model ini.
+                        self._dead_models[model] = time.time()
                     logger.warning(f"{config['name']} error {resp.status_code} with {model}: {resp.text[:200]}")
                     continue
 
