@@ -158,12 +158,21 @@ class OandaPriceStream:
 
     def _run(self):
         backoff = _RECONNECT_BASE
+        hint_logged = False
         while not self._stop_event.is_set():
             try:
                 self._connect_and_listen()
                 backoff = _RECONNECT_BASE  # sesi sukses -> reset backoff
             except Exception as e:
                 logger.warning(f"OANDA stream session error: {e}")
+                if not hint_logged:
+                    hint_logged = True
+                    logger.warning(
+                        "Hint: bila error berulang 'timed out while waiting for handshake', "
+                        "kemungkinan proxy sistem (HTTP(S)_PROXY) di host ini mengganggu WebSocket. "
+                        "Kode kini memaksa koneksi langsung (proxy=None). "
+                        "Pastikan juga host dapat menjangkau wss://stream-fxpractice.oanda.com:443."
+                    )
             if self._stop_event.wait(backoff):
                 break
             backoff = min(backoff * 2, _RECONNECT_MAX)
@@ -193,7 +202,7 @@ class OandaPriceStream:
 
         logger.info(f"Connecting OANDA stream ({self.env}) — {len(instruments)} instruments...")
         received_any = False
-        with connect(url, additional_headers=headers, open_timeout=10, close_timeout=5) as ws:
+        with self._open_connection(connect, url, headers) as ws:
             while not self._stop_event.is_set():
                 try:
                     raw = ws.recv(timeout=_HEARTBEAT_TIMEOUT)
@@ -224,6 +233,38 @@ class OandaPriceStream:
         # ditolak server tanpa pesan error eksplisit; coba lagi dengan inti.
         if not received_any:
             self._use_core_only = True
+
+    @staticmethod
+    def _open_connection(connect, url: str, headers: Dict):
+        """
+        Buka koneksi WebSocket — kompatibel lintas versi websockets.
+
+        PENTING (proxy=None): sejak websockets 14, deteksi proxy sistem AKTIF
+        secara default. Di host cloud dengan env HTTP(S)_PROXY, koneksi wss bisa
+        di-route lewat proxy yang tidak mendukung WebSocket CONNECT → request
+        terkirim tapi jawaban handshake tidak pernah datang, lalu gagal dengan
+        "timed out while waiting for handshake response". Memaksa koneksi
+        langsung (proxy=None) menghindari masalah ini.
+
+        open_timeout 20 dtk: toleransi handshake di jaringan lambat (sebelumnya
+        10 dtk terlalu ketat).
+        """
+        try:
+            return connect(
+                url,
+                additional_headers=headers,
+                proxy=None,
+                open_timeout=20,
+                close_timeout=5,
+            )
+        except TypeError:
+            # websockets versi lama yang belum punya parameter proxy
+            return connect(
+                url,
+                additional_headers=headers,
+                open_timeout=20,
+                close_timeout=5,
+            )
 
 
 # Singleton yang dipakai data layer & main.py

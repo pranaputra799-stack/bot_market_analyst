@@ -95,5 +95,39 @@ class TestOandaPriceStream(unittest.TestCase):
         self.assertNotIn("BTC_USD", insts)
 
 
+class TestOpenConnection(unittest.TestCase):
+    """_open_connection: paksa proxy=None, fallback untuk websockets lama."""
+
+    def test_proxy_none_used_first(self):
+        calls = []
+
+        def fake_connect(url, **kwargs):
+            calls.append(kwargs)
+            return "WS"
+
+        ws = OandaPriceStream._open_connection(fake_connect, "wss://x", {"Authorization": "Bearer t"})
+        self.assertEqual(ws, "WS")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["proxy"], None)      # koneksi langsung
+        self.assertEqual(calls[0]["open_timeout"], 20) # toleransi handshake
+        self.assertEqual(calls[0]["additional_headers"]["Authorization"], "Bearer t")
+
+    def test_falls_back_without_proxy_on_typeerror(self):
+        calls = []
+
+        def fake_connect(url, **kwargs):
+            calls.append(kwargs)
+            if "proxy" in kwargs:
+                raise TypeError("unexpected keyword 'proxy'")  # websockets lama
+            return "WS"
+
+        ws = OandaPriceStream._open_connection(fake_connect, "wss://x", {"Authorization": "Bearer t"})
+        self.assertEqual(ws, "WS")
+        self.assertEqual(len(calls), 2)
+        self.assertIn("proxy", calls[0])
+        self.assertNotIn("proxy", calls[1])
+        self.assertEqual(calls[1]["open_timeout"], 20)
+
+
 if __name__ == "__main__":
     unittest.main()
