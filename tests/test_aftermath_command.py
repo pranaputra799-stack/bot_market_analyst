@@ -9,6 +9,7 @@ Mencakup:
 import asyncio
 import unittest
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from bot.handlers import MarketBot
 
@@ -241,6 +242,126 @@ class TestCalendarAftermathButtons(unittest.TestCase):
         self.assertIsNone(bot._build_calendar_aftermath_buttons([]))
 
 
+class _FakeSendBot:
+    """Bot fiktif yang menangkap send_message untuk memeriksa tombol."""
+
+    def __init__(self):
+        self.sent = []
+
+    async def send_message(self, chat_id, text, parse_mode=None, **kwargs):
+        self.sent.append({"chat_id": chat_id, "text": text, "parse_mode": parse_mode, **kwargs})
+        return None
+
+
+class _FakeApp:
+    """Application fiktif untuk job scheduler (digest & reminder)."""
+
+    def __init__(self, subscribers):
+        self.bot = _FakeSendBot()
+        self.bot_data = {"event_alert_subscribers": set(subscribers)}
+
+
+class _FakeJobMacro:
+    """Macro fiktif untuk job scheduler — mengembalikan daftar event yang sama."""
+
+    def __init__(self, events):
+        self.events = events
+
+    async def get_economic_calendar(self, from_date=None, to_date=None):
+        return self.events
+
+    async def get_economic_calendar_month(self):
+        return self.events
+
+
+def _today_event(name, hour, impact="high", actual=2.9, estimate=3.0, prev=3.2, unit="%"):
+    """Event ber-waktu HARI INI (WIB) — agar lolos filter digest."""
+    tz_wib = ZoneInfo("Asia/Jakarta")
+    today = datetime.now(tz_wib).date()
+    dt_utc = datetime(
+        today.year, today.month, today.day, hour, 0, tzinfo=tz_wib
+    ).astimezone(timezone.utc)
+    return {
+        "event": name,
+        "country": "US",
+        "country_emoji": "🇺🇸",
+        "time": f"{today.day:02d} {today.strftime('%b')} {today.year} {hour:02d}:00 WIB",
+        "_dt_utc": dt_utc,
+        "impact": impact,
+        "impact_label": "🔥 HIGH" if impact == "high" else "⚠️ MEDIUM",
+        "actual": actual,
+        "estimate": estimate,
+        "prev": prev,
+        "unit": unit,
+        "source": "fred",
+    }
+
+
+class TestDigestAndReminderButtons(unittest.TestCase):
+    """Digest pagi & reminder sebelum event punya tombol '📊 Analisis Dampak'."""
+
+    def test_digest_sends_aftermath_buttons(self):
+        events = [
+            _today_event("Non-Farm Payrolls (NFP) & Unemployment Rate", 13, actual=250.0, unit="K"),
+            _today_event("CPI / Inflasi AS (YoY)", 19),
+        ]
+        bot = MarketBot.__new__(MarketBot)
+        bot.macro = _FakeJobMacro(events)
+        app = _FakeApp([777])
+        asyncio.run(bot.send_scheduled_event_digest(app))
+        self.assertEqual(len(app.bot.sent), 1)
+        sent = app.bot.sent[0]
+        self.assertIn("HIGH-IMPACT HARI INI", sent["text"])
+        kb = sent.get("reply_markup")
+        self.assertIsNotNone(kb)
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        for e in events:
+            self.assertIn(f"aft:{MarketBot._event_short_id(e)}", callbacks)
+        self.assertIn("analisis dampak", sent["text"])
+
+    def test_digest_no_events_no_buttons(self):
+        bot = MarketBot.__new__(MarketBot)
+        bot.macro = _FakeJobMacro([])
+        app = _FakeApp([777])
+        asyncio.run(bot.send_scheduled_event_digest(app))
+        self.assertEqual(len(app.bot.sent), 1)
+        sent = app.bot.sent[0]
+        self.assertIn("Tidak ada rilis", sent["text"])
+        self.assertIsNone(sent.get("reply_markup"))
+
+    def test_reminder_sends_aftermath_button(self):
+        from config.settings import ECONOMIC_ALERT_LEAD_HOURS
+
+        dt = datetime.now(timezone.utc) + timedelta(minutes=30)
+        event = {
+            "event": "Fed Funds Rate Decision (FOMC)",
+            "country": "US",
+            "country_emoji": "🇺🇸",
+            "time": "30 menit lagi",
+            "_dt_utc": dt,
+            "impact": "high",
+            "impact_label": "🔥 HIGH",
+            "actual": None,
+            "estimate": 4.75,
+            "prev": 4.50,
+            "unit": "%",
+            "source": "fred",
+        }
+        self.assertGreaterEqual(ECONOMIC_ALERT_LEAD_HOURS, 1)
+        bot = MarketBot.__new__(MarketBot)
+        bot.macro = _FakeJobMacro([event])
+        app = _FakeApp([777])
+        asyncio.run(bot.check_event_reminders(app))
+        self.assertEqual(len(app.bot.sent), 1)
+        sent = app.bot.sent[0]
+        self.assertIn("REMINDER", sent["text"])
+        kb = sent.get("reply_markup")
+        self.assertIsNotNone(kb)
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        self.assertIn(f"aft:{MarketBot._event_short_id(event)}", callbacks)
+        self.assertIn("analisis dampak", sent["text"])
+
+
 class TestAftermathCalendarCallback(unittest.TestCase):
     """Alur callback 'aft:<id>' — analisis event langsung dari tombol kalender."""
 
@@ -250,6 +371,9 @@ class TestAftermathCalendarCallback(unittest.TestCase):
                 self.events = events
 
             async def get_economic_calendar_month(self):
+                return self.events
+
+            async def get_economic_calendar(self, from_date=None, to_date=None):
                 return self.events
 
         class FakeMarket:

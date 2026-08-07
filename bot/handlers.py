@@ -2561,13 +2561,21 @@ class MarketBot:
                 lines.append("⚡ Pengingat akan dikirim menjelang jam rilis.")
                 message = "\n".join(lines)
 
+            # Tombol '📊 Analisis Dampak' untuk event hari ini (ketuk → analisis)
+            kb = self._build_calendar_aftermath_buttons(high_today)
+            if kb:
+                message += "\n\n📊 *Ketuk tombol event untuk analisis dampak.*"
+
+            kwargs_send = {"parse_mode": "Markdown"}
+            if kb:
+                kwargs_send["reply_markup"] = kb
             for chat_id in list(subscribers):
                 try:
                     await safe_send_message(
                         application.bot,
                         chat_id=chat_id,
                         text=message,
-                        parse_mode="Markdown",
+                        **kwargs_send,
                     )
                 except Exception as e:
                     logger.error(f"Gagal kirim digest event ke {chat_id}: {e}")
@@ -2615,11 +2623,15 @@ class MarketBot:
             application.bot_data["event_alert_notified"] = notified
 
             for e in new_keys:
+                # Tombol '📊 Analisis Dampak' untuk event ini
+                kb = self._build_calendar_aftermath_buttons([e], max_buttons=1)
+                hint = "\n\n📊 *Ketuk tombol di bawah untuk analisis dampak.*" if kb else ""
                 message = (
                     f"⏰ *REMINDER EVENT EKONOMI*\n\n"
                     f"{e.get('impact_label', '🔥 HIGH')} {e.get('country_emoji', '')} *{e.get('event', '')}*\n"
                     f"🕐 {e.get('time', '')}\n\n"
                     f"⚠️ Rilis dalam ±{ECONOMIC_ALERT_LEAD_HOURS} jam — bersiap untuk volatilitas!"
+                    f"{hint}"
                 )
                 for chat_id in list(subscribers):
                     try:
@@ -2628,6 +2640,7 @@ class MarketBot:
                             chat_id=chat_id,
                             text=message,
                             parse_mode="Markdown",
+                            reply_markup=kb,
                         )
                     except Exception as ex:
                         logger.error(f"Gagal kirim reminder event ke {chat_id}: {ex}")
@@ -3218,7 +3231,15 @@ class MarketBot:
             await safe_edit_message_text(query, "⚠️ Tombol tidak valid. Kirim /calendar lagi.")
             return
         try:
-            events = await self.macro.get_economic_calendar_month()
+            # Jendela lebar agar mencakup semua sumber tombol: kalender bulan ini,
+            # digest (hari ini), dan reminder (maks +7 hari / lintas bulan).
+            tz_wib = ZoneInfo(MORNING_BRIEF_TIMEZONE)
+            today = datetime.now(tz_wib).date()
+            month_start = today.replace(day=1)
+            month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            from_date = min(month_start, today - timedelta(days=14)).strftime("%Y-%m-%d")
+            to_date = max(month_end, today + timedelta(days=7)).strftime("%Y-%m-%d")
+            events = await self.macro.get_economic_calendar(from_date=from_date, to_date=to_date)
         except Exception as e:
             logger.error(f"Aftermath button calendar fetch error: {e}")
             await safe_edit_message_text(
