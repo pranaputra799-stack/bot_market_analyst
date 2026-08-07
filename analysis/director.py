@@ -34,6 +34,7 @@ from analysis.risk_gates import RiskGates, RiskAssessment
 from analysis.signals import SignalEngine, AggregatedSignal, SignalType
 from analysis.intent_classifier import IntentClassifier, IntentResult
 from analysis.indicators import compute_indicators, format_indicators_for_prompt
+from analysis.fact_check import build_fact_check_note
 from analysis.monitoring import metrics
 from data.cache import cache, safe_hash
 
@@ -299,6 +300,12 @@ class AnalysisDirector:
             result.final_response = await self._synthesize_response(result)
             result.duration_ms = (time.time() - start_time) * 1000
 
+            # ===== FACT CHECK: verifikasi angka jawaban vs data terhitung =====
+            # Anti-halusinasi lapis terakhir (deterministik): angka harga/level di
+            # jawaban dicek terhadap indikator lokal + data pasar + pertanyaan &
+            # riwayat user. Angka yang tidak cocok ditambahkan catatan peringatan.
+            self._apply_fact_check(result)
+
             # Cache the result
             if self.enable_cache:
                 self._cache_result(question, result)
@@ -446,6 +453,33 @@ class AnalysisDirector:
             f"---\n"
             f"⚠️ *Disclaimer:* Analisis edukasi. Bukan saran trading."
         )
+
+    def _apply_fact_check(self, result: AnalysisResult):
+        """
+        Verifikasi deterministik angka di jawaban akhir terhadap data terhitung.
+
+        Membandingkan angka mirip harga/level pada `final_response` dengan angka
+        yang benar-benar ada di indikator teknikal lokal + data pasar + pertanyaan
+        & riwayat user. Bila ada yang tidak cocok, catatan peringatan ditambahkan
+        ke akhir jawaban (aman — tidak pernah raise).
+        """
+        if not result.final_response:
+            return
+        data_texts = [result.indicators_summary]
+        if result.research_context and result.research_context.raw_context:
+            data_texts.append(result.research_context.raw_context)
+        # Angka di pertanyaan & jawaban sebelumnya bukan halusinasi — sertakan
+        # sebagai data pembanding agar follow-up yang mengulang level tetap lolos.
+        if result.question:
+            data_texts.append(result.question)
+        if result.conversation_history:
+            data_texts.append(result.conversation_history)
+        try:
+            note = build_fact_check_note(result.final_response, data_texts)
+            if note:
+                result.final_response += note
+        except Exception as e:
+            logger.debug(f"Fact check skipped: {e}")
 
     def _check_cache(self, question: str, conversation_history: str = "") -> Optional[AnalysisResult]:
         """Check if we have a cached result for similar question."""

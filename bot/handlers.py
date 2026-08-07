@@ -50,6 +50,7 @@ from data.conversation_memory import format_history, add_exchange, get_context, 
 from utils.chart_generator import ChartGenerator
 from analysis.director import AnalysisDirector
 from analysis.indicators import compute_indicators, format_key_levels, format_indicators_for_prompt
+from analysis.fact_check import build_fact_check_note, strip_fact_check_note
 from utils.validators import sanitize_text
 from prompts.loader import format_prompt
 from analysis.monitoring import metrics
@@ -1218,6 +1219,7 @@ class MarketBot:
 
         # Simpan daftar subscriber di bot_data agar bisa diakses job scheduler
         subscribers = context.bot_data.setdefault("event_alert_subscribers", set())
+        before = set(subscribers)  # salinan: subscribers dimutasi in-place di bawah
 
         if arg in ("off", "0", "false", "stop", "matikan", "berhenti"):
             subscribers.discard(chat_id)
@@ -1227,6 +1229,29 @@ class MarketBot:
             await safe_reply_text(update.message, ALERT_ON_MESSAGE, parse_mode="Markdown")
 
         context.bot_data["event_alert_subscribers"] = subscribers
+        if subscribers != before:
+            await self._persist_alert_subscribers(context)
+
+    # ===================== PERSISTENSI STATE (Supabase) =====================
+    # Alert harga (/pa) & subscriber event (/alert) dulunya RAM-only — hilang
+    # saat bot restart/deploy. Sekarang disimpan ke DB; helper di bawah best-
+    # effort (kegagalan DB tidak boleh mengganggu alur chat).
+
+    async def _persist_price_alerts(self, context) -> None:
+        """Simpan daftar alert harga saat ini ke Supabase (best-effort)."""
+        try:
+            alerts = context.bot_data.get("price_alerts", [])
+            await db.save_price_alerts_async(alerts)
+        except Exception as e:
+            logger.debug(f"Persist price alerts gagal: {e}")
+
+    async def _persist_alert_subscribers(self, context) -> None:
+        """Simpan daftar subscriber event saat ini ke Supabase (best-effort)."""
+        try:
+            subscribers = context.bot_data.get("event_alert_subscribers", set())
+            await db.save_event_alert_subscribers_async(subscribers)
+        except Exception as e:
+            logger.debug(f"Persist event subscribers gagal: {e}")
 
     # ===================== PRICE ALERTS =====================
 
@@ -1270,6 +1295,7 @@ class MarketBot:
             context.bot_data["price_alerts"] = [
                 a for a in alerts if a.get("user_id") != user_id
             ]
+            await self._persist_price_alerts(context)
             await safe_reply_text(update.message, "🧹 Semua alert harga kamu sudah dihapus.")
             return
 
@@ -1287,6 +1313,7 @@ class MarketBot:
                 if not (a.get("user_id") == user_id and a.get("id") == alert_id)
             ]
             removed = before - len(context.bot_data["price_alerts"])
+            await self._persist_price_alerts(context)
             if removed:
                 await safe_reply_text(update.message, f"🗑️ Alert `{alert_id}` dihapus.")
             else:
@@ -1333,8 +1360,10 @@ class MarketBot:
 
         # Arah trigger: harga sekarang < target → tunggu NAIK; sebaliknya → tunggu TURUN
         direction = "below" if current >= target else "above"
-        alert_id = context.bot_data.get("price_alert_next_id", 1)
-        context.bot_data["price_alert_next_id"] = alert_id + 1
+        # id dihitung dari max yang ada (bukan counter RAM) agar aman setelah
+        # restart — id lama dimuat ulang dari DB, id baru tidak boleh dobel.
+        existing_ids = [a.get("id", 0) for a in alerts]
+        alert_id = max(existing_ids) + 1 if existing_ids else 1
         alerts.append({
             "id": alert_id,
             "chat_id": chat_id,
@@ -1346,6 +1375,7 @@ class MarketBot:
             "created": time.time(),
         })
         context.bot_data["price_alerts"] = alerts
+        await self._persist_price_alerts(context)
 
         arrow = "🟢 naik ke" if direction == "above" else "🔴 turun ke"
         await safe_reply_text(
@@ -1508,6 +1538,10 @@ class MarketBot:
             except Exception as e:
                 logger.warning(f"Price alert notify failed: {e}")
         application.bot_data["price_alerts"] = remaining
+        # Persist hanya jika ada alert yang benar-benar terpicu/terhapus —
+        # hindari rewrite penuh DB tiap tick scheduler saat tidak ada perubahan.
+        if triggered:
+            await self._persist_price_alerts(application)
 
     async def calendar_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler untuk perintah /calendar - Kalender Ekonomi."""
@@ -1846,16 +1880,29 @@ class MarketBot:
                     use_cache=True,
                 )
 
+                # FACT CHECK: angka harga/level di jawaban dicek terhadap data
+                # yang diberikan ke prompt (anti-halusinasi deterministik).
+                fact_note = build_fact_check_note(
+                    answer, [data_context, user_question, history_text]
+                )
+                if fact_note:
+                    answer += fact_note
+
                 core_answer = answer
                 final_message = f"{answer}{DISCLAIMER}"
 
             # Hapus simbol '*' (markdown bold) dari jawaban agar tidak tampil mentah
             final_message = strip_markdown_asterisks(final_message)
 
-            # Simpan JAWABAN INTI (tanpa badge multi-agent & disclaimer) ke memory
-            # agar kuota karakter tidak habis oleh boilerplate.
+            # Simpan JAWABAN INTI (tanpa badge multi-agent, disclaimer, dan catatan
+            # verifikasi data) ke memory agar kuota karakter tidak habis oleh
+            # boilerplate dan meta-info tidak jadi konteks pertanyaan berikutnya.
             if core_answer:
-                add_exchange(user_id, user_question, strip_markdown_asterisks(core_answer))
+                add_exchange(
+                    user_id,
+                    user_question,
+                    strip_markdown_asterisks(strip_fact_check_note(core_answer)),
+                )
 
             # Send response — edit pesan progress menjadi jawaban akhir.
             # Tombol aksi cepat (S/R, Skenario, Bersihkan) memakai konteks
@@ -2122,7 +2169,11 @@ class MarketBot:
         )
         answer = await asyncio.to_thread(self.ai.generate, prompt, max_retries=3, use_cache=True)
         content = strip_markdown_asterisks(_strip_provider_prefix(answer))
-        add_exchange(user_id, question, content)
+        # FACT CHECK: skenario memakai indikator lokal sebagai data pembanding
+        fact_note = build_fact_check_note(content, [indicators_str, question])
+        if fact_note:
+            content += fact_note
+        add_exchange(user_id, question, strip_fact_check_note(content))
         return f"{content}{DISCLAIMER}"
 
     def _format_market_data(self, data: Dict) -> str:
@@ -2426,8 +2477,11 @@ class MarketBot:
             # Tombol menu: aktifkan notifikasi event ekonomi (setara /alert on)
             chat_id = update.effective_chat.id
             subscribers = context.bot_data.setdefault("event_alert_subscribers", set())
+            before = set(subscribers)
             subscribers.add(chat_id)
             context.bot_data["event_alert_subscribers"] = subscribers
+            if subscribers != before:
+                await self._persist_alert_subscribers(context)
             await query.message.reply_text(ALERT_ON_MESSAGE, parse_mode="Markdown")
 
         elif data == "pa_usage":
@@ -2576,6 +2630,7 @@ class MarketBot:
         subscribers = self._get_alert_subscribers(application)
         if not subscribers:
             return
+        before_subscribers = set(subscribers)
 
         try:
             events = await self.macro.get_economic_calendar()
@@ -2630,6 +2685,8 @@ class MarketBot:
                         subscribers.discard(chat_id)
 
             application.bot_data["event_alert_subscribers"] = subscribers
+            if subscribers != before_subscribers:
+                await self._persist_alert_subscribers(application)
         except Exception as e:
             logger.error(f"Event digest error: {e}")
 
@@ -2641,6 +2698,7 @@ class MarketBot:
         subscribers = self._get_alert_subscribers(application)
         if not subscribers:
             return
+        before_subscribers = set(subscribers)
 
         try:
             events = await self.macro.get_economic_calendar()
@@ -2648,6 +2706,7 @@ class MarketBot:
             lead = timedelta(hours=ECONOMIC_ALERT_LEAD_HOURS)
 
             notified = set(application.bot_data.get("event_alert_notified", set()))
+            before_notified = set(notified)
 
             # Prune key yang sudah lewat agar set tidak membengkak tanpa batas
             notified = {k for k in notified if k.split("|")[-1] >= (now_utc - timedelta(days=7)).isoformat()}
@@ -2667,7 +2726,13 @@ class MarketBot:
                     new_keys.append(e)
 
             # Persist dedup dulu agar tidak terkirim dobel walau ada error saat kirim
+            # (best-effort ke Supabase — hanya jika ada perubahan).
             application.bot_data["event_alert_notified"] = notified
+            if notified != before_notified:
+                try:
+                    await db.save_event_alert_notified_async(notified)
+                except Exception as e:
+                    logger.debug(f"Persist event_alert_notified gagal: {e}")
 
             for e in new_keys:
                 # Tombol '📊 Analisis Dampak' untuk event ini
@@ -2696,6 +2761,8 @@ class MarketBot:
                             subscribers.discard(chat_id)
 
             application.bot_data["event_alert_subscribers"] = subscribers
+            if subscribers != before_subscribers:
+                await self._persist_alert_subscribers(application)
         except Exception as e:
             logger.error(f"Event reminder error: {e}")
 
@@ -3002,6 +3069,7 @@ class MarketBot:
         subscribers = self._get_alert_subscribers(application)
         if not subscribers:
             return
+        before_subscribers = set(subscribers)
 
         try:
             events = await self.macro.get_economic_calendar()
@@ -3078,6 +3146,8 @@ class MarketBot:
                     logger.debug(f"save_reported_event gagal: {ex}")
 
             application.bot_data["event_alert_subscribers"] = subscribers
+            if subscribers != before_subscribers:
+                await self._persist_alert_subscribers(application)
         except Exception as e:
             logger.error(f"Event aftermath error: {e}")
 

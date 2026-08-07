@@ -101,16 +101,19 @@ class ScenariosAgent:
         try:
             text = clean_json_response(response)
             data = json.loads(text)
-            items = data.get("scenarios", data.get("results", []))
+            # `or default` — LLM boleh mengembalikan null eksplisit (sesuai
+            # aturan anti-halusinasi "isi null jika tidak ada").
+            items = data.get("scenarios") or data.get("results") or []
 
             for item in items:
                 if isinstance(item, dict):
                     scenarios.append(Scenario(
-                        name=item.get("name", "Scenario"),
-                        description=item.get("description", ""),
-                        probability=min(100, max(0, int(item.get("probability", 33)))),
-                        key_catalysts=item.get("key_catalysts", []),
-                        impact_level=item.get("impact_level", "medium"),
+                        name=item.get("name") or "Scenario",
+                        description=item.get("description") or "",
+                        # is not None — jangan ubah 0 (probabilitas 0% yang sah)
+                        probability=min(100, max(0, int(item.get("probability") if item.get("probability") is not None else 33))),
+                        key_catalysts=item.get("key_catalysts") or [],
+                        impact_level=item.get("impact_level") or "medium",
                     ))
         except (json.JSONDecodeError, IndexError, ValueError) as e:
             logger.warning(f"Failed to parse scenarios: {e}")

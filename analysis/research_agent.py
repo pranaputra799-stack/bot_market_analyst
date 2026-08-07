@@ -206,10 +206,13 @@ class ResearchAgent:
         if cached:
             try:
                 data = json.loads(cached) if isinstance(cached, str) else cached
-                context.key_drivers = data.get("key_drivers", [])
-                context.key_levels = data.get("key_levels", {"support": [], "resistance": []})
-                context.market_regime = data.get("market_regime", "unknown")
-                context.llm_analysis = data.get("llm_analysis", "")
+                # `or default` — LLM boleh mengembalikan null eksplisit (sesuai
+                # aturan anti-halusinasi "isi null jika tidak ada"); jangan biarkan
+                # null mengalir ke bawah dan merusak konsumen field ini.
+                context.key_drivers = data.get("key_drivers") or []
+                context.key_levels = data.get("key_levels") or {"support": [], "resistance": []}
+                context.market_regime = data.get("market_regime") or "unknown"
+                context.llm_analysis = data.get("llm_analysis") or ""
                 return
             except (json.JSONDecodeError, TypeError):
                 pass
@@ -235,10 +238,12 @@ class ResearchAgent:
             text = clean_json_response(response)
 
             data = json.loads(text)
-            context.key_drivers = data.get("key_drivers", [])
-            context.key_levels = data.get("key_levels", {"support": [], "resistance": []})
-            context.market_regime = data.get("market_regime", "unknown")
-            context.llm_analysis = data.get("price_context", response[:500])
+            # `or default` — LLM boleh mengembalikan null eksplisit (sesuai aturan
+            # anti-halusinasi "isi null jika tidak ada"); guard agar tidak None.
+            context.key_drivers = data.get("key_drivers") or []
+            context.key_levels = data.get("key_levels") or {"support": [], "resistance": []}
+            context.market_regime = data.get("market_regime") or "unknown"
+            context.llm_analysis = data.get("price_context") or response[:500]
         except (json.JSONDecodeError, IndexError):
             context.llm_analysis = response[:500]
 

@@ -118,6 +118,26 @@ async def post_init(application: Application):
     await application.bot.set_my_commands(commands)
     logger.info(f"Bot {BOT_NAME} (@{BOT_USERNAME}) started successfully!")
 
+    # Muat state persisten dari Supabase — alert harga (/pa) & subscriber
+    # notifikasi event (/alert). Dulunya RAM-only, jadi hilang saat restart;
+    # sekarang dimuat ulang agar alert lama tetap aktif setelah deploy.
+    try:
+        alerts = await db.get_price_alerts_async()
+        if alerts:
+            application.bot_data["price_alerts"] = alerts
+        subscribers = await db.get_event_alert_subscribers_async()
+        if subscribers:
+            application.bot_data["event_alert_subscribers"] = subscribers
+        notified = await db.get_event_alert_notified_async()
+        if notified:
+            application.bot_data["event_alert_notified"] = notified
+        logger.info(
+            f"Loaded persistent state: {len(alerts)} price alerts, "
+            f"{len(subscribers)} event subscribers, {len(notified)} notified keys"
+        )
+    except Exception as e:
+        logger.warning(f"Gagal memuat state persisten dari database: {e}")
+
 
 async def morning_brief_callback(context):
     """

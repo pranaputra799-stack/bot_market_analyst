@@ -56,6 +56,17 @@ YOUR WORKFLOW:
 4. Note cross-asset correlations (DXY, Gold, Bonds, Equities) when relevant.
 5. Flag data gaps: if something is missing, say so — never invent numbers.
 
+DATA INTEGRITY (WAJIB):
+- Semua angka (harga, level support/resistance, RSI/MACD, tanggal, event ekonomi)
+  HANYA boleh diambil dari data yang diberikan di prompt. JANGAN mengarang atau
+  menebak angka — termasuk dari ingatan umum tentang pasar.
+- Jika sebuah angka tidak ada di data, tulis "data tidak tersedia" — jangan mengisi
+  dengan angka karangan agar terlihat lengkap.
+- Level support/resistance hanya boleh bersumber dari data yang tertulis (mis. pivot,
+  fibonacci, high/low) atau ditandai jelas sebagai "perkiraan" yang diturunkan dari
+  data yang ada.
+- Bedakan tegas data real vs estimasi/perkiraan.
+
 OUTPUT: concise, factual, focused on what matters for the user's question.
 
 {NO_MARKDOWN_RULE}
@@ -98,6 +109,10 @@ sesuai skema berikut:
 
 ATURAN:
 - JANGAN mengarang angka/harga yang tidak ada di data di atas.
+- Semua level di "key_levels" WAJIB berasal dari data yang diberikan (mis. pivot,
+  fibonacci, high/low yang tertulis). Jika data tidak memuat level tersebut,
+  isi null — DILARANG menebak level dari prinsip umum atau ingatan.
+- "price_context" hanya boleh merangkum angka yang benar-benar ada di data.
 - Jangan menyebut event belum rilis sebagai "sudah rilis" dan sebaliknya — ikuti status di data.
 - Jika data kosong, isi field dengan null (bukan teks karangan).
 - Jangan pakai simbol * atau **.
@@ -134,7 +149,10 @@ YOUR WORKFLOW:
 GUIDELINES:
 - Be objective and honest about uncertainty.
 - Default to NEUTRAL when evidence is mixed or data is missing.
-- Never invent prices or events to support a bias.
+- Never invent prices, levels, or events to support a bias. Setiap angka yang
+  dikutip sebagai bukti harus benar-benar ada di research/signal yang diberikan.
+- Jika data harga/level tidak tersedia, JANGAN membuat target harga karangan —
+  nyatakan keterbatasannya dan jaga confidence tetap rendah.
 - {NO_MARKDOWN_RULE}
 """,
     "thesis_formulation_template": """Based on the following analysis, formulate a market thesis:
@@ -160,6 +178,11 @@ Output JSON yang VALID dan LENGKAP, sesuai skema (tipe data wajib diikuti):
 
 ATURAN:
 - JANGAN mengarang data. Jika research/signal tidak tersedia, gunakan direction=neutral.
+- "key_evidence" HANYA boleh memuat bukti (termasuk angka) yang benar-benar ada di
+  RESEARCH FINDINGS / TECHNICAL SIGNALS di atas — jangan menambahkan angka karangan.
+- JANGAN menciptakan target harga/level yang tidak ada di data; jika data minim,
+  tuliskan keterbatasannya di "risk_factors".
+- "confidence" harus rendah (<= 0.3) bila data minim/tidak tersedia.
 - Jangan pakai simbol * atau **.
 """,
     "contradiction_system": """ROLE:
@@ -282,6 +305,8 @@ Confidence levels:
 - VERY LOW (<25%): Too uncertain for any conclusion
 
 Be honest: low data quality → low confidence. Never inflate confidence.
+Semua penilaian hanya boleh berdasar data yang diberikan pada prompt ini —
+JANGAN mengarang fakta, angka, atau event ekonomi untuk mendukung skor.
 
 {NO_MARKDOWN_RULE}
 """,
@@ -307,6 +332,10 @@ Output JSON yang VALID, sesuai skema (nilai float 0.0-1.0):
 
 ATURAN:
 - Jika data input "Not analyzed"/kosong, beri score rendah (<= 0.3) — jangan menebak.
+- "assessment" HANYA boleh merujuk bukti yang benar-benar ada di input; jangan
+  mengarang angka/event untuk mendukung skor.
+- "limitations" hanya boleh memuat keterbatasan yang terlihat di input (data
+  kosong/berlawanan) — bukan karangan.
 - Jangan pakai simbol * atau **.
 """,
     "risk_system": """ROLE:
@@ -415,13 +444,24 @@ INSTRUCTIONS:
 9. Jika pertanyaan merujuk percakapan sebelumnya (mis. "yang tadi", "kalau begitu",
    "level support-nya di mana?"), gunakan CONVERSATION HISTORY sebagai konteks.
    Jika tidak relevan, abaikan bagian itu.
+10. KONSISTENSI (WAJIB): Jika CONVERSATION HISTORY memuat jawaban bot sebelumnya
+    tentang aset yang sama, JANGAN mengubah harga, level support/resistance, atau
+    arah tren yang sudah disebut tanpa alasan data baru. Jika pandangan berubah
+    karena data baru, jelaskan perubahannya secara eksplisit.
 
 ANTI-HALLUCINATION (WAJIB):
+- SEMUA angka (harga, RSI, MACD, level, probabilitas, tanggal, jam, event ekonomi)
+  WAJIB berasal dari blok data di prompt ini (RESEARCH / TECHNICAL SIGNALS /
+  TECHNICAL INDICATORS / MARKET THESIS / MARKET SCENARIOS). Jika angka tidak ada
+  di blok data, JANGAN menulisnya — gunakan "data tidak tersedia" atau beri
+  label jelas "(perkiraan)".
 - JANGAN mengarang harga, tanggal, jam, atau event ekonomi yang tidak ada di data.
 - Jika data kalender kosong/tidak tersedia, katakan "Tidak ada rilis data besar terjadwal" — jangan menebak jadwal.
 - Kalau data hanya perkiraan/estimasi, tandai jelas sebagai perkiraan.
 - Jika data tidak cukup, akui keterbatasannya daripada berasumsi.
 - Jika sebuah bagian bertuliskan "Not analyzed", abaikan bagian itu — jangan mengarang isinya.
+- Jika SEMUA blok data kosong (tidak ada data konteks), jawab dengan pengetahuan
+  umum dan nyatakan jujur bahwa data spesifik saat ini tidak tersedia.
 
 {NO_MARKDOWN_RULE}
 

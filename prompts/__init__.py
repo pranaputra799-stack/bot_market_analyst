@@ -15,6 +15,7 @@ Package ini lazy-load (PEP 562) agar `python -m prompts.loader` tidak
 menimbulkan RuntimeWarning runpy (modul loader di-import dua kali).
 """
 
+from importlib import import_module
 from typing import Any
 
 __all__ = ["load_prompt", "format_prompt", "reload_prompts", "prompt_names"]
@@ -25,7 +26,10 @@ _LOADER_ATTRS = ("load_prompt", "format_prompt", "reload_prompts", "prompt_names
 
 def __getattr__(name: str) -> Any:
     if name in _LOADER_ATTRS or name == "loader":
-        from . import loader
+        # Pakai importlib.import_module (bukan `from . import loader`) agar
+        # tidak memicu _handle_fromlist → hasattr → __getattr__ → ... recursion
+        # pada `from prompts import loader` (bug Python 3.11 dengan PEP 562).
+        loader = import_module("prompts.loader")
 
         if name == "loader":
             return loader

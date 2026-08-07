@@ -101,15 +101,17 @@ class ContradictionAgent:
         try:
             text = clean_json_response(response)
             data = json.loads(text)
-            items = data.get("contradictions", [])
+            # `or default` — LLM boleh mengembalikan null eksplisit (sesuai
+            # aturan anti-halusinasi "isi null jika tidak ada").
+            items = data.get("contradictions") or []
 
             for item in items:
                 if isinstance(item, dict):
                     contradictions.append(Contradiction(
-                        description=item.get("description", item.get("contradiction", "")),
-                        severity=item.get("severity", "low"),
-                        sources=item.get("sources", ["llm_analysis"]),
-                        impact=item.get("impact", ""),
+                        description=item.get("description") or item.get("contradiction") or "",
+                        severity=item.get("severity") or "low",
+                        sources=item.get("sources") or ["llm_analysis"],
+                        impact=item.get("impact") or "",
                     ))
         except (json.JSONDecodeError, IndexError) as e:
             logger.warning(f"Failed to parse contradictions: {e}")

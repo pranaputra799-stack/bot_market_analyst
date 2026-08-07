@@ -181,11 +181,13 @@ class RiskGates:
         try:
             text = clean_json_response(response)
             data = json.loads(text)
+            # `or default` — LLM boleh mengembalikan null eksplisit (sesuai
+            # aturan anti-halusinasi "isi null jika tidak ada").
             return {
-                "overall_risk_level": data.get("overall_risk_level", "moderate"),
-                "risk_factors": data.get("risk_factors", []),
-                "catalyst_calendar": data.get("catalyst_calendar", []),
-                "summary": data.get("summary", ""),
+                "overall_risk_level": data.get("overall_risk_level") or "moderate",
+                "risk_factors": data.get("risk_factors") or [],
+                "catalyst_calendar": data.get("catalyst_calendar") or [],
+                "summary": data.get("summary") or "",
             }
         except (json.JSONDecodeError, IndexError) as e:
             logger.warning(f"Failed to parse risk assessment: {e}")

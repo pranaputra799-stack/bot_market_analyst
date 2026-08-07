@@ -47,6 +47,12 @@ AI_REQUEST_TIMEOUT = float(os.getenv("AI_REQUEST_TIMEOUT", "30"))
 # Nilai > 0 menimpa semuanya — berguna mengetatkan beban rate limit free tier
 # TANPA perlu redeploy (cukup set env + restart).
 AI_MIN_INTERVAL_SECONDS = float(os.getenv("AI_MIN_INTERVAL_SECONDS", "0") or "0")
+# Temperatur AI (kreativitas 0-1). Lebih rendah = jawaban lebih DETERMINISTIK,
+# konsisten antar pertanyaan yang sama, dan cenderung faktual (tidak mengarang).
+# Default 0.1 — cukup rendah agar analisis stabil, tanpa membuat jawaban kaku.
+# Bisa di-override via env AI_TEMPERATURE. Nilai di-clamp ke [0, 1] agar env
+# typo (mis. AI_TEMPERATURE=2) tidak menghasilkan output aneh.
+AI_TEMPERATURE = max(0.0, min(1.0, float(os.getenv("AI_TEMPERATURE", "0.1"))))
 
 # ===================== DATA PROVIDERS =====================
 ALPHA_VANTAGE_KEY = _get_key("ALPHA_VANTAGE_KEY", "")

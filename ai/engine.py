@@ -22,6 +22,7 @@ from config.settings import (
     GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY,
     CEREBRAS_API_KEY, MISTRAL_API_KEY, AI_FALLBACK_ORDER,
     AI_MAX_TOTAL_WAIT_SECONDS, AI_REQUEST_TIMEOUT, AI_MIN_INTERVAL_SECONDS,
+    AI_TEMPERATURE,
 )
 from config.providers import PROVIDER_CONFIGS
 from data.cache import get_cached_ai_response, set_cached_ai_response, safe_hash
@@ -385,7 +386,10 @@ class AIFallbackEngine:
                     "content": prompt
                 }
             ],
-            "temperature": 0.3,
+            # Temperature rendah (AI_TEMPERATURE, default 0.1) agar jawaban
+            # lebih deterministik & konsisten untuk pertanyaan yang sama —
+            # model tidak "kreatif" mengarang variasi angka.
+            "temperature": AI_TEMPERATURE,
             "max_tokens": max_tokens,
         }
 
@@ -478,7 +482,8 @@ class AIFallbackEngine:
                     }
                 ],
                 "generationConfig": {
-                    "temperature": 0.3,
+                    # Temperature rendah (AI_TEMPERATURE) — deterministik & faktual.
+                    "temperature": AI_TEMPERATURE,
                     "maxOutputTokens": max_tokens,
                     "topP": 0.95,
                     "topK": 40,

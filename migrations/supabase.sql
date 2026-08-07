@@ -83,6 +83,50 @@ CREATE TABLE IF NOT EXISTS public.event_reports (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ------------------------------------------------------------
+-- 7) price_alerts — alert harga per-user (/pa)
+--    SEBELUMNYA hanya tersimpan di RAM (bot_data) sehingga hilang
+--    saat bot restart/deploy. Sekarang persisten: handler menulis
+--    setiap perubahan, bot memuat ulang saat startup.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.price_alerts (
+    id           BIGINT PRIMARY KEY,
+    chat_id      BIGINT NOT NULL,
+    user_id      BIGINT NOT NULL,
+    symbol       TEXT NOT NULL,
+    display_name TEXT DEFAULT '',
+    target       DOUBLE PRECISION NOT NULL,
+    direction    TEXT NOT NULL DEFAULT 'above'
+                 CHECK (direction IN ('above', 'below')),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_alerts_user
+    ON public.price_alerts (user_id);
+CREATE INDEX IF NOT EXISTS idx_price_alerts_symbol
+    ON public.price_alerts (symbol);
+
+-- ------------------------------------------------------------
+-- 8) event_alert_subscribers — chat yang subscribe notifikasi event
+--    (/alert on / tombol menu). Sebelumnya RAM-only (bot_data),
+--    sekarang persisten agar tidak hilang saat restart.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.event_alert_subscribers (
+    chat_id    BIGINT PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ------------------------------------------------------------
+-- 9) event_alert_notified — dedup persisten REMINDER event ekonomi
+--    Kunci event yang sudah dapat reminder dalam jendela lead agar
+--    tidak terkirim dobel, termasuk setelah restart/deploy.
+--    (Aftermath punya dedup sendiri di tabel event_reports.)
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.event_alert_notified (
+    key        TEXT PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ============================================================
 -- RLS (Row Level Security) & GRANT
 --
@@ -118,6 +162,24 @@ DROP POLICY IF EXISTS "event_reports_all_anon" ON public.event_reports;
 CREATE POLICY "event_reports_all_anon" ON public.event_reports
     FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
+-- price_alerts
+ALTER TABLE public.price_alerts ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "price_alerts_all_anon" ON public.price_alerts;
+CREATE POLICY "price_alerts_all_anon" ON public.price_alerts
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+-- event_alert_subscribers
+ALTER TABLE public.event_alert_subscribers ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "event_alert_subscribers_all_anon" ON public.event_alert_subscribers;
+CREATE POLICY "event_alert_subscribers_all_anon" ON public.event_alert_subscribers
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+-- event_alert_notified
+ALTER TABLE public.event_alert_notified ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "event_alert_notified_all_anon" ON public.event_alert_notified;
+CREATE POLICY "event_alert_notified_all_anon" ON public.event_alert_notified
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
 -- users
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "users_all_anon" ON public.users;
@@ -138,14 +200,19 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.subscribers TO anon, authen
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.watchlist TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.price_history TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_reports TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.price_alerts TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_alert_subscribers TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_alert_notified TO anon, authenticated, service_role;
 
 -- ============================================================
 -- Verifikasi cepat (jalankan setelah semua statement di atas):
 --
 --   select table_name from information_schema.tables
 --   where table_schema = 'public'
---   and table_name in ('app_cache', 'users', 'subscribers', 'watchlist', 'price_history', 'event_reports');
+--   and table_name in ('app_cache', 'users', 'subscribers', 'watchlist',
+--                      'price_history', 'event_reports', 'price_alerts',
+--                      'event_alert_subscribers', 'event_alert_notified');
 --
--- Harus mengembalikan 6 baris. Jika sudah pernah punya tabel
+-- Harus mengembalikan 9 baris. Jika sudah pernah punya tabel
 -- users/subscribers sebelumnya, baris lama tetap aman (IF NOT EXISTS).
 -- ============================================================

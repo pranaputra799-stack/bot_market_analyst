@@ -273,6 +273,148 @@ class Database:
             logger.error(f"Error saving reported event: {e}")
             return False
 
+    # ===================== PRICE ALERTS (persisten) =====================
+    # Alert harga /pa tersimpan di DB, bukan hanya RAM: handler menulis setiap
+    # perubahan (add/clear/del/terpicu), bot memuat ulang saat startup.
+    # Strategi replace-all (delete + insert) — total alert dibatasi
+    # PRICE_ALERT_MAX_TOTAL (kecil), sehingga sederhana & konsisten.
+
+    @staticmethod
+    def get_price_alerts() -> list:
+        """Semua alert harga aktif, terurut dari id terkecil:
+        [{id, chat_id, user_id, symbol, display_name, target, direction}]"""
+        if not _is_configured():
+            return []
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/price_alerts?select=*&order=id.asc"
+            resp = requests.get(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            alerts = []
+            for row in resp.json():
+                try:
+                    alerts.append({
+                        "id": int(row["id"]),
+                        "chat_id": int(row["chat_id"]),
+                        "user_id": int(row["user_id"]),
+                        "symbol": row["symbol"],
+                        "display_name": row.get("display_name") or row["symbol"],
+                        "target": float(row["target"]),
+                        "direction": row.get("direction") or "above",
+                    })
+                except (KeyError, TypeError, ValueError):
+                    logger.warning(f"Skipping malformed price alert row: {row}")
+            return alerts
+        except Exception as e:
+            logger.error(f"Error fetching price alerts: {e}")
+            return []
+
+    @staticmethod
+    def save_price_alerts(alerts: list) -> bool:
+        """Ganti seluruh daftar alert harga (delete semua + insert ulang)."""
+        if not _is_configured():
+            return False
+        try:
+            headers = _get_headers()
+            url = f"{SUPABASE_URL}/rest/v1/price_alerts"
+            requests.delete(url, headers=headers, timeout=10).raise_for_status()
+            if not alerts:
+                return True
+            rows = [
+                {
+                    "id": a.get("id"),
+                    "chat_id": a.get("chat_id"),
+                    "user_id": a.get("user_id"),
+                    "symbol": a.get("symbol", ""),
+                    "display_name": a.get("display_name", "") or "",
+                    "target": a.get("target"),
+                    "direction": a.get("direction", "above"),
+                }
+                for a in alerts
+            ]
+            headers = {**headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
+            resp = requests.post(url, json=rows, headers=headers, timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error saving price alerts: {e}")
+            return False
+
+    # ===================== EVENT ALERT SUBSCRIBERS (persisten) =====================
+    # Chat yang subscribe notifikasi event (/alert on). Sebelumnya RAM-only,
+    # sekarang persisten agar tidak hilang saat restart/deploy.
+
+    @staticmethod
+    def get_event_alert_subscribers() -> set:
+        """Semua chat_id yang subscribe notifikasi event."""
+        if not _is_configured():
+            return set()
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/event_alert_subscribers?select=chat_id"
+            resp = requests.get(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            return {int(row["chat_id"]) for row in resp.json()}
+        except Exception as e:
+            logger.error(f"Error fetching event alert subscribers: {e}")
+            return set()
+
+    @staticmethod
+    def save_event_alert_subscribers(subscribers) -> bool:
+        """Ganti seluruh daftar subscriber event (delete semua + insert ulang)."""
+        if not _is_configured():
+            return False
+        try:
+            headers = _get_headers()
+            url = f"{SUPABASE_URL}/rest/v1/event_alert_subscribers"
+            requests.delete(url, headers=headers, timeout=10).raise_for_status()
+            rows = [{"chat_id": c} for c in sorted(set(subscribers))]
+            if not rows:
+                return True
+            headers = {**headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
+            resp = requests.post(url, json=rows, headers=headers, timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error saving event alert subscribers: {e}")
+            return False
+
+    # ===================== EVENT ALERT NOTIFIED (dedup reminder) =====================
+    # Kunci event yang sudah diberi reminder (jendela lead). Sebelumnya RAM-only;
+    # sekarang persisten agar reminder tidak terkirim dobel setelah restart.
+
+    @staticmethod
+    def get_event_alert_notified() -> set:
+        """Semua kunci event yang sudah mendapat reminder."""
+        if not _is_configured():
+            return set()
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/event_alert_notified?select=key"
+            resp = requests.get(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            return {row["key"] for row in resp.json()}
+        except Exception as e:
+            logger.error(f"Error fetching event_alert_notified: {e}")
+            return set()
+
+    @staticmethod
+    def save_event_alert_notified(keys) -> bool:
+        """Ganti seluruh kunci event yang sudah di-notify (delete + insert)."""
+        if not _is_configured():
+            return False
+        try:
+            headers = _get_headers()
+            url = f"{SUPABASE_URL}/rest/v1/event_alert_notified"
+            requests.delete(url, headers=headers, timeout=10).raise_for_status()
+            rows = [{"key": k} for k in sorted(set(keys))]
+            if not rows:
+                return True
+            headers = {**headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
+            resp = requests.post(url, json=rows, headers=headers, timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error saving event_alert_notified: {e}")
+            return False
+
     # ===================== ASYNC WRAPPERS =====================
     # Handler Telegram (python-telegram-bot v20) berjalan di event loop asyncio.
     # Varian *_async memindahkan operasi sinkron ke thread pool sehingga tidak
@@ -341,6 +483,30 @@ class Database:
     @staticmethod
     async def save_reported_event_async(key: str) -> bool:
         return await asyncio.to_thread(Database.save_reported_event, key)
+
+    @staticmethod
+    async def get_price_alerts_async() -> list:
+        return await asyncio.to_thread(Database.get_price_alerts)
+
+    @staticmethod
+    async def save_price_alerts_async(alerts: list) -> bool:
+        return await asyncio.to_thread(Database.save_price_alerts, alerts)
+
+    @staticmethod
+    async def get_event_alert_subscribers_async() -> set:
+        return await asyncio.to_thread(Database.get_event_alert_subscribers)
+
+    @staticmethod
+    async def save_event_alert_subscribers_async(subscribers) -> bool:
+        return await asyncio.to_thread(Database.save_event_alert_subscribers, subscribers)
+
+    @staticmethod
+    async def get_event_alert_notified_async() -> set:
+        return await asyncio.to_thread(Database.get_event_alert_notified)
+
+    @staticmethod
+    async def save_event_alert_notified_async(keys) -> bool:
+        return await asyncio.to_thread(Database.save_event_alert_notified, keys)
 
 
 db = Database()

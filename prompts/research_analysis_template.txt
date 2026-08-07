@@ -36,6 +36,10 @@ sesuai skema berikut:
 
 ATURAN:
 - JANGAN mengarang angka/harga yang tidak ada di data di atas.
+- Semua level di "key_levels" WAJIB berasal dari data yang diberikan (mis. pivot,
+  fibonacci, high/low yang tertulis). Jika data tidak memuat level tersebut,
+  isi null — DILARANG menebak level dari prinsip umum atau ingatan.
+- "price_context" hanya boleh merangkum angka yang benar-benar ada di data.
 - Jangan menyebut event belum rilis sebagai "sudah rilis" dan sebaliknya — ikuti status di data.
 - Jika data kosong, isi field dengan null (bukan teks karangan).
 - Jangan pakai simbol * atau **.

@@ -35,7 +35,10 @@ logger = logging.getLogger(__name__)
 # ===================== KONFIGURASI =====================
 MEMORY_TTL = 15 * 60        # 15 menit — cukup untuk follow-up, tidak menumpuk
 MAX_ENTRIES = 6             # maksimal pasangan Q&A yang disimpan per user
-MAX_ANSWER_CHARS = 300      # potong jawaban agar hemat token prompt
+# Potong jawaban agar hemat token — cukup panjang agar level/angka kunci dari
+# jawaban sebelumnya (support/resistance/harga) ikut tersimpan, sehingga
+# jawaban follow-up tetap KONSISTEN dengan jawaban bot sebelumnya.
+MAX_ANSWER_CHARS = 500
 MAX_QUESTION_CHARS = 200
 MAX_EXCHANGES_IN_CONTEXT = 4  # berapa pertukaran terakhir yang dimasukkan ke prompt
 

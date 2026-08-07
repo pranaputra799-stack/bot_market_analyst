@@ -20,5 +20,9 @@ Output JSON yang VALID, sesuai skema (nilai float 0.0-1.0):
 
 ATURAN:
 - Jika data input "Not analyzed"/kosong, beri score rendah (<= 0.3) — jangan menebak.
+- "assessment" HANYA boleh merujuk bukti yang benar-benar ada di input; jangan
+  mengarang angka/event untuk mendukung skor.
+- "limitations" hanya boleh memuat keterbatasan yang terlihat di input (data
+  kosong/berlawanan) — bukan karangan.
 - Jangan pakai simbol * atau **.
 

@@ -96,13 +96,16 @@ class ThesisAgent:
         if cached:
             try:
                 data = json.loads(cached) if isinstance(cached, str) else cached
+                # `or default` — LLM boleh mengembalikan null eksplisit (sesuai
+                # aturan anti-halusinasi "isi null jika tidak ada").
                 return Thesis(
-                    direction=data.get("direction", "neutral"),
-                    confidence=data.get("confidence", 0.5),
-                    summary=data.get("thesis_summary", ""),
-                    key_evidence=data.get("key_evidence", []),
-                    time_horizon=data.get("time_horizon", "short_term"),
-                    risk_factors=data.get("risk_factors", []),
+                    direction=data.get("direction") or "neutral",
+                    # is not None — jangan ubah 0.0 (confidence rendah yang sah)
+                    confidence=data.get("confidence") if data.get("confidence") is not None else 0.5,
+                    summary=data.get("thesis_summary") or "",
+                    key_evidence=data.get("key_evidence") or [],
+                    time_horizon=data.get("time_horizon") or "short_term",
+                    risk_factors=data.get("risk_factors") or [],
                 )
             except (json.JSONDecodeError, TypeError):
                 pass
@@ -146,12 +149,16 @@ class ThesisAgent:
             text = clean_json_response(response)
             data = json.loads(text)
             return Thesis(
-                direction=data.get("direction", "neutral"),
-                confidence=min(1.0, max(0.0, float(data.get("confidence", 0.5)))),
-                summary=data.get("thesis_summary", ""),
-                key_evidence=data.get("key_evidence", []),
-                time_horizon=data.get("time_horizon", "short_term"),
-                risk_factors=data.get("risk_factors", []),
+                direction=data.get("direction") or "neutral",
+                # is not None — jangan ubah 0.0 (confidence rendah yang sah)
+                confidence=min(
+                    1.0,
+                    max(0.0, float(data.get("confidence") if data.get("confidence") is not None else 0.5)),
+                ),
+                summary=data.get("thesis_summary") or "",
+                key_evidence=data.get("key_evidence") or [],
+                time_horizon=data.get("time_horizon") or "short_term",
+                risk_factors=data.get("risk_factors") or [],
             )
         except (json.JSONDecodeError, IndexError, ValueError) as e:
             logger.warning(f"Failed to parse thesis response: {e}")

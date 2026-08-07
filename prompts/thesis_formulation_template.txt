@@ -21,5 +21,10 @@ Output JSON yang VALID dan LENGKAP, sesuai skema (tipe data wajib diikuti):
 
 ATURAN:
 - JANGAN mengarang data. Jika research/signal tidak tersedia, gunakan direction=neutral.
+- "key_evidence" HANYA boleh memuat bukti (termasuk angka) yang benar-benar ada di
+  RESEARCH FINDINGS / TECHNICAL SIGNALS di atas — jangan menambahkan angka karangan.
+- JANGAN menciptakan target harga/level yang tidak ada di data; jika data minim,
+  tuliskan keterbatasannya di "risk_factors".
+- "confidence" harus rendah (<= 0.3) bila data minim/tidak tersedia.
 - Jangan pakai simbol * atau **.
 

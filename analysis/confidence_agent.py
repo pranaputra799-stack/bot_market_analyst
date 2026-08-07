@@ -131,8 +131,8 @@ class ConfidenceAgent:
                 # Blend algorithmic and LLM scores
                 overall = (raw_score * 0.4) + (llm_data.get("overall", raw_score) * 0.6)
                 scenario_clarity = llm_data.get("scenario_clarity", 0.5)
-                assessment = llm_data.get("assessment", self._generate_assessment(overall))
-                limitations = llm_data.get("limitations", [])
+                assessment = llm_data.get("assessment") or self._generate_assessment(overall)
+                limitations = llm_data.get("limitations") or []
             else:
                 overall = raw_score
                 scenario_clarity = 0.5
@@ -213,14 +213,16 @@ class ConfidenceAgent:
         try:
             text = clean_json_response(response)
             data = json.loads(text)
+            # is not None — jangan ubah 0.0 (skor rendah yang sah) menjadi default;
+            # guard null eksplisit dari LLM agar tidak None/ValueError.
             return {
-                "overall": float(data.get("overall_score", 0.5)),
-                "level": data.get("level", "moderate"),
-                "evidence_quality": float(data.get("evidence_quality", 0.5)),
-                "signal_alignment": float(data.get("signal_alignment", 0.5)),
-                "scenario_clarity": float(data.get("scenario_clarity", 0.5)),
-                "assessment": data.get("assessment", ""),
-                "limitations": data.get("limitations", []),
+                "overall": float(data.get("overall_score") if data.get("overall_score") is not None else 0.5),
+                "level": data.get("level") or "moderate",
+                "evidence_quality": float(data.get("evidence_quality") if data.get("evidence_quality") is not None else 0.5),
+                "signal_alignment": float(data.get("signal_alignment") if data.get("signal_alignment") is not None else 0.5),
+                "scenario_clarity": float(data.get("scenario_clarity") if data.get("scenario_clarity") is not None else 0.5),
+                "assessment": data.get("assessment") or "",
+                "limitations": data.get("limitations") or [],
             }
         except (json.JSONDecodeError, IndexError, ValueError) as e:
             logger.warning(f"Failed to parse confidence response: {e}")

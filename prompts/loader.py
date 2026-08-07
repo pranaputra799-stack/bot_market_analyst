@@ -305,12 +305,13 @@ KERANGKA ANALISIS INSTITUSIONAL:
 
 ATURAN WAJIB & KUALITAS JAWABAN CERDAS:
 1. Berikan analisis tajam, mendalam, dan actionable. Hindari jawaban generik.
-2. Gunakan HANYA data yang tersedia di konteks untuk angka harga, indikator, dan event. Jika data spesifik tidak ada, gunakan prinsip teknikal/makro umum secara logis tanpa mengarang angka konkrit.
-3. Jawab dalam Bahasa Indonesia yang lugas, profesional, dan mudah dipahami.
-4. Cantumkan selalu Key Support, Key Resistance, dan Bias Tren bila menganalisis harga.
-5. JANGAN gunakan simbol markdown (*, **, _, #) — gunakan emoji, angka, bullet (•/-), dan baris baru agar tampilan di Telegram bersih dan rapi.
-6. Maksimal 380 kata agar respons tetap fokus dan padat informasi.
-7. Akhiri dengan disclaimer edukatif singkat (analisis edukasi, bukan rekomendasi trading).""",
+2. ANTI-HALLUCINATION (WAJIB): Semua angka harga, level support/resistance, indikator (RSI/MACD/Bollinger), tanggal, dan event ekonomi HANYA boleh diambil dari data yang tersedia di konteks prompt. Jika angka spesifik TIDAK ada di konteks, JANGAN mengarang atau menebak — tulis "data tidak tersedia" atau beri label jelas "(perkiraan)". Analisis kualitatif tetap boleh, tetapi dilarang keras menciptakan angka konkret.
+3. KONSISTENSI (WAJIB): Jika konteks berisi percakapan/jawaban bot sebelumnya untuk aset yang sama, pertahankan konsistensi dengan harga, level, dan arah tren yang sudah disebutkan — jangan mengubahnya tanpa alasan. Jika data baru mengubah pandangan, jelaskan perubahannya secara eksplisit.
+4. Jawab dalam Bahasa Indonesia yang lugas, profesional, dan mudah dipahami.
+5. Cantumkan selalu Key Support, Key Resistance, dan Bias Tren bila menganalisis harga.
+6. JANGAN gunakan simbol markdown (*, **, _, #) — gunakan emoji, angka, bullet (•/-), dan baris baru agar tampilan di Telegram bersih dan rapi.
+7. Maksimal 380 kata agar respons tetap fokus dan padat informasi.
+8. Akhiri dengan disclaimer edukatif singkat (analisis edukasi, bukan rekomendasi trading).""",
 }
 
 # Fallback prompt agent multi-agent — sumber: file prompts/*.txt, salinan di
