@@ -121,6 +121,116 @@ class TestDetectPairs(unittest.TestCase):
         self.assertEqual(bot._detect_pairs("apa itu inflasi?"), [])
 
 
+class TestStartMenuKeyboard(unittest.TestCase):
+    """Menu /start: semua callback_data tombol harus didukung handle_callback."""
+
+    # Callback yang ditangani handle_callback (termasuk prefix generik chart_)
+    SUPPORTED = {
+        "morning", "overview", "gold_price", "eurusd", "macro",
+        "chart_eurusd", "chart_gold", "chart_dxy", "chart_btc",
+        "calendar", "sentiment", "sentimen_retail", "alert_on", "pa_usage",
+        "watch_list", "riwayat_usage", "subscribe", "unsubscribe", "help",
+    }
+
+    def _run_start(self):
+        # start() membaca user.id/username/first_name → fake user lengkap
+        bot = MarketBot.__new__(MarketBot)
+        user = type("U", (), {"id": 9999, "username": "tester", "first_name": "Tester"})()
+        upd = _FakeUpdate("/start", user_id=9999)
+        upd.effective_user = user
+        asyncio.run(bot.start(upd, _FakeContext()))
+        text, kwargs = upd.message.replies[0]
+        return text, kwargs
+
+    def test_welcome_message_rendered(self):
+        from bot.messages import WELCOME_MESSAGE
+
+        text, _ = self._run_start()
+        self.assertEqual(text, WELCOME_MESSAGE)
+
+    def test_all_buttons_have_supported_callbacks(self):
+        _, kwargs = self._run_start()
+        kb = kwargs.get("reply_markup")
+        self.assertIsNotNone(kb, "Menu /start harus punya inline keyboard")
+        for row in kb.inline_keyboard:
+            for btn in row:
+                cb = btn.callback_data
+                supported = (
+                    cb in self.SUPPORTED
+                    or cb.startswith("chart_")
+                    or cb.startswith("qa:")
+                )
+                self.assertTrue(
+                    supported, f"Tombol menu {cb} tidak punya handler callback!"
+                )
+
+    def test_menu_has_new_features(self):
+        _, kwargs = self._run_start()
+        kb = kwargs.get("reply_markup")
+        callbacks = [
+            btn.callback_data
+            for row in kb.inline_keyboard
+            for btn in row
+        ]
+        # Fitur baru OANDA harus ada di menu
+        self.assertIn("sentimen_retail", callbacks)
+        self.assertIn("watch_list", callbacks)
+        self.assertIn("riwayat_usage", callbacks)
+        self.assertIn("alert_on", callbacks)
+
+
+class TestMenuCallbacks(unittest.TestCase):
+    """Callback tombol menu baru: alert_on menambah subscriber event."""
+
+    def _run_callback(self, data):
+        from bot.messages import ALERT_ON_MESSAGE
+
+        class _QMsg:
+            def __init__(self):
+                self.replies = []
+
+            async def reply_text(self, text, **kwargs):
+                self.replies.append((text, kwargs))
+
+        class _Query:
+            def __init__(self):
+                self.data = data
+                self.answered = False
+                self.message = _QMsg()
+
+            async def answer(self):
+                self.answered = True
+
+        query = _Query()
+        upd = type("U", (), {
+            "callback_query": query,
+            "effective_chat": type("C", (), {"id": 777})(),
+        })()
+        bot = MarketBot.__new__(MarketBot)
+        ctx = _FakeContext()
+        asyncio.run(bot.handle_callback(upd, ctx))
+        return query, ctx
+
+    def test_alert_on_adds_subscriber(self):
+        from bot.messages import ALERT_ON_MESSAGE
+
+        query, ctx = self._run_callback("alert_on")
+        self.assertTrue(query.answered)
+        self.assertIn(777, ctx.bot_data["event_alert_subscribers"])
+        text, _ = query.message.replies[0]
+        self.assertIn("AKTIF", text)
+
+    def test_pa_usage_shows_usage(self):
+        query, _ = self._run_callback("pa_usage")
+        text, _ = query.message.replies[0]
+        self.assertIn("ALERT HARGA", text)
+
+    def test_riwayat_usage_shows_usage(self):
+        query, _ = self._run_callback("riwayat_usage")
+        text, _ = query.message.replies[0]
+        self.assertIn("RIWAYAT HARGA", text)
+
+
 class TestQuickActionKeyboard(unittest.TestCase):
     def test_chart_button_with_symbol(self):
         kb = _quick_action_keyboard("EURUSD=X")

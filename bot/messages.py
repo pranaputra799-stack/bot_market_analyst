@@ -11,102 +11,68 @@ from typing import Dict, Optional
 WELCOME_MESSAGE = """
 🎯 *Selamat datang di MarketAI Analyst!*
 
-Saya adalah asisten analisis pasar keuangan berbasis AI dengan *Multi-Agent Analysis System* 🧠. Saya siap membantu kamu memahami pergerakan pasar Forex, Gold, dan kondisi ekonomi global.
+Asisten pasar *real-time* untuk trader Indonesia 🇮🇩 — harga Forex & Gold *live* dari OANDA, dianalisis oleh 7-agent AI 🧠.
 
-📊 *Yang bisa saya lakukan:*
-• 📈 Analisis harga *Forex & Gold* terkini
-• 🏛️ Penjelasan data *makroekonomi* (CPI, NFP, Fed Rate)
-• 📰 *Berita & sentimen* pasar terkini
-• 🔗 Korelasi antar instrumen (DXY vs Gold, dll)
-• 🌅 *Morning Brief* harian (kirim /morning)
-• 📅 *Kalender Ekonomi* high-impact bulan ini (kirim /calendar)
-• 🌍 *Overview pasar* semua instrumen utama (kirim /overview)
-• 📈 *Grafik harga* (kirim /chart gold, /chart eurusd, dll)
+📊 *Coba langsung:*
+• 💱 Tanya harga — "harga gold sekarang"
+• 📈 Analisis penuh — "analisis teknikal EUR/USD"
+• 🏛️ Data makro — CPI, NFP, Fed Rate
+• 🧠 Sentimen retail trader — /sentimen
+• 👀 Watchlist + riwayat harga — /watch, /riwayat
+• 📅 Kalender ekonomi high-impact — /calendar
 
-🧠 *Multi-Agent Analysis:*
-• 🔍 Research Agent — Kumpulkan konteks pasar
-• 📊 Signal Engine — Analisis sinyal teknikal
-• 💡 Thesis Agent — Formulasikan tesis pasar
-• ⚠️ Contradiction Agent — Deteksi sinyal konflik
-• 🔮 Scenarios Agent — Skenario pasar (bull/bear/base)
-• 📈 Confidence Agent — Skor keyakinan analisis
-• 🛡️ Risk Gates — Asesmen risiko pasar
+🔔 *Notifikasi otomatis:*
+• 🌅 Morning Brief setiap pagi — /subscribe
+• 📰 Analisis dampak event ke DXY — /alert on
+• 🎯 Alert harga target — /pa eurusd 1.0900
 
-💡 *Contoh pertanyaan:*
-• "Kenapa gold naik hari ini?"
-• "Jelaskan dampak NFP ke USD/JPY"
-• "Analisis teknikal EUR/USD"
-• "Berita apa yang mempengaruhi pasar minggu ini?"
-• "Apa itu CPI dan bagaimana dampaknya ke forex?"
+👇 *Ketuk tombol di bawah* untuk mulai — atau langsung kirim pertanyaan apa pun.
 
-⚙️ *Perintah:*
-/start - Mulai bot
-/help - Bantuan ini
-/morning - Morning Brief hari ini
-/calendar - 📅 Kalender Ekonomi
-/alert - 🔔 Notifikasi event ekonomi (on/off)
-/chart - 📈 Grafik harga (contoh: /chart eurusd)
-/overview - 🌍 Overview semua instrumen utama
-/clear - 🧹 Bersihkan konteks percakapan
-/status - Status sistem & API
-/about - Tentang bot ini
-
-⚠️ *Disclaimer:* Ini adalah analisis edukasi, *bukan sinyal trading* atau rekomendasi investasi. Keputusan trading sepenuhnya tanggung jawab Anda.
+⚠️ Analisis edukasi, *bukan* sinyal trading atau rekomendasi investasi. Keputusan trading sepenuhnya tanggung jawab Anda.
 """
 
 HELP_MESSAGE = """
 📚 *BANTUAN & PANDUAN*
 
-*Cara Menggunakan Bot:*
-Cukup kirim pertanyaan tentang pasar keuangan, dan saya akan menjawab dengan data terkini!
+💬 *Cara pakai:* kirim pertanyaan pasar apa pun — bot menjawab dengan data real-time.
 
 🔍 *Topik yang bisa ditanyakan:*
 
-*Forex*
-• Harga EUR/USD, GBP/USD, USD/JPY, dll
-• Analisis teknikal pair forex
-• Support & resistance
+*Forex* 💱
+• Harga & analisis EUR/USD, GBP/USD, USD/JPY, dll
+• Support/resistance & prediksi pergerakan
 
-*Gold (XAU/USD)*
-• Harga gold terkini
-• Faktor penggerak gold
-• Korelasi dengan DXY
+*Gold & Emas* 🥇
+• Harga gold real-time, faktor penggerak, korelasi DXY
 
-*Makroekonomi*
-• Non-Farm Payrolls (NFP)
-• CPI / Inflasi
-• Fed Funds Rate
-• GDP, Unemployment
+*Makroekonomi* 🏛️
+• NFP, CPI/Inflasi, Fed Rate, GDP, Unemployment
 
-*Berita*
-• Berita finansial terkini
-• Sentimen pasar
+*Berita & Sentimen* 📰
+• Berita terkini, sentimen pasar, sentimen retail OANDA
 
-*Kalender Ekonomi (📅 /calendar)*
-• Rilis data high-impact BULAN INI (NFP, CPI, FOMC, GDP, dll)
-• Forecast & konsensus pasar
-• Jadwal rilis resmi real-time (FRED/BLS/Fed) + Finnhub jika tersedia
+📅 *Kalender Ekonomi* — rilis high-impact bulan ini + Forecast/Previous
 
-⚙️ *Perintah Tersedia:*
-/start - Mulai ulang bot
-/help - Bantuan ini
-/morning - ☀️ Morning Brief harian
-/subscribe - 🔔 Langganan Morning Brief otomatis
-/unsubscribe - 🔕 Berhenti langganan Morning Brief
-/sentiment - 🧠 Sentimen pasar (contoh: /sentiment eurusd, /sentiment gold)
-/calendar - 📅 Kalender Ekonomi high-impact bulan ini
-/overview - 🌍 Overview semua instrumen utama (harga instan)
-/alert - 🔔 Notifikasi event ekonomi otomatis (/alert on)
+⚙️ *Perintah:*
+/start - 🎯 Menu utama
+/help - 📚 Bantuan ini
+/morning - 🌅 Morning Brief harian
+/sentiment - 🧠 Sentimen pasar (contoh: /sentiment eurusd)
+/sentimen - 🧠 Sentimen retail OANDA — Position/Order Book
+/watch - 👀 Watchlist instrumen persisten
+/riwayat - 📜 Riwayat harga tersimpan tiap 30 mnt
+/calendar - 📅 Kalender ekonomi high-impact
+/overview - 🌍 Overview semua instrumen (instan)
+/alert - 🔔 Notifikasi event + analisis aftermath DXY
 /pa - 🎯 Alert harga (contoh: /pa eurusd 1.0900)
-/chart - 📈 Grafik harga (contoh: /chart eurusd)
+/chart - 📈 Grafik harga (contoh: /chart gold)
+/subscribe - 🔔 Langganan Morning Brief
+/unsubscribe - 🔕 Berhenti langganan
+/status - ✅ Status sistem & API
 /clear - 🧹 Bersihkan konteks percakapan
-/status - ✅ Cek status API & sistem
 /about - ℹ️ Tentang bot
 
-📌 *Tips:*
-• Semakin spesifik pertanyaan, semakin baik analisisnya
-• Bot support Bahasa Indonesia
-• Forex & Gold pakai harga *real-time* OANDA; instrumen lain delayed 15-20 menit
+⚠️ Analisis edukasi, *bukan* sinyal trading atau rekomendasi investasi. Keputusan trading sepenuhnya tanggung jawab Anda.
 """
 
 ABOUT_MESSAGE = """

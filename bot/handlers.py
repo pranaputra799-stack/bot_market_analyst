@@ -453,35 +453,47 @@ class MarketBot:
         # Simpan/update user ke database (async — jangan blokir event loop)
         await db.upsert_user_async(user.id, user.username, user.first_name)
 
-        # Keyboard untuk quick actions
+        # Keyboard menu — dikelompokkan per tema, 2 kolom agar rapi di layar HP
         keyboard = [
+            # 📊 Pasar
             [
-                InlineKeyboardButton("🌅 Morning Brief", callback_data="morning"),
-                InlineKeyboardButton("📊 Harga Gold", callback_data="gold_price"),
-            ],
-            [
+                InlineKeyboardButton("🥇 Harga Gold", callback_data="gold_price"),
                 InlineKeyboardButton("💱 EUR/USD", callback_data="eurusd"),
-                InlineKeyboardButton("🏛️ Data Makro", callback_data="macro"),
             ],
             [
-                InlineKeyboardButton("📈 Chart EUR/USD", callback_data="chart_eurusd"),
+                InlineKeyboardButton("🌍 Overview Pasar", callback_data="overview"),
+                InlineKeyboardButton("🧠 Sentimen Retail", callback_data="sentimen_retail"),
+            ],
+            [
+                InlineKeyboardButton("🏛️ Data Makro", callback_data="macro"),
+                InlineKeyboardButton("📰 Sentimen Pasar", callback_data="sentiment"),
+            ],
+            # 📈 Chart
+            [
                 InlineKeyboardButton("📈 Chart Gold", callback_data="chart_gold"),
+                InlineKeyboardButton("📈 Chart EUR/USD", callback_data="chart_eurusd"),
             ],
             [
                 InlineKeyboardButton("📈 Chart DXY", callback_data="chart_dxy"),
                 InlineKeyboardButton("📈 Chart BTC", callback_data="chart_btc"),
             ],
+            # 🔔 Notifikasi & Jadwal
             [
-                InlineKeyboardButton("🌍 Overview Pasar", callback_data="overview"),
-                InlineKeyboardButton("🧠 Sentimen Pasar", callback_data="sentiment"),
+                InlineKeyboardButton("🌅 Morning Brief", callback_data="morning"),
+                InlineKeyboardButton("📅 Kalender", callback_data="calendar"),
             ],
             [
-                InlineKeyboardButton("📅 Kalender Ekonomi", callback_data="calendar"),
+                InlineKeyboardButton("🔔 Alert Event", callback_data="alert_on"),
+                InlineKeyboardButton("🎯 Alert Harga", callback_data="pa_usage"),
+            ],
+            [
+                InlineKeyboardButton("👀 Watchlist", callback_data="watch_list"),
+                InlineKeyboardButton("📜 Riwayat Harga", callback_data="riwayat_usage"),
+            ],
+            # ⚙️ Lainnya
+            [
                 InlineKeyboardButton("❓ Bantuan", callback_data="help"),
-            ],
-            [
                 InlineKeyboardButton("🔔 Langganan Brief", callback_data="subscribe"),
-                InlineKeyboardButton("🔕 Berhenti", callback_data="unsubscribe"),
             ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -886,9 +898,7 @@ class MarketBot:
 
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         try:
-            sent = await asyncio.to_thread(
-                self.market.oanda.get_retail_sentiment, instrument
-            )
+            message = await self._format_retail_sentiment_text(instrument, display_name)
         except Exception as e:
             logger.warning(f"Retail sentiment failed for {instrument}: {e}")
             await safe_reply_text(
@@ -900,6 +910,19 @@ class MarketBot:
             )
             return
 
+        await safe_reply_text(
+            update.message,
+            message,
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
+
+    async def _format_retail_sentiment_text(self, instrument: str, display_name: str) -> str:
+        """
+        Format pesan sentimen retail OANDA (Position/Order Book).
+        Dipakai /sentimen dan tombol menu. Raise bila data tidak tersedia.
+        """
+        sent = await asyncio.to_thread(self.market.oanda.get_retail_sentiment, instrument)
         lines = [f"🧠 *SENTIMEN RETAIL {display_name.upper()}*\n"]
 
         long_ratio = sent.get("long_ratio")
@@ -932,12 +955,7 @@ class MarketBot:
             "\n⚠️ Sentimen ritel sering dipakai *kontrarian*: mayoritas retail biasanya "
             "salah di titik balik pasar. Kombinasikan dengan analisis teknikal."
         )
-        await safe_reply_text(
-            update.message,
-            "\n".join(lines),
-            parse_mode="Markdown",
-            disable_web_page_preview=True,
-        )
+        return "\n".join(lines)
 
     # ===================== WATCHLIST (/watch) =====================
 
@@ -1058,6 +1076,15 @@ class MarketBot:
 
     # ===================== RIWAYAT HARGA (/riwayat) =====================
 
+    RIWAYAT_USAGE = (
+        "📜 *RIWAYAT HARGA*\n\n"
+        "Menampilkan snapshot harga yang dicatat bot (setiap 30 menit) untuk "
+        "instrumen yang ada di watchlist.\n\n"
+        "`/riwayat eurusd` — riwayat EUR/USD\n"
+        "`/riwayat gold` — riwayat XAU/USD\n"
+        "`/riwayat btc` — riwayat Bitcoin"
+    )
+
     async def history_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler /riwayat — tampilkan riwayat harga tersimpan (dari Supabase)."""
         text = update.message.text or ""
@@ -1066,11 +1093,7 @@ class MarketBot:
         if not arg or arg in ("help", "bantuan"):
             await safe_reply_text(
                 update.message,
-                "📜 *RIWAYAT HARGA*\n\n"
-                "Menampilkan snapshot harga yang dicatat bot (setiap 30 menit) untuk "
-                "instrumen yang ada di watchlist.\n\n"
-                "`/riwayat eurusd` — riwayat EUR/USD\n"
-                "`/riwayat gold` — riwayat XAU/USD",
+                self.RIWAYAT_USAGE,
                 parse_mode="Markdown",
             )
             return
@@ -2333,6 +2356,58 @@ class MarketBot:
                 parse_mode="Markdown",
                 disable_web_page_preview=True,
             )
+
+        elif data == "sentimen_retail":
+            # Tombol menu: sentimen retail OANDA untuk EUR/USD (default)
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id,
+                action="typing",
+            )
+            try:
+                message = await self._format_retail_sentiment_text("EUR_USD", "EUR/USD")
+            except Exception as e:
+                logger.warning(f"Retail sentiment (menu) gagal: {e}")
+                message = (
+                    "❌ Sentimen retail belum tersedia saat ini.\n\n"
+                    "Pastikan `OANDA_API_KEY` terisi di dashboard deploy (token demo gratis: "
+                    "https://www.oanda.com/demo-account/tpa/personal_token)."
+                )
+            await safe_edit_message_text(
+                query,
+                message,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+
+        elif data == "alert_on":
+            # Tombol menu: aktifkan notifikasi event ekonomi (setara /alert on)
+            chat_id = update.effective_chat.id
+            subscribers = context.bot_data.setdefault("event_alert_subscribers", set())
+            subscribers.add(chat_id)
+            context.bot_data["event_alert_subscribers"] = subscribers
+            await query.message.reply_text(ALERT_ON_MESSAGE, parse_mode="Markdown")
+
+        elif data == "pa_usage":
+            # Tombol menu: cara pakai alert harga
+            await query.message.reply_text(PRICE_ALERT_USAGE, parse_mode="Markdown")
+
+        elif data == "watch_list":
+            # Tombol menu: tampilkan watchlist user (atau cara pakai bila kosong)
+            chat_id = update.effective_chat.id
+            items = await db.get_watchlist_async(chat_id)
+            if not items:
+                await query.message.reply_text(self.WATCH_USAGE, parse_mode="Markdown")
+            else:
+                lines = ["👀 *Watchlist kamu:*"]
+                for it in items:
+                    label = it.get("label") or it.get("symbol", "")
+                    lines.append(f"• {label}")
+                lines.append("\nTambah: `/watch add eurusd` | Riwayat: `/riwayat <simbol>`")
+                await query.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+        elif data == "riwayat_usage":
+            # Tombol menu: cara pakai riwayat harga
+            await query.message.reply_text(self.RIWAYAT_USAGE, parse_mode="Markdown")
 
         elif data == "subscribe":
             chat_id = update.effective_chat.id
