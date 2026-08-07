@@ -62,6 +62,7 @@ HELP_MESSAGE = """
 /watch - 👀 Watchlist instrumen persisten
 /riwayat - 📜 Riwayat harga tersimpan tiap 30 mnt
 /calendar - 📅 Kalender ekonomi high-impact
+/aftermath - 🎯 Analisis dampak event (contoh: /aftermath nfp)
 /overview - 🌍 Overview semua instrumen (instan)
 /alert - 🔔 Notifikasi event + analisis aftermath DXY
 /pa - 🎯 Alert harga (contoh: /pa eurusd 1.0900)

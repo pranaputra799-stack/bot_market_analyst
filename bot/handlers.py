@@ -2658,6 +2658,46 @@ class MarketBot:
         return f"{event.get('event')}|{dt.isoformat()}"
 
     @staticmethod
+    def _search_aftermath_events(events: List[Dict], query: Optional[str]) -> List[Dict]:
+        """
+        Cari event di kalender yang cocok dengan kata kunci (case-insensitive).
+        Dipakai perintah /aftermath <event> — memilih kandidat terbaik.
+
+        Peringkat (skor lebih tinggi = lebih dulu):
+        1. +10 bila event sudah rilis (ada angka Actual) — analisis lebih bermakna
+        2. +2 bila kata kunci cocok utuh di salah satu kata nama event
+        3. +1 bila hanya substring biasa
+        4. Tie-break: event paling baru lebih dulu
+
+        Returns:
+            List[Dict] — terurut peringkat (index 0 = kandidat terbaik).
+        """
+        q = (query or "").strip().lower()
+        if not q:
+            return []
+        ranked = []
+        for e in events or []:
+            name = (e.get("event") or "").lower()
+            if not name or q not in name:
+                continue
+            words = name.split()
+            if (
+                name == q
+                or name.startswith(q)
+                or any(w == q or w.startswith(q) for w in words)
+            ):
+                score = 2
+            else:
+                score = 1
+            if e.get("actual") not in (None, ""):
+                score += 10
+            dt = e.get("_dt_utc") or datetime.min.replace(tzinfo=timezone.utc)
+            ranked.append((score, dt.timestamp(), e))
+        # Skor turun → yang paling baru lebih dulu pada skor sama
+        ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        return [e for _, _, e in ranked]
+
+    @staticmethod
     def _collect_aftermath_events(events: List[Dict], now_utc, lookback_hours: float) -> List[Dict]:
         """
         Pilih event HIGH-IMPACT yang sudah rilis dalam jendela lookback (jam).
@@ -2818,11 +2858,16 @@ class MarketBot:
 
         return f"Actual {surprise} vs Forecast ({forecast}). {hint}"
 
-    async def _build_aftermath_message(self, event: Dict, market_line: str) -> str:
-        """Bangun pesan notifikasi aftermath: angka + interpretasi statis + analisis AI."""
+    async def _build_aftermath_message(self, event: Dict, market_line: str, manual: bool = False) -> str:
+        """Bangun pesan analisis aftermath: angka + interpretasi statis + analisis AI.
+
+        Args:
+            manual: True saat dipanggil perintah /aftermath (judul berbeda).
+        """
         event_name = event.get("event", "Event Ekonomi")
+        title = "🎯 *ANALISIS DAMPAK EVENT*" if manual else "🔥 *AFTERMATH EVENT EKONOMI*"
         header = (
-            f"🔥 *AFTERMATH EVENT EKONOMI*\n"
+            f"{title}\n"
             f"{event.get('country_emoji', '')} *{event_name}*\n"
             f"🕐 {event.get('time', '')}\n\n"
             f"{self._format_event_numbers(event)}\n"
@@ -2858,6 +2903,36 @@ class MarketBot:
             ai_section = f"\n📰 *Interpretasi:*\n{static}\n"
 
         return header + ai_section + f"\n{DISCLAIMER}"
+
+    async def _build_market_line(self) -> str:
+        """
+        Konteks pasar satu baris: DXY + Gold + EUR/USD untuk analisis aftermath.
+        Data di-cache data layer (TTL pendek), jadi biaya request kecil.
+        Tidak pernah raise — selalu mengembalikan string minimal.
+        """
+        market_line = "DXY: tidak tersedia"
+        try:
+            dxy = await asyncio.to_thread(
+                self.market.get_yahoo_data, "DX-Y.NYB", period="2d", interval="1h", ohlcv_limit=1
+            )
+            if "error" not in dxy and dxy.get("current_price") is not None:
+                p = dxy["current_price"]
+                c = dxy.get("change_pct")
+                arrow = "🟢" if c and c > 0 else "🔴" if c and c < 0 else "⚪"
+                c_str = f"{c:+.2f}%" if c is not None else ""
+                market_line = f"DXY: {format_price(p, 'DX-Y.NYB')} {arrow} {c_str}"
+        except Exception as e:
+            logger.warning(f"DXY fetch gagal: {e}")
+        for sym, label in (("GC=F", "Gold"), ("EURUSD=X", "EUR/USD")):
+            try:
+                data = await asyncio.to_thread(
+                    self.market.get_yahoo_data, sym, period="2d", interval="1h", ohlcv_limit=1
+                )
+                if "error" not in data and data.get("current_price") is not None:
+                    market_line += f"  |  {label}: {format_price(data['current_price'], sym)}"
+            except Exception:
+                pass
+        return market_line
 
     async def check_event_aftermath(self, application: Application):
         """
@@ -2911,30 +2986,8 @@ class MarketBot:
             if not new_events:
                 return
 
-            # Konteks pasar SEKALI per run (DXY + Gold + EUR/USD) — data di-cache
-            # data layer, jadi biaya request kecil.
-            market_line = "DXY: tidak tersedia"
-            try:
-                dxy = await asyncio.to_thread(
-                    self.market.get_yahoo_data, "DX-Y.NYB", period="2d", interval="1h", ohlcv_limit=1
-                )
-                if "error" not in dxy and dxy.get("current_price") is not None:
-                    p = dxy["current_price"]
-                    c = dxy.get("change_pct")
-                    arrow = "🟢" if c and c > 0 else "🔴" if c and c < 0 else "⚪"
-                    c_str = f"{c:+.2f}%" if c is not None else ""
-                    market_line = f"DXY: {format_price(p, 'DX-Y.NYB')} {arrow} {c_str}"
-            except Exception as e:
-                logger.warning(f"DXY fetch gagal: {e}")
-            for sym, label in (("GC=F", "Gold"), ("EURUSD=X", "EUR/USD")):
-                try:
-                    data = await asyncio.to_thread(
-                        self.market.get_yahoo_data, sym, period="2d", interval="1h", ohlcv_limit=1
-                    )
-                    if "error" not in data and data.get("current_price") is not None:
-                        market_line += f"  |  {label}: {format_price(data['current_price'], sym)}"
-                except Exception:
-                    pass
+            # Konteks pasar SEKALI per run (DXY + Gold + EUR/USD)
+            market_line = await self._build_market_line()
 
             for e in new_events:
                 try:
@@ -2966,6 +3019,91 @@ class MarketBot:
             application.bot_data["event_alert_subscribers"] = subscribers
         except Exception as e:
             logger.error(f"Event aftermath error: {e}")
+
+    # ===================== /AFTERMATH (MANUAL EVENT ANALYSIS) =====================
+
+    AFTERMATH_SEARCH_LOOKBACK_DAYS = 14
+
+    AFTERMATH_USAGE = (
+        "🎯 *ANALISIS DAMPAK EVENT* (manual)\n\n"
+        "Lihat analisis pengaruh sebuah event ekonomi terhadap DXY, Gold & FX — "
+        "angka Actual vs Forecast, interpretasi, dan penjelasan berita.\n\n"
+        "Contoh:\n"
+        "`/aftermath nfp` — Non-Farm Payrolls terbaru\n"
+        "`/aftermath cpi` — inflasi AS\n"
+        "`/aftermath fomc` — keputusan suku bunga Fed\n"
+        "`/aftermath gdp` — pertumbuhan ekonomi\n\n"
+        "Event dicari dari 14 hari terakhir (yang baru rilis) sampai besok."
+    )
+
+    async def aftermath_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Handler /aftermath <event> — analisis dampak event ekonomi secara manual.
+
+        Mencari event di kalender (14 hari terakhir → besok), memilih kandidat
+        terbaik (yang sudah rilis diutamakan, paling baru), lalu memakai mesin
+        aftermath yang sama dengan notifikasi otomatis (angka + interpretasi + AI).
+        """
+        text = update.message.text or ""
+        arg = text.replace("/aftermath", "").strip().lower()
+
+        if not arg or arg in ("help", "bantuan"):
+            await safe_reply_text(update.message, self.AFTERMATH_USAGE, parse_mode="Markdown")
+            return
+
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+        try:
+            tz_wib = ZoneInfo(MORNING_BRIEF_TIMEZONE)
+            today = datetime.now(tz_wib).date()
+            from_date = (today - timedelta(days=self.AFTERMATH_SEARCH_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+            to_date = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+            events = await self.macro.get_economic_calendar(from_date=from_date, to_date=to_date)
+        except Exception as e:
+            logger.error(f"Aftermath calendar fetch error: {e}")
+            await safe_reply_text(
+                update.message,
+                "❌ Gagal memuat kalender ekonomi. Silakan coba lagi nanti.",
+            )
+            return
+
+        matches = self._search_aftermath_events(events, arg)
+        if not matches:
+            await safe_reply_text(
+                update.message,
+                f"❌ Tidak ada event yang cocok dengan *\"{arg}\"* dalam 14 hari terakhir.\n\n"
+                f"Contoh: `/aftermath nfp`, `/aftermath cpi`, `/aftermath fomc`, "
+                f"`/aftermath gdp`, `/aftermath unemployment`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        event = matches[0]
+        note = ""
+        if len(matches) > 1:
+            note = (
+                f"ℹ️ {len(matches)} kandidat cocok — ditampilkan yang paling baru: "
+                f"*{event.get('event')}*.\n\n"
+            )
+
+        try:
+            market_line = await self._build_market_line()
+            message = await self._build_aftermath_message(event, market_line, manual=True)
+        except Exception as e:
+            logger.warning(f"Aftermath manual gagal untuk {event.get('event')}: {e}")
+            message = (
+                f"🎯 *ANALISIS DAMPAK EVENT*\n{event.get('country_emoji', '')} "
+                f"*{event.get('event', '')}*\n🕐 {event.get('time', '')}\n\n"
+                f"{self._format_event_numbers(event)}\n\n"
+                f"📰 {self._static_event_interpretation(event)}\n\n{DISCLAIMER}"
+            )
+
+        await safe_reply_text(
+            update.message,
+            f"{note}{message}",
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
 
     # ===================== SCHEDULED MORNING BRIEF =====================
 
