@@ -106,6 +106,7 @@ async def post_init(application: Application):
         BotCommand("pa", "🎯 Alert harga (target)"),
         BotCommand("status", "✅ Status sistem & API"),
         BotCommand("clear", "🧹 Bersihkan konteks"),
+        BotCommand("memory", "🧠 Lihat & hapus riwayat percakapan"),
         BotCommand("chart", "📈 Grafik harga"),
         BotCommand("overview", "🌍 Overview pasar"),
         BotCommand("sentimen", "🧠 Sentimen retail (OANDA)"),
@@ -375,6 +376,7 @@ def register_handlers(application: Application, bot: MarketBot):
     application.add_handler(CommandHandler("about", bot.about_command))
     application.add_handler(CommandHandler("status", bot.status_command))
     application.add_handler(CommandHandler("clear", bot.clear_command))
+    application.add_handler(CommandHandler("memory", bot.memory_command))
     application.add_handler(CommandHandler("morning", bot.morning_brief_command))
     application.add_handler(CommandHandler("sentiment", bot.sentiment_command))
     application.add_handler(CommandHandler("calendar", bot.calendar_command))

@@ -46,7 +46,7 @@ from data.macro_data import MacroDataFetcher
 from data.news_data import NewsFetcher
 from data.cache import cache
 from data.database import db
-from data.conversation_memory import format_history, add_exchange, get_context, clear
+from data.conversation_memory import format_history, add_exchange, get_context, get_history, clear
 from utils.chart_generator import ChartGenerator
 from analysis.director import AnalysisDirector
 from analysis.indicators import compute_indicators, format_key_levels, format_indicators_for_prompt
@@ -415,7 +415,17 @@ PRICE_ALERT_USAGE = (
     "`/pa list` — daftar alert kamu\n"
     "`/pa del <id>` — hapus satu alert\n"
     "`/pa clear` — hapus semua alert kamu\n\n"
-    "⚠️ Alert tersimpan sementara di memori bot — hilang saat bot restart."
+    "💾 Alert tersimpan aman di database bot — tidak hilang saat restart."
+)
+
+MEMORY_USAGE = (
+    "🧠 *RIWAYAT PERCAKAPAN*\n\n"
+    "Bot menyimpan beberapa pertukaran terakhir percakapanmu sebagai konteks "
+    "agar jawaban follow-up konsisten (tersimpan di database, 24 jam).\n\n"
+    "Perintah:\n"
+    "`/memory` — lihat riwayat & konteks yang tersimpan\n"
+    "`/memory clear` — hapus riwayat sekarang\n\n"
+    "🔒 Privasi: riwayat otomatis terhapus setelah 24 jam."
 )
 
 
@@ -606,6 +616,58 @@ class MarketBot:
             "Saya tidak lagi mengingat percakapan sebelumnya — mulai dari nol! 😊",
             parse_mode="Markdown",
         )
+
+    async def memory_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Handler /memory — lihat & hapus riwayat percakapan user.
+
+        Riwayat tersimpan di memori + app_cache Supabase (TTL 24 jam). Perintah
+        ini menampilkan apa yang bot ingat tentang user (Q&A terakhir + konteks
+        terstruktur aset/arah tren) dan cara menghapusnya (/memory clear).
+        """
+        user_id = update.effective_user.id
+        text = (update.message.text or "").lower()
+        arg = text.replace("/memory", "", 1).strip()
+
+        if arg in ("clear", "del", "delete", "hapus"):
+            clear(user_id)
+            await safe_reply_text(
+                update.message,
+                "🧹 *Riwayat percakapan dihapus.*\n\n"
+                "Bot tidak lagi mengingat percakapan sebelumnya — mulai dari nol! 😊",
+                parse_mode="Markdown",
+            )
+            return
+
+        history = get_history(user_id)
+        ctx = get_context(user_id)
+
+        if not history and not ctx:
+            await safe_reply_text(update.message, MEMORY_USAGE, parse_mode="Markdown")
+            return
+
+        lines = ["🧠 *Yang bot ingat tentang kamu:*"]
+        # Jawaban AI mengandung markdown (**, _, dll) — strip asterisks agar tidak
+        # merusak parse_mode Markdown pesan ini (entity tidak seimbang = error).
+        for ex in reversed(history):  # terbaru di atas
+            q = strip_markdown_asterisks((ex.get("q") or "").strip())
+            a = strip_markdown_asterisks((ex.get("a") or "").strip())
+            if q:
+                lines.append(f"\n👤 *Kamu:* {q}")
+            if a:
+                lines.append(f"🤖 *Bot:* {a[:200]}")
+        if ctx:
+            ctx_lines = []
+            if ctx.get("asset_focus"):
+                ctx_lines.append(f"• Fokus aset: *{ctx['asset_focus']}*")
+            if ctx.get("direction"):
+                ctx_lines.append(f"• Arah tren: *{ctx['direction']}*")
+            if ctx_lines:
+                lines.append("\n📌 *Konteks terakhir:*")
+                lines.extend(ctx_lines)
+        lines.append("\n⏳ Otomatis terhapus setelah 24 jam.")
+        lines.append("🗑️ Hapus sekarang: `/memory clear`")
+        await safe_reply_text(update.message, "\n".join(lines), parse_mode="Markdown")
 
     # ===================== CHART COMMAND =====================
 

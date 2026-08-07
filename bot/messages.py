@@ -71,6 +71,7 @@ HELP_MESSAGE = """
 /unsubscribe - 🔕 Berhenti langganan
 /status - ✅ Status sistem & API
 /clear - 🧹 Bersihkan konteks percakapan
+/memory - 🧠 Lihat & hapus riwayat percakapan (24 jam)
 /about - ℹ️ Tentang bot
 
 ⚠️ Analisis edukasi, *bukan* sinyal trading atau rekomendasi investasi. Keputusan trading sepenuhnya tanggung jawab Anda.
