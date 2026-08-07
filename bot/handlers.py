@@ -2339,6 +2339,21 @@ class MarketBot:
                     "❌ Gagal memuat kalender ekonomi. Silakan coba lagi nanti.",
                 )
 
+        elif data == "calendar_refresh":
+            # Muat ulang kalender PAKSA (bypass cache 10 menit) lalu edit pesan
+            try:
+                message, kb = await self._build_calendar_reply(refresh=True)
+                kwargs = {"parse_mode": "Markdown", "disable_web_page_preview": True}
+                if kb:
+                    kwargs["reply_markup"] = kb
+                await safe_edit_message_text(query, message, **kwargs)
+            except Exception as e:
+                logger.error(f"Calendar refresh callback error: {e}")
+                await safe_edit_message_text(
+                    query,
+                    "❌ Gagal memuat ulang kalender. Silakan coba lagi nanti.",
+                )
+
         elif data.startswith("aft:"):
             await self._handle_calendar_aftermath_button(query, data)
 
@@ -3198,10 +3213,17 @@ class MarketBot:
                 f"📰 {self._static_event_interpretation(event)}\n\n{DISCLAIMER}"
             )
 
-    async def _build_calendar_reply(self) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
-        """Bangun isi pesan /calendar + tombol analisis dampak (dipakai /calendar
-        dan tombol menu kalender)."""
-        events = await self.macro.get_economic_calendar_month()
+    def _add_refresh_button(self, kb: Optional[InlineKeyboardMarkup]) -> InlineKeyboardMarkup:
+        """Tambahkan baris tombol '🔁 Refresh' di bawah keyboard kalender.
+        Selalu ada — agar /calendar bisa dimuat ulang tanpa mengetik ulang."""
+        rows = list(kb.inline_keyboard) if kb else []
+        rows.append([InlineKeyboardButton("🔁 Refresh", callback_data="calendar_refresh")])
+        return InlineKeyboardMarkup(rows)
+
+    async def _build_calendar_reply(self, refresh: bool = False) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
+        """Bangun isi pesan /calendar + tombol analisis dampak & refresh
+        (dipakai /calendar, tombol menu kalender, dan '🔁 Refresh')."""
+        events = await self.macro.get_economic_calendar_month(refresh=refresh)
         # numbered=True: event berindeks (1., 2., ...) agar mudah dipetakan ke
         # tombol '📊 Analisis Dampak' (tombol memakai nomor yang sama).
         calendar_text = self.macro.format_calendar_text(
@@ -3209,10 +3231,10 @@ class MarketBot:
         )
         message = f"{calendar_text}\n{DISCLAIMER}"
         displayed = [e for e in events if e.get("impact") == "high"][:15]
-        kb = self._build_calendar_aftermath_buttons(displayed, numbered=True)
-        if kb:
+        aft_kb = self._build_calendar_aftermath_buttons(displayed, numbered=True)
+        if aft_kb:
             message = f"{calendar_text}\n\n📊 *Ketuk tombol event untuk analisis dampak.*\n{DISCLAIMER}"
-        return message, kb
+        return message, self._add_refresh_button(aft_kb)
 
     async def _handle_calendar_aftermath_button(self, query, data: str):
         """Tombol '📊 Analisis Dampak' pada pesan /calendar → kirim analisis event.

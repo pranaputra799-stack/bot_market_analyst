@@ -167,12 +167,14 @@ class _CallbackQuery:
         self.message = message or _CallbackMessage()
         self.answered = False
         self.edits = []
+        self.edit_kwargs = []
 
     async def answer(self):
         self.answered = True
 
     async def edit_message_text(self, text, **kwargs):
         self.edits.append(text)
+        self.edit_kwargs.append(kwargs)
         return None
 
 
@@ -392,6 +394,68 @@ class TestDigestAndReminderButtons(unittest.TestCase):
         callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
         self.assertIn(f"aft:{MarketBot._event_short_id(event)}", callbacks)
         self.assertIn("analisis dampak", sent["text"])
+
+
+class TestCalendarRefreshButton(unittest.TestCase):
+    """Tombol '🔁 Refresh' — muat ulang kalender tanpa mengetik /calendar."""
+
+    @staticmethod
+    def _real_format(events, **kwargs):
+        # format_calendar_text adalah method instance murni — aman via __new__
+        from data.macro_data import MacroDataFetcher
+
+        return MacroDataFetcher.__new__(MacroDataFetcher).format_calendar_text(events, **kwargs)
+
+    def _bot_with_macro(self, events, calls):
+        class FakeMacro:
+            async def get_economic_calendar_month(self, refresh=False):
+                calls.append(refresh)
+                return events
+
+            def format_calendar_text(self, events, **kwargs):
+                return TestCalendarRefreshButton._real_format(events, **kwargs)
+
+        bot = MarketBot.__new__(MarketBot)
+        bot.macro = FakeMacro()
+        return bot
+
+    def test_add_refresh_button_always_present(self):
+        bot = MarketBot.__new__(MarketBot)
+        # Tanpa tombol analisis → tetap ada baris refresh
+        kb = bot._add_refresh_button(None)
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        self.assertEqual(callbacks, ["calendar_refresh"])
+        # Dengan tombol analisis → refresh jadi baris terakhir
+        events = [_event("Non-Farm Payrolls (NFP) & Unemployment Rate", hours_ago=1, actual=250.0, unit="K")]
+        aft = bot._build_calendar_aftermath_buttons(events, numbered=True)
+        kb2 = bot._add_refresh_button(aft)
+        all_callbacks = [btn.callback_data for row in kb2.inline_keyboard for btn in row]
+        self.assertIn(f"aft:{MarketBot._event_short_id(events[0])}", all_callbacks)
+        self.assertEqual(all_callbacks[-1], "calendar_refresh")
+
+    def test_build_calendar_reply_passes_refresh_flag(self):
+        calls = []
+        bot = self._bot_with_macro([_event("CPI / Inflasi AS (YoY)", hours_ago=2)], calls)
+        message, kb = asyncio.run(bot._build_calendar_reply(refresh=True))
+        self.assertEqual(calls, [True])  # refresh=True → bypass cache
+        self.assertIsNotNone(kb)
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        self.assertIn("calendar_refresh", callbacks)
+        self.assertIn("Ketuk tombol event", message)
+
+    def test_refresh_callback_edits_calendar(self):
+        calls = []
+        bot = self._bot_with_macro([_event("CPI / Inflasi AS (YoY)", hours_ago=2)], calls)
+        query = _CallbackQuery(data="calendar_refresh")
+        update = type("U", (), {
+            "callback_query": query,
+            "effective_chat": type("C", (), {"id": 777})(),
+        })()
+        asyncio.run(bot.handle_callback(update, None))
+        self.assertTrue(query.answered)
+        self.assertEqual(calls, [True])
+        self.assertTrue(any("KALENDER EKONOMI" in e for e in query.edits))
+        self.assertTrue(any(kw.get("reply_markup") is not None for kw in query.edit_kwargs))
 
 
 class TestAftermathCalendarCallback(unittest.TestCase):

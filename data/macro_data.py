@@ -913,6 +913,7 @@ class MacroDataFetcher:
         self,
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
+        refresh: bool = False,
     ) -> List[Dict]:
         """
         Mendapatkan kalender ekonomi. Prioritas sumber:
@@ -924,6 +925,8 @@ class MacroDataFetcher:
         Args:
             from_date: Tanggal mulai (YYYY-MM-DD). Default: hari ini (WIB)
             to_date: Tanggal akhir (YYYY-MM-DD). Default: +7 hari
+            refresh: Jika True, LEWATI cache dan ambil data terbaru dari sumber
+                (dipakai tombol '🔁 Refresh' di /calendar).
         """
         tz_wib = ZoneInfo("Asia/Jakarta")
         today = datetime.now(tz_wib)
@@ -933,9 +936,10 @@ class MacroDataFetcher:
             to_date = (today + timedelta(days=7)).strftime("%Y-%m-%d")
 
         cache_key = f"economic_calendar:{from_date}:{to_date}"
-        cached_result = cache.get(cache_key)
-        if cached_result:
-            return cached_result
+        if not refresh:
+            cached_result = cache.get(cache_key)
+            if cached_result:
+                return cached_result
 
         # 1) FRED (primary - gratis & real-time)
         events = await self.get_economic_calendar_fred(from_date=from_date, to_date=to_date)
@@ -972,13 +976,18 @@ class MacroDataFetcher:
         to_date = (next_month_first - timedelta(days=1)).strftime("%Y-%m-%d")
         return from_date, to_date
 
-    async def get_economic_calendar_month(self) -> List[Dict]:
+    async def get_economic_calendar_month(self, refresh: bool = False) -> List[Dict]:
         """
         Kalender ekonomi bulan ini (tanggal 1 s/d akhir bulan WIB).
         Digunakan /calendar untuk menampilkan event high-impact bulan berjalan.
+
+        Args:
+            refresh: Jika True, lewati cache (dipakai tombol '🔁 Refresh').
         """
         from_date, to_date = self.get_month_calendar_range()
-        return await self.get_economic_calendar(from_date=from_date, to_date=to_date)
+        return await self.get_economic_calendar(
+            from_date=from_date, to_date=to_date, refresh=refresh
+        )
 
     # ===================== MACRO SUMMARY =====================
 
