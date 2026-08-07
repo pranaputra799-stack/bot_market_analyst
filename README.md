@@ -18,6 +18,7 @@ Dibuat untuk trader retail Indonesia — semua jawaban dalam Bahasa Indonesia, b
 - **Kalender Ekonomi** 📅 — Jadwal rilis BLS/Fed real-time via FRED, dikonversi ke WIB, lengkap dengan Forecast/Previous/Actual
 - **Morning Brief** 🌅 — Ringkasan pasar otomatis setiap pagi (bisa dilanggan per-user)
 - **Alert Event Ekonomi** 🔔 — Digest harian + reminder sebelum event high-impact (NFP, CPI, FOMC)
+- **Aftermath Event Analysis** 📰 — Notifikasi otomatis SETELAH event high-impact rilis: angka Actual vs Forecast/Previous, interpretasi arah DXY (US Dollar Index), analisis AI dampak ke Gold & FX, dan penjelasan berita — dedup persisten agar tidak dobel
 - **Alert Harga** 🎯 — Pasang target harga per instrumen (`/pa eurusd 1.0900`), bot mengirim notifikasi saat tersentuh
 - **Sentimen Pasar** 🧠 — Skor sentimen berbasis berita (Finnhub + lexicon + LLM)
 - **Grafik Harga Lokal** 📈 — Candlestick/line chart digambar langsung di server (matplotlib), tanpa layanan eksternal
@@ -152,6 +153,8 @@ python main.py
 | `AI_MIN_INTERVAL_SECONDS` | opsi | Jeda minimum antar request AI (0 = default per-provider; naikkan jika free tier sering 429) |
 | `MORNING_BRIEF_CHAT_IDS` | opsi | Chat ID penerima morning brief otomatis |
 | `ECONOMIC_ALERT_ENABLED` | opsi | Notifikasi event ekonomi (`true`/`false`) |
+| `EVENT_AFTERMATH_ENABLED` | opsi | Analisis aftermath setalah event rilis (`true`/`false`) |
+| `EVENT_AFTERMATH_LOOKBACK_HOURS` | opsi | Jendela jam ke belakang untuk laporan aftermath (default `6`) |
 
 Lihat `.env.example` untuk daftar lengkap.
 
@@ -219,7 +222,7 @@ Test mencakup logika murni (tanpa network): sentiment analyzer, signal engine, s
 | `/watch` | Watchlist instrumen persisten (`/watch add eurusd`, `/watch list`, `/watch del eurusd`) |
 | `/riwayat` | Riwayat harga tersimpan tiap 30 menit (contoh: `/riwayat eurusd`) |
 | `/calendar` | Kalender ekonomi high-impact bulan ini |
-| `/alert on\|off` | Notifikasi event ekonomi otomatis |
+| `/alert on\|off` | Notifikasi event ekonomi otomatis — digest harian, reminder sebelum rilis, **+ analisis aftermath (dampak ke DXY) setelah rilis** |
 | `/pa <simbol> <harga>` | 🎯 Alert harga — notifikasi saat harga menyentuh target (contoh: `/pa eurusd 1.0900`; kelola: `/pa list`, `/pa del <id>`) |
 | `/chart <simbol>` | Grafik harga (contoh: `/chart gold`, `/chart eurusd`) |
 | `/overview` | Ringkasan instan semua instrumen utama (tanpa AI) |

@@ -149,6 +149,20 @@ async def event_reminder_callback(context):
         await bot_instance.check_event_reminders(context.application)
 
 
+async def event_aftermath_callback(context):
+    """
+    Callback untuk mengirim analisis dampak event high-impact yang BARU SAJA rilis
+    (angka Actual vs Forecast + pengaruh ke DXY + penjelasan berita).
+    Dipanggil berkala setiap ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES menit.
+    """
+    bot_instance = context.application.bot_data.get("market_bot")
+    if bot_instance:
+        try:
+            await bot_instance.check_event_aftermath(context.application)
+        except Exception as e:
+            logger.warning(f"Event aftermath check failed: {e}")
+
+
 async def price_alert_callback(context):
     """
     Callback untuk mengecek alert harga per-user (/pa).
@@ -251,6 +265,8 @@ def setup_scheduler(application: Application, bot: MarketBot):
             )
 
         # ===== Economic Event Alerts =====
+        # Digest harian + reminder SEBELUM event + analisis aftermath SETELAH event
+        # (dampak ke DXY + berita). Semua memakai daftar subscriber /alert yang sama.
         if ECONOMIC_ALERT_ENABLED:
             alert_time = time(hour=ECONOMIC_ALERT_DIGEST_HOUR, minute=ECONOMIC_ALERT_DIGEST_MINUTE, tzinfo=brief_tz)
             application.job_queue.run_daily(
@@ -270,6 +286,19 @@ def setup_scheduler(application: Application, bot: MarketBot):
             )
             logger.info(
                 f"Economic event reminders scheduled every {ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES} minutes"
+            )
+
+            # Analisis aftermath (SETELAH rilis) — ikut gating ECONOMIC_ALERT_ENABLED
+            # agar satu saklar mematikan seluruh notifikasi event. Dikontrol lebih
+            # lanjut oleh EVENT_AFTERMATH_ENABLED di dalam check_event_aftermath.
+            application.job_queue.run_repeating(
+                event_aftermath_callback,
+                interval=timedelta(minutes=ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES),
+                first=90,  # Mulai 90 detik setelah start
+                name="event_aftermath",
+            )
+            logger.info(
+                f"Event aftermath analysis scheduled every {ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES} minutes"
             )
 
         # ===== Price Alerts =====

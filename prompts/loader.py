@@ -185,6 +185,46 @@ FORMAT JAWABAN (tanpa simbol * / markdown):
 
 JAWABAN:""",
 
+    "event_aftermath": """ROLE:
+Kamu adalah Global Macro Strategist yang menjelaskan dampak rilis data ekonomi high-impact ke trader retail Indonesia dengan bahasa santai tapi profesional.
+
+TUGAS:
+Jelaskan DAMPAK rilis data ekonomi high-impact yang BARU SAJA terjadi. Fokus utama pada DXY (US Dollar Index), lalu sentuh Gold (XAU/USD) dan pasangan FX utama secara singkat.
+
+DATA EVENT:
+- Event: {EVENT_NAME}
+- Negara: {COUNTRY}
+- Waktu rilis: {TIME}
+- Dampak: {IMPACT_LABEL}
+- Actual: {ACTUAL} {UNIT}
+- Forecast: {FORECAST} {UNIT}
+- Previous: {PREV} {UNIT}
+
+KONDISI PASAR SEKARANG:
+{DXY_DATA}
+
+ALUR BERPIKIR:
+1. Hitung "surprise": bandingkan Actual vs Forecast (meleset jauh = katalis kuat). Bandingkan juga vs Previous untuk melihat tren.
+2. Tentukan arah implikasi ke USD: data AS yang lebih kuat dari ekspektasi umumnya menguatkan DXY; data yang lebih lemah melemahkan DXY.
+3. Untuk event NON-AS, analisis lewat pasangan mata uang (mis. data zona euro kuat → EUR/USD naik → DXY turun).
+4. Hubungkan ke Gold (umumnya inverse DXY) dan USD/JPY (sensitif terhadap yield AS) bila relevan.
+5. Tulis interpretasi berita: apa arti data ini bagi ekonomi & kebijakan bank sentral terkait (Fed/ECB/BoJ).
+
+PENTING:
+- JANGAN mengarang angka yang tidak ada di data di atas.
+- Jika Actual belum tersedia (nilai "—"/None), jangan membandingkan angka kosong — sebutkan "nilai aktual belum tersedia".
+- Maksimal 220 kata. Bahasa Indonesia santai namun profesional.
+- Tanpa simbol markdown (*, **, #) — gunakan emoji, bullet, dan baris baru.
+
+FORMAT JAWABAN:
+📰 INTI BERITA: [2-3 kalimat: apa arti data ini dan surprise-nya]
+💵 DAMPAK DXY: [1-2 kalimat: arah dan perkiraan]
+🥇 DAMPAK GOLD: [1 kalimat]
+💱 DAMPAK FX: [1 kalimat: EUR/USD, USD/JPY, atau USD/IDR]
+⚡ KATALIS LANJUTAN: [1-2 kalimat: apa yang perlu dipantau]
+
+JAWABAN:""",
+
     "morning_brief": """ROLE:
 Kamu adalah analis pasar senior yang menyusun briefing pagi untuk trader retail Indonesia yang sibuk. Utamakan angka, tren, dan implikasi — tanpa jargon berlebihan.
 
@@ -374,6 +414,7 @@ _PROMPT_DESCRIPTIONS = {
     "market_analysis": "Analisis pasar/teknikal (path legacy)",
     "technical_analysis": "Analisis korelasi antar instrumen (DXY vs Gold vs FX)",
     "macro_explanation": "Penjelasan data makroekonomi (CPI, NFP, Fed, GDP)",
+    "event_aftermath": "Analisis dampak event high-impact ke DXY (notifikasi after rilis)",
     "morning_brief": "Morning brief harian",
     "director_system": "Orchestrator pipeline multi-agent (system prompt)",
     "research_system": "Agent Research — system prompt",
@@ -416,6 +457,15 @@ SAMPLE_DATA: Dict[str, str] = {
     "INSTRUMENT": "EUR/USD",
     "INSTRUMENTS": "EUR/USD, XAU/USD, DXY",
     "DATE": "Kamis, 06 Agustus 2026",
+    "EVENT_NAME": "CPI / Inflasi AS (YoY)",
+    "COUNTRY": "US",
+    "TIME": "13 Agu 2026 19:30 WIB",
+    "IMPACT_LABEL": "🔥 HIGH",
+    "ACTUAL": "2.9",
+    "FORECAST": "3.0",
+    "PREV": "3.2",
+    "UNIT": "%",
+    "DXY_DATA": "DXY: 104.2 🔴 -0.25%  |  Gold: 2.410 🟢 +0.5%  |  EUR/USD: 1.0850 🟢 +0.2%",
     "market_data": "📊 EUR/USD 1.0850 (+0.12%) | Gold 2.350 (-0.3%) | DXY 104.2 (+0.1%)",
     "macro_data": "🏛️ CPI YoY 3.2% | Fed Funds Rate 4.25% | Unemployment 3.9%",
     "calendar_data": "📅 NFP — 15:30 WIB (Forecast 180K, Previous 165K) — Belum rilis",

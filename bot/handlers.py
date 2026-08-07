@@ -30,6 +30,8 @@ from config.settings import (
     MORNING_BRIEF_CHAT_IDS,
     ENABLE_MULTI_AGENT,
     ECONOMIC_ALERT_LEAD_HOURS,
+    EVENT_AFTERMATH_ENABLED,
+    EVENT_AFTERMATH_LOOKBACK_HOURS,
 )
 
 try:
@@ -2565,6 +2567,330 @@ class MarketBot:
             application.bot_data["event_alert_subscribers"] = subscribers
         except Exception as e:
             logger.error(f"Event reminder error: {e}")
+
+    # ===================== EVENT AFTERMATH (POST-RELEASE ANALYSIS) =====================
+    # Notifikasi otomatis SETELAH event high-impact rilis: angka Actual vs Forecast/
+    # Previous + interpretasi statis + analisis AI dampaknya ke DXY. Dedup persisten
+    # (bot_data + Supabase event_reports) agar tidak terkirim dobel, termasuk setelah
+    # restart/deploy.
+
+    EVENT_AFTERMATH_DEDUP_TTL_DAYS = 7
+
+    @staticmethod
+    def _aftermath_key(event: Dict) -> str:
+        """Kunci dedup stabil per event (nama + waktu rilis UTC)."""
+        dt = event.get("_dt_utc") or datetime.min.replace(tzinfo=timezone.utc)
+        return f"{event.get('event')}|{dt.isoformat()}"
+
+    @staticmethod
+    def _collect_aftermath_events(events: List[Dict], now_utc, lookback_hours: float) -> List[Dict]:
+        """
+        Pilih event HIGH-IMPACT yang sudah rilis dalam jendela lookback (jam).
+        Murni & mudah di-test (tanpa I/O).
+
+        Returns:
+            List[Dict] — terurut dari paling baru.
+        """
+        cutoff = now_utc - timedelta(hours=lookback_hours)
+        out = []
+        for e in events or []:
+            if e.get("impact") != "high":
+                continue
+            dt = e.get("_dt_utc")
+            if not dt or dt.tzinfo is None:  # event tanpa waktu valid tidak bisa dinilai
+                continue
+            if cutoff <= dt <= now_utc:
+                out.append(e)
+        out.sort(
+            key=lambda x: x.get("_dt_utc") or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        return out
+
+    @staticmethod
+    def _fmt_ev_value(v) -> str:
+        """
+        Format nilai event (angka/string) atau '—' bila kosong.
+        Float dibulatkan ramah: 250.0 → "250" (NFP), 3.0 → "3.0" (CPI),
+        2.9 → "2.9" — agar angka makro tetap terbaca presisi.
+        """
+        if v is None or v == "":
+            return "—"
+        if isinstance(v, float):
+            if v == int(v):
+                return str(int(v)) if abs(v) >= 10 else f"{v:.1f}"
+            return f"{v:g}"
+        return str(v)
+
+    @staticmethod
+    def _format_event_numbers(event: Dict) -> str:
+        """Actual/Forecast/Previous dalam satu baris ringkas dengan satuan."""
+        unit = event.get("unit", "")
+        return (
+            f"📊 *Actual:* {MarketBot._fmt_ev_value(event.get('actual'))}{unit}  |  "
+            f"*Forecast:* {MarketBot._fmt_ev_value(event.get('estimate'))}{unit}  |  "
+            f"*Previous:* {MarketBot._fmt_ev_value(event.get('prev'))}{unit}"
+        )
+
+    @staticmethod
+    def _static_event_interpretation(event: Dict) -> str:
+        """
+        Interpretasi arah DXY berbasis aturan — fallback saat AI tidak tersedia
+        (dan dasar yang selalu ditampilkan). Membandingkan Actual vs Forecast
+        untuk event utama AS; event non-AS dinilai via pasangan mata uang.
+        """
+        actual = event.get("actual")
+        forecast = event.get("estimate")
+        name = (event.get("event") or "").lower()
+        country = (event.get("country") or "").upper()
+
+        def _diff(a, f):
+            try:
+                return float(a) - float(f)
+            except (TypeError, ValueError):
+                return None
+
+        # ---- Event non-AS: dampak lewat pasangan mata uang ----
+        if country and country != "US":
+            if actual in (None, "") or forecast in (None, ""):
+                return (
+                    f"Event di luar AS ({country}) — dampak ke DXY lewat pasangan mata uang. "
+                    "Nilai aktual belum tersedia untuk perbandingan."
+                )
+            diff = _diff(actual, forecast)
+            if diff is None:
+                return f"Event di luar AS ({country}) — pantau pasangan mata uang terkait."
+            if diff == 0:
+                return f"Data {country} sesuai ekspektasi — dampak ke DXY cenderung terbatas."
+            if diff > 0:
+                return (
+                    f"Data {country} DI ATAS ekspektasi → mata uang {country} berpotensi "
+                    "menguat → DXY berpotensi TURUN."
+                )
+            return (
+                f"Data {country} DI BAWAH ekspektasi → mata uang {country} berpotensi "
+                "melemah → DXY berpotensi NAIK."
+            )
+
+        # ---- Event AS ----
+        if actual in (None, "") or forecast in (None, ""):
+            return "Nilai aktual belum tersedia — bandingkan dengan ekspektasi pasar bila sudah rilis."
+        diff = _diff(actual, forecast)
+        if diff is None:
+            return "Angka aktual tidak bisa dibandingkan dengan ekspektasi."
+
+        # FOMC / keputusan suku bunga: arah ditentukan oleh PERUBAHAN rate
+        # (Actual vs Previous), bukan vs forecast — diproses lebih dulu.
+        if "fed" in name or "fomc" in name or "rate decision" in name:
+            prev = event.get("prev")
+            try:
+                pv = float(prev) if prev not in (None, "") else None
+                if pv is not None:
+                    av = float(actual)
+                    if av > pv:
+                        return (
+                            f"Actual {MarketBot._fmt_ev_value(actual)} vs Previous "
+                            f"{MarketBot._fmt_ev_value(prev)} — suku bunga NAIK (hawkish) → DXY cenderung NAIK."
+                        )
+                    if av < pv:
+                        return (
+                            f"Actual {MarketBot._fmt_ev_value(actual)} vs Previous "
+                            f"{MarketBot._fmt_ev_value(prev)} — suku bunga TURUN (dovish) → DXY cenderung TURUN."
+                        )
+                    return (
+                        f"Actual {MarketBot._fmt_ev_value(actual)} vs Previous "
+                        f"{MarketBot._fmt_ev_value(prev)} — suku bunga dipertahankan — arah DXY tergantung nada statement & guidance."
+                    )
+                return "Keputusan Fed — arah DXY tergantung guidance/statement."
+            except (TypeError, ValueError):
+                return "Keputusan Fed — arah DXY tergantung guidance/statement."
+
+        # Actual PERSIS sesuai ekspektasi — data sudah "harga-in" pasar, arah
+        # dampak biasanya terbatas (penting: JANGAN dianggap lebih rendah/tinggi).
+        if diff == 0:
+            return f"Actual sesuai ekspektasi ({forecast}). Dampak ke DXY cenderung terbatas — fokus pada data sekunder (revisi, detail komponen)."
+
+        if diff > 0:
+            surprise = "DI ATAS ekspektasi"
+        else:
+            surprise = "DI BAWAH ekspektasi"
+
+        if "cpi" in name or "inflasi" in name or "ppi" in name or "harga produsen" in name:
+            hint = (
+                "Data inflasi lebih tinggi dari ekspektasi → Fed cenderung hawkish → DXY cenderung NAIK."
+                if diff > 0 else
+                "Data inflasi lebih rendah dari ekspektasi → Fed cenderung dovish → DXY cenderung TURUN."
+            )
+        elif "non-farm" in name or "payroll" in name or "gdp" in name or "retail" in name:
+            hint = (
+                "Data ekonomi lebih kuat dari ekspektasi → dolar menguat → DXY cenderung NAIK."
+                if diff > 0 else
+                "Data ekonomi lebih lemah dari ekspektasi → dolar melemah → DXY cenderung TURUN."
+            )
+        elif "unemployment" in name or "pengangguran" in name or "claims" in name:
+            # Inverse: pengangguran/klaim lebih RENDAH = pasar tenaga kerja kuat
+            hint = (
+                "Angka pengangguran/klaim lebih rendah dari ekspektasi → pasar tenaga kerja kuat → DXY cenderung NAIK."
+                if diff < 0 else
+                "Angka pengangguran/klaim lebih tinggi dari ekspektasi → pasar tenaga kerja melemah → DXY cenderung TURUN."
+            )
+        else:
+            hint = (
+                "Data di atas ekspektasi cenderung menguatkan USD → DXY berpotensi NAIK."
+                if diff > 0 else
+                "Data di bawah ekspektasi cenderung melemahkan USD → DXY berpotensi TURUN."
+            )
+
+        return f"Actual {surprise} vs Forecast ({forecast}). {hint}"
+
+    async def _build_aftermath_message(self, event: Dict, market_line: str) -> str:
+        """Bangun pesan notifikasi aftermath: angka + interpretasi statis + analisis AI."""
+        event_name = event.get("event", "Event Ekonomi")
+        header = (
+            f"🔥 *AFTERMATH EVENT EKONOMI*\n"
+            f"{event.get('country_emoji', '')} *{event_name}*\n"
+            f"🕐 {event.get('time', '')}\n\n"
+            f"{self._format_event_numbers(event)}\n"
+            f"💱 *Kondisi Pasar:* {market_line}\n"
+        )
+
+        static = self._static_event_interpretation(event)
+
+        ai_section = ""
+        try:
+            prompt = format_prompt(
+                "event_aftermath",
+                EVENT_NAME=event_name,
+                COUNTRY=event.get("country", "US"),
+                TIME=event.get("time", ""),
+                IMPACT_LABEL=event.get("impact_label", "🔥 HIGH"),
+                ACTUAL=self._fmt_ev_value(event.get("actual")),
+                FORECAST=self._fmt_ev_value(event.get("estimate")),
+                PREV=self._fmt_ev_value(event.get("prev")),
+                UNIT=event.get("unit", ""),
+                DXY_DATA=market_line,
+            )
+            ai_text = await asyncio.to_thread(
+                self.ai.generate, prompt, max_tokens=700, use_cache=True
+            )
+            if ai_text and "error" not in ai_text.lower():
+                ai_text = strip_markdown_asterisks(_strip_provider_prefix(ai_text))
+                ai_section = f"\n📰 *Analisis:*\n{ai_text}\n"
+        except Exception as e:
+            logger.warning(f"Aftermath AI analysis failed: {e}")
+
+        if not ai_section:
+            ai_section = f"\n📰 *Interpretasi:*\n{static}\n"
+
+        return header + ai_section + f"\n{DISCLAIMER}"
+
+    async def check_event_aftermath(self, application: Application):
+        """
+        Job berkala: kirim analisis dampak event high-impact yang BARU SAJA rilis.
+        Dipanggil scheduler (main.py) setiap ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES.
+        Dedup via bot_data + Supabase (event_reports) agar tidak dobel, termasuk
+        setelah restart/deploy.
+        """
+        if not EVENT_AFTERMATH_ENABLED:
+            return
+        subscribers = self._get_alert_subscribers(application)
+        if not subscribers:
+            return
+
+        try:
+            events = await self.macro.get_economic_calendar()
+            now_utc = datetime.now(timezone.utc)
+
+            candidates = self._collect_aftermath_events(events, now_utc, EVENT_AFTERMATH_LOOKBACK_HOURS)
+            # Hanya laporkan event yang ANGKA ACTUAL-nya sudah tersedia — notifikasi
+            # tanpa actual hanya placeholder & nilainya rendah. Event tanpa actual
+            # akan dicek lagi di run berikutnya (dedup hanya menandai yang terkirim).
+            candidates = [
+                e for e in candidates if e.get("actual") not in (None, "")
+            ]
+            if not candidates:
+                return
+
+            # Dedup: gabung set memori + persisten (Supabase), lalu prune 7 hari
+            reported = set(application.bot_data.get("event_aftermath_reported", set()))
+            try:
+                reported |= await db.get_reported_events_async()
+            except Exception as e:
+                logger.debug(f"event_reports load gagal: {e}")
+            cutoff_ts = (now_utc - timedelta(days=self.EVENT_AFTERMATH_DEDUP_TTL_DAYS)).isoformat()
+            reported = {k for k in reported if k.split("|")[-1] >= cutoff_ts}
+
+            new_events = []
+            for e in candidates:
+                key = self._aftermath_key(e)
+                if key in reported:
+                    continue
+                reported.add(key)
+                new_events.append(e)
+                # Batasi analisis per run: tiap event memanggil AI (budget sampai
+                # AI_MAX_TOTAL_WAIT_SECONDS). Sisanya menunggu run berikutnya.
+                if len(new_events) >= 3:
+                    break
+            application.bot_data["event_aftermath_reported"] = reported
+
+            if not new_events:
+                return
+
+            # Konteks pasar SEKALI per run (DXY + Gold + EUR/USD) — data di-cache
+            # data layer, jadi biaya request kecil.
+            market_line = "DXY: tidak tersedia"
+            try:
+                dxy = await asyncio.to_thread(
+                    self.market.get_yahoo_data, "DX-Y.NYB", period="2d", interval="1h", ohlcv_limit=1
+                )
+                if "error" not in dxy and dxy.get("current_price") is not None:
+                    p = dxy["current_price"]
+                    c = dxy.get("change_pct")
+                    arrow = "🟢" if c and c > 0 else "🔴" if c and c < 0 else "⚪"
+                    c_str = f"{c:+.2f}%" if c is not None else ""
+                    market_line = f"DXY: {format_price(p, 'DX-Y.NYB')} {arrow} {c_str}"
+            except Exception as e:
+                logger.warning(f"DXY fetch gagal: {e}")
+            for sym, label in (("GC=F", "Gold"), ("EURUSD=X", "EUR/USD")):
+                try:
+                    data = await asyncio.to_thread(
+                        self.market.get_yahoo_data, sym, period="2d", interval="1h", ohlcv_limit=1
+                    )
+                    if "error" not in data and data.get("current_price") is not None:
+                        market_line += f"  |  {label}: {format_price(data['current_price'], sym)}"
+                except Exception:
+                    pass
+
+            for e in new_events:
+                try:
+                    message = await self._build_aftermath_message(e, market_line)
+                except Exception as ex:
+                    logger.warning(f"Aftermath message gagal untuk {e.get('event')}: {ex}")
+                    message = (
+                        f"🔥 *AFTERMATH EVENT EKONOMI*\n{e.get('country_emoji', '')} "
+                        f"*{e.get('event', '')}*\n🕐 {e.get('time', '')}\n\n"
+                        f"{self._format_event_numbers(e)}\n\n"
+                        f"💱 Kondisi Pasar: {market_line}\n\n"
+                        f"📰 {self._static_event_interpretation(e)}\n\n{DISCLAIMER}"
+                    )
+                for chat_id in list(subscribers):
+                    try:
+                        await safe_send_message(
+                            application.bot, chat_id=chat_id, text=message, parse_mode="Markdown"
+                        )
+                    except Exception as ex:
+                        logger.error(f"Gagal kirim aftermath ke {chat_id}: {ex}")
+                        if "Forbidden" in str(ex):
+                            subscribers.discard(chat_id)
+                # Persist dedup (best-effort — kegagalan tidak menggagalkan kirim)
+                try:
+                    await db.save_reported_event_async(self._aftermath_key(e))
+                except Exception as ex:
+                    logger.debug(f"save_reported_event gagal: {ex}")
+
+            application.bot_data["event_alert_subscribers"] = subscribers
+        except Exception as e:
+            logger.error(f"Event aftermath error: {e}")
 
     # ===================== SCHEDULED MORNING BRIEF =====================
 

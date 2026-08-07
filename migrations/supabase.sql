@@ -73,6 +73,16 @@ CREATE TABLE IF NOT EXISTS public.price_history (
 CREATE INDEX IF NOT EXISTS idx_price_history_symbol_created
     ON public.price_history (symbol, created_at DESC);
 
+-- ------------------------------------------------------------
+-- 6) event_reports — dedup persisten notifikasi aftermath event
+--    Menyimpan kunci event high-impact yang SUDAH dilaporkan agar
+--    tidak terkirim dobel, termasuk setelah restart/deploy.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.event_reports (
+    key        TEXT PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ============================================================
 -- RLS (Row Level Security) & GRANT
 --
@@ -102,6 +112,12 @@ DROP POLICY IF EXISTS "price_history_all_anon" ON public.price_history;
 CREATE POLICY "price_history_all_anon" ON public.price_history
     FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
+-- event_reports
+ALTER TABLE public.event_reports ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "event_reports_all_anon" ON public.event_reports;
+CREATE POLICY "event_reports_all_anon" ON public.event_reports
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
 -- users
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "users_all_anon" ON public.users;
@@ -121,14 +137,15 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.users    TO anon, authentic
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.subscribers TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.watchlist TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.price_history TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_reports TO anon, authenticated, service_role;
 
 -- ============================================================
 -- Verifikasi cepat (jalankan setelah semua statement di atas):
 --
 --   select table_name from information_schema.tables
 --   where table_schema = 'public'
---   and table_name in ('app_cache', 'users', 'subscribers', 'watchlist', 'price_history');
+--   and table_name in ('app_cache', 'users', 'subscribers', 'watchlist', 'price_history', 'event_reports');
 --
--- Harus mengembalikan 5 baris. Jika sudah pernah punya tabel
+-- Harus mengembalikan 6 baris. Jika sudah pernah punya tabel
 -- users/subscribers sebelumnya, baris lama tetap aman (IF NOT EXISTS).
 -- ============================================================

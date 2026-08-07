@@ -112,6 +112,15 @@ ECONOMIC_ALERT_LEAD_HOURS = int(os.getenv("ECONOMIC_ALERT_LEAD_HOURS", "1"))
 # Interval pengecekan reminder (menit)
 ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES = int(os.getenv("ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES", "15"))
 
+# ===================== EVENT AFTERMATH (POST-RELEASE ANALYSIS) =====================
+# Notifikasi otomatis SETELAH event high-impact rilis: angka Actual vs Forecast/
+# Previous + analisis AI dampaknya ke DXY (US Dollar Index), Gold, dan FX —
+# dikirim ke subscriber /alert (dedup persisten di Supabase tabel event_reports).
+EVENT_AFTERMATH_ENABLED = os.getenv("EVENT_AFTERMATH_ENABLED", "true").lower() in ("1", "true", "yes")
+# Jendela jam ke belakang: event yang rilis dalam N jam terakhir akan dilaporkan
+# (setiap job check berjalan sekali per ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES).
+EVENT_AFTERMATH_LOOKBACK_HOURS = int(os.getenv("EVENT_AFTERMATH_LOOKBACK_HOURS", "6"))
+
 # ===================== PRICE ALERTS =====================
 # Alert harga per-user (/pa): interval pengecekan harga target (menit).
 # Lebih kecil = notifikasi lebih cepat, tapi lebih banyak request data.

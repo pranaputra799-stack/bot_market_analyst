@@ -335,6 +335,7 @@ ALERT_ON_MESSAGE = """
 Kamu akan menerima:
 • ☀️ *Digest harian* — daftar event high-impact hari ini (NFP, CPI, FOMC, dll)
 • ⏰ *Reminder* — pengingat sebelum event high-impact rilis
+• 📰 *Aftermath* — analisis dampak SETELAH event rilis: angka Actual vs Forecast, pengaruhnya ke DXY, dan penjelasan berita
 
 Kirim `/alert off` untuk berhenti.
 """

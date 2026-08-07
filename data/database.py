@@ -238,6 +238,41 @@ class Database:
             logger.error(f"Error cleaning price history: {e}")
             return False
 
+    # ===================== EVENT REPORTS (aftermath dedup) =====================
+
+    @staticmethod
+    def get_reported_events() -> set:
+        """Kunci event yang sudah pernah dilaporkan (7 hari terakhir)."""
+        if not _is_configured():
+            return set()
+        try:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+            url = f"{SUPABASE_URL}/rest/v1/event_reports?select=key&created_at=gte.{cutoff}"
+            resp = requests.get(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            return {row["key"] for row in resp.json()}
+        except Exception as e:
+            logger.error(f"Error fetching reported events: {e}")
+            return set()
+
+    @staticmethod
+    def save_reported_event(key: str) -> bool:
+        """Tandai satu event sudah dilaporkan (idempotent — upsert)."""
+        if not _is_configured():
+            return False
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/event_reports"
+            headers = {
+                **_get_headers(),
+                "Prefer": "resolution=merge-duplicates,return=minimal",
+            }
+            resp = requests.post(url, json={"key": key}, headers=headers, timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error saving reported event: {e}")
+            return False
+
     # ===================== ASYNC WRAPPERS =====================
     # Handler Telegram (python-telegram-bot v20) berjalan di event loop asyncio.
     # Varian *_async memindahkan operasi sinkron ke thread pool sehingga tidak
@@ -298,6 +333,14 @@ class Database:
     @staticmethod
     async def delete_old_price_history_async(days: int = 30) -> bool:
         return await asyncio.to_thread(Database.delete_old_price_history, days)
+
+    @staticmethod
+    async def get_reported_events_async() -> set:
+        return await asyncio.to_thread(Database.get_reported_events)
+
+    @staticmethod
+    async def save_reported_event_async(key: str) -> bool:
+        return await asyncio.to_thread(Database.save_reported_event, key)
 
 
 db = Database()
