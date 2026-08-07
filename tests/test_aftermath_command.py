@@ -458,6 +458,58 @@ class TestCalendarRefreshButton(unittest.TestCase):
         self.assertTrue(any(kw.get("reply_markup") is not None for kw in query.edit_kwargs))
 
 
+class TestAftermathAutoJobButton(unittest.TestCase):
+    """Job aftermath otomatis — pesan analisis punya tombol '📊 Analisis Dampak'."""
+
+    def test_aftermath_job_sends_analysis_button(self):
+        from config.settings import EVENT_AFTERMATH_ENABLED, EVENT_AFTERMATH_LOOKBACK_HOURS
+
+        if not EVENT_AFTERMATH_ENABLED:
+            self.skipTest("EVENT_AFTERMATH_ENABLED=false")
+        if EVENT_AFTERMATH_LOOKBACK_HOURS < 1:
+            self.skipTest("lookback terlalu pendek untuk test")
+
+        event = {
+            "event": "Non-Farm Payrolls (NFP) & Unemployment Rate",
+            "country": "US",
+            "country_emoji": "🇺🇸",
+            "time": "2 jam lalu",
+            "_dt_utc": datetime.now(timezone.utc) - timedelta(hours=1),
+            "impact": "high",
+            "impact_label": "🔥 HIGH",
+            "actual": 250.0,
+            "estimate": 180.0,
+            "prev": 160.0,
+            "unit": "K",
+            "source": "fred",
+        }
+
+        class FakeMacro:
+            async def get_economic_calendar(self, from_date=None, to_date=None):
+                return [event]
+
+        class FakeMarket:
+            @staticmethod
+            def get_yahoo_data(*args, **kwargs):
+                raise RuntimeError("no network in tests")
+
+        bot = MarketBot.__new__(MarketBot)
+        bot.macro = FakeMacro()
+        bot.market = FakeMarket()
+        bot.ai = None  # paksa fallback interpretasi statis
+
+        app = _FakeApp([777])
+        asyncio.run(bot.check_event_aftermath(app))
+
+        self.assertEqual(len(app.bot.sent), 1)
+        sent = app.bot.sent[0]
+        self.assertIn("AFTERMATH EVENT EKONOMI", sent["text"])
+        kb = sent.get("reply_markup")
+        self.assertIsNotNone(kb)
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        self.assertEqual(callbacks, [f"aft:{MarketBot._event_short_id(event)}"])
+
+
 class TestAftermathCalendarCallback(unittest.TestCase):
     """Alur callback 'aft:<id>' — analisis event langsung dari tombol kalender."""
 

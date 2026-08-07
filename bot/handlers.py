@@ -3028,10 +3028,15 @@ class MarketBot:
                         f"💱 Kondisi Pasar: {market_line}\n\n"
                         f"📰 {self._static_event_interpretation(e)}\n\n{DISCLAIMER}"
                     )
+                # Tombol '📊 Analisis Dampak' — ketuk untuk lihat detail/ulangi analisis
+                kb = self._build_calendar_aftermath_buttons([e], max_buttons=1)
+                kwargs_send = {"parse_mode": "Markdown"}
+                if kb:
+                    kwargs_send["reply_markup"] = kb
                 for chat_id in list(subscribers):
                     try:
                         await safe_send_message(
-                            application.bot, chat_id=chat_id, text=message, parse_mode="Markdown"
+                            application.bot, chat_id=chat_id, text=message, **kwargs_send
                         )
                     except Exception as ex:
                         logger.error(f"Gagal kirim aftermath ke {chat_id}: {ex}")
