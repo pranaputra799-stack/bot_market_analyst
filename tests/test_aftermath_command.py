@@ -201,25 +201,29 @@ class TestCalendarAftermathButtons(unittest.TestCase):
         # Payload callback Telegram maks 64 byte
         self.assertLessEqual(len(f"aft:{MarketBot._event_short_id(e1)}"), 64)
 
-    def test_pick_aftermath_buttons_window_and_order(self):
+    def test_all_displayed_events_get_buttons(self):
+        # SEMUA event yang tampil diberi tombol — termasuk yang di luar jendela
+        # relevan ±14 hari (mis. event awal bulan atau akhir bulan)
         events = [
             _event("CPI / Inflasi AS (YoY)", hours_ago=20),
-            _event("NFP", hours_ago=1, actual=250.0, unit="K"),
-            _event("GDP AS (QoQ)", hours_ago=-1),
-            _event("FOMC", hours_ago=3 * 24, actual=4.75),
-            _event("PPI", hours_ago=-10 * 24),  # 10 hari lagi → di luar jendela +7 hari
+            _event("Non-Farm Payrolls (NFP) & Unemployment Rate", hours_ago=1, actual=250.0, unit="K"),
+            _event("FOMC", hours_ago=-10 * 24),   # 10 hari lagi
+            _event("GDP AS (QoQ)", hours_ago=20 * 24),  # 20 hari lalu
         ]
-        picked = MarketBot._pick_aftermath_buttons(events, max_buttons=5)
-        names = [e["event"] for e in picked]
-        self.assertNotIn("PPI", names)
-        self.assertEqual(names[0], "NFP")  # paling dekat dengan sekarang
-        self.assertEqual(names[1], "GDP AS (QoQ)")
+        bot = MarketBot.__new__(MarketBot)
+        kb = bot._build_calendar_aftermath_buttons(events)
+        self.assertIsNotNone(kb)
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        for e in events:
+            self.assertIn(f"aft:{MarketBot._event_short_id(e)}", callbacks)
 
-    def test_pick_aftermath_buttons_max_and_empty(self):
-        events = [_event("CPI", hours_ago=i) for i in range(1, 10)]
-        self.assertEqual(len(MarketBot._pick_aftermath_buttons(events, max_buttons=3)), 3)
-        self.assertEqual(MarketBot._pick_aftermath_buttons([], 5), [])
-        self.assertEqual(MarketBot._pick_aftermath_buttons(None, 5), [])
+    def test_max_buttons_caps_at_15(self):
+        events = [_event(f"Event {i}", hours_ago=i) for i in range(1, 25)]
+        bot = MarketBot.__new__(MarketBot)
+        kb = bot._build_calendar_aftermath_buttons(events)
+        self.assertIsNotNone(kb)
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        self.assertLessEqual(len(callbacks), 15)
 
     def test_calendar_buttons_markup(self):
         bot = MarketBot.__new__(MarketBot)
@@ -235,11 +239,14 @@ class TestCalendarAftermathButtons(unittest.TestCase):
         labels = [btn.text for row in kb.inline_keyboard for btn in row]
         self.assertTrue(any("📊" in lbl and "NFP" in lbl for lbl in labels))
 
-    def test_calendar_buttons_none_when_no_relevant(self):
+    def test_calendar_buttons_none_when_empty(self):
         bot = MarketBot.__new__(MarketBot)
-        events = [_event("PPI", hours_ago=-10 * 24)]  # di luar jendela
-        self.assertIsNone(bot._build_calendar_aftermath_buttons(events))
         self.assertIsNone(bot._build_calendar_aftermath_buttons([]))
+        self.assertIsNone(bot._build_calendar_aftermath_buttons(None))
+        # Event medium/low tidak diberi tombol (konsisten dengan matching)
+        self.assertIsNone(
+            bot._build_calendar_aftermath_buttons([_event("CPI / Inflasi AS (YoY)", impact="medium")])
+        )
 
 
 class _FakeSendBot:

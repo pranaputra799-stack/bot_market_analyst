@@ -213,7 +213,10 @@ async def safe_edit_message_text(query, text: str, parse_mode: Optional[str] = "
     try:
         return await query.edit_message_text(text, parse_mode=parse_mode, **kwargs)
     except BadRequest as e:
-        if "too long" in str(e).lower():
+        msg = str(e).lower()
+        if "message is not modified" in msg:
+            return None  # konten sudah sama persis — tidak perlu edit
+        if "too long" in msg:
             if query.message is not None:
                 logger.info(f"Edit message too long ({len(text)} chars), replying with parts instead...")
                 result = None
@@ -222,7 +225,7 @@ async def safe_edit_message_text(query, text: str, parse_mode: Optional[str] = "
                 return result
             # Tidak ada message untuk di-reply (mis. inline mode) — biarkan error asli
             raise
-        if any(err in str(e).lower() for err in ["parse", "entity", "entities"]):
+        if any(err in msg for err in ["parse", "entity", "entities"]):
             logger.warning(f"Markdown parse error: {e}. Retrying without parse_mode.")
             kwargs_copy = dict(kwargs)
             kwargs_copy.pop("parse_mode", None)
@@ -3144,37 +3147,14 @@ class MarketBot:
             label = f"{label} {w}" if label else w
         return label.upper() or "EVENT"
 
-    @staticmethod
-    def _pick_aftermath_buttons(events: List[Dict], max_buttons: int = 5, window_days: int = 14) -> List[Dict]:
+    def _build_calendar_aftermath_buttons(self, events: List[Dict], max_buttons: int = 15) -> Optional[InlineKeyboardMarkup]:
         """
-        Pilih event untuk tombol '📊 Analisis Dampak' di kalender — hanya yang
-        paling relevan sekarang: rilis dalam window_days terakhir ATAU akan rilis
-        dalam 7 hari ke depan. Diurutkan yang paling dekat dengan waktu sekarang.
+        Keyboard '📊 Analisis Dampak' untuk SEMUA event high-impact yang tampil
+        (urutan sama dengan daftar kalender, 3 tombol per baris agar ringkas).
+        None bila tidak ada event. Hanya high-impact yang diberi tombol
+        (konsisten dengan matching di callback).
         """
-        now = datetime.now(timezone.utc)
-        lo = now - timedelta(days=window_days)
-        hi = now + timedelta(days=7)
-        picked = []
-        for e in events or []:
-            dt = e.get("_dt_utc")
-            if not dt or dt.tzinfo is None:
-                continue
-            if not (lo <= dt <= hi):
-                continue
-            picked.append((abs((dt - now).total_seconds()), e))
-        picked.sort(key=lambda x: x[0])
-        return [e for _, e in picked[:max_buttons]]
-
-    def _build_calendar_aftermath_buttons(self, events: List[Dict], max_buttons: int = 5) -> Optional[InlineKeyboardMarkup]:
-        """
-        Keyboard '📊 Analisis Dampak' untuk event yang tampil di /calendar
-        (2 tombol per baris). None bila tidak ada event relevan.
-        Hanya event high-impact yang diberi tombol (konsisten dengan matching).
-        """
-        picked = self._pick_aftermath_buttons(
-            [e for e in (events or []) if e.get("impact") == "high"],
-            max_buttons=max_buttons,
-        )
+        picked = [e for e in (events or []) if e.get("impact") == "high"][:max_buttons]
         if not picked:
             return None
         rows: List[List[InlineKeyboardButton]] = []
@@ -3191,7 +3171,7 @@ class MarketBot:
                     callback_data=f"aft:{self._event_short_id(e)}",
                 )
             )
-            if len(row) == 2:
+            if len(row) == 3:
                 rows.append(row)
                 row = []
         if row:
@@ -3221,6 +3201,8 @@ class MarketBot:
         message = f"{calendar_text}\n{DISCLAIMER}"
         displayed = [e for e in events if e.get("impact") == "high"][:15]
         kb = self._build_calendar_aftermath_buttons(displayed)
+        if kb:
+            message = f"{calendar_text}\n\n📊 *Ketuk tombol event untuk analisis dampak.*\n{DISCLAIMER}"
         return message, kb
 
     async def _handle_calendar_aftermath_button(self, query, data: str):
