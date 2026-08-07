@@ -29,7 +29,11 @@ from typing import Dict, List, Optional
 
 from data.cache import cache, persistent
 from config.providers import YAHOO_SYMBOLS
-from config.settings import MEMORY_TTL_SECONDS
+from config.settings import (
+    MEMORY_TTL_SECONDS,
+    MEMORY_MAX_ENTRIES,
+    MEMORY_MAX_EXCHANGES_IN_CONTEXT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +41,17 @@ logger = logging.getLogger(__name__)
 # 24 jam default (env MEMORY_TTL_SECONDS) — riwayat follow-up bertahan lama,
 # termasuk lintas restart/deploy (tersimpan di app_cache Supabase).
 MEMORY_TTL = MEMORY_TTL_SECONDS
-MAX_ENTRIES = 6             # maksimal pasangan Q&A yang disimpan per user
+# Maksimal pasangan Q&A yang disimpan per user (env MEMORY_MAX_ENTRIES, default
+# 10) — lebih banyak konteks untuk follow-up beruntun.
+MAX_ENTRIES = MEMORY_MAX_ENTRIES
 # Potong jawaban agar hemat token — cukup panjang agar level/angka kunci dari
 # jawaban sebelumnya (support/resistance/harga) ikut tersimpan, sehingga
 # jawaban follow-up tetap KONSISTEN dengan jawaban bot sebelumnya.
 MAX_ANSWER_CHARS = 500
 MAX_QUESTION_CHARS = 200
-MAX_EXCHANGES_IN_CONTEXT = 4  # berapa pertukaran terakhir yang dimasukkan ke prompt
+# Berapa pertukaran terakhir yang dimasukkan ke prompt (env
+# MEMORY_MAX_EXCHANGES_IN_CONTEXT, default 6).
+MAX_EXCHANGES_IN_CONTEXT = MEMORY_MAX_EXCHANGES_IN_CONTEXT
 
 # ===================== EKSTRAKSI KONTEKS =====================
 # Alias instrumen populer (no-space / istilah Indonesia) → label fokus aset.

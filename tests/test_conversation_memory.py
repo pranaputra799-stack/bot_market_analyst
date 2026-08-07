@@ -37,14 +37,24 @@ class TestConversationMemory(unittest.TestCase):
         self.assertEqual(history[0]["q"], "berapa harga eurusd?")
         self.assertIn("1.0850", history[0]["a"])
 
+    def test_max_entries_from_settings(self):
+        """Jumlah entri & pertukaran-ke-prompt diambil dari settings (default 10/6)."""
+        from config import settings
+
+        self.assertEqual(cm.MAX_ENTRIES, settings.MEMORY_MAX_ENTRIES)
+        self.assertEqual(settings.MEMORY_MAX_ENTRIES, 10)
+        self.assertEqual(cm.MAX_EXCHANGES_IN_CONTEXT, settings.MEMORY_MAX_EXCHANGES_IN_CONTEXT)
+        self.assertEqual(settings.MEMORY_MAX_EXCHANGES_IN_CONTEXT, 6)
+
     def test_entries_capped(self):
-        for i in range(10):
+        n = cm.MAX_ENTRIES + 2  # seed melebihi batas agar truncation benar-benar teruji
+        for i in range(n):
             cm.add_exchange(999, f"q{i}", f"a{i}")
         history = cm.get_history(999)
         self.assertEqual(len(history), cm.MAX_ENTRIES)
         # Yang tersimpan harus paling baru
-        self.assertEqual(history[-1]["q"], "q9")
-        self.assertEqual(history[0]["q"], f"q{10 - cm.MAX_ENTRIES}")
+        self.assertEqual(history[-1]["q"], f"q{n - 1}")
+        self.assertEqual(history[0]["q"], f"q{n - cm.MAX_ENTRIES}")
 
     def test_answer_truncated(self):
         long_answer = "x" * 1000

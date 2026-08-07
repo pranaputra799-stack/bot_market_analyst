@@ -103,6 +103,15 @@ CACHE_AI_TTL = 600       # 10 menit untuk response AI (pertanyaan identik)
 # rentang wajar 5 menit s.d. 30 hari untuk cegah salah konfigurasi.
 MEMORY_TTL_SECONDS = int(os.getenv("MEMORY_TTL_SECONDS", str(24 * 60 * 60)))
 MEMORY_TTL_SECONDS = max(5 * 60, min(MEMORY_TTL_SECONDS, 30 * 24 * 60 * 60))
+# Jumlah pertukaran percakapan (Q&A) yang DISIMPAN per user — default 10.
+# Naik = konteks follow-up lebih panjang, tapi token prompt ikut bertambah.
+# Env: MEMORY_MAX_ENTRIES. Diklem 2 s.d. 30.
+MEMORY_MAX_ENTRIES = int(os.getenv("MEMORY_MAX_ENTRIES", "10"))
+MEMORY_MAX_ENTRIES = max(2, min(MEMORY_MAX_ENTRIES, 30))
+# Berapa pertukaran terakhir yang DIMASUKKAN ke prompt LLM — default 6 (tidak
+# boleh melebihi jumlah yang disimpan). Env: MEMORY_MAX_EXCHANGES_IN_CONTEXT.
+MEMORY_MAX_EXCHANGES_IN_CONTEXT = int(os.getenv("MEMORY_MAX_EXCHANGES_IN_CONTEXT", "6"))
+MEMORY_MAX_EXCHANGES_IN_CONTEXT = max(1, min(MEMORY_MAX_EXCHANGES_IN_CONTEXT, MEMORY_MAX_ENTRIES))
 # Batas maksimal entri di memory cache — entri terlama di-evict saat penuh agar
 # RAM proses bot tetap terkendali (0 = tanpa batas).
 CACHE_MAX_ENTRIES = int(os.getenv("CACHE_MAX_ENTRIES", "5000"))
