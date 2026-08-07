@@ -8,7 +8,7 @@ Dibuat untuk trader retail Indonesia — semua jawaban dalam Bahasa Indonesia, b
 
 - **Multi-Agent Analysis** 🧠 — Pipeline 7 agent: Research → Signals → Thesis → Contradiction → Scenarios → Confidence → Risk Gates
 - **Multi-AI Provider** — OpenRouter (primary, **hanya model gratis** `:free`/`$0`) → Groq → Gemini → Cerebras → Mistral, fallback otomatis saat satu provider down/rate-limit. OpenRouter auto-discover model gratis (`:free`)
-- **Multi-Source Data** 📊 — Yahoo Finance, Alpha Vantage, Finnhub, Exchange Rate API
+- **Multi-Source Data** 📊 — OANDA (real-time utk Forex & Gold) + Yahoo Finance, Alpha Vantage, Finnhub, Exchange Rate API
 - **Data Makroekonomi** 🏛️ — FRED (resmi & gratis): CPI, NFP, Fed Rate, GDP, dll
 - **Kalender Ekonomi** 📅 — Jadwal rilis BLS/Fed real-time via FRED, dikonversi ke WIB, lengkap dengan Forecast/Previous/Actual
 - **Morning Brief** 🌅 — Ringkasan pasar otomatis setiap pagi (bisa dilanggan per-user)
@@ -41,7 +41,8 @@ ai/
   engine.py              → AI fallback engine multi-provider
   openrouter_client.py   → Auto-discovery model gratis OpenRouter
 data/
-  market_data.py         → Data harga (Yahoo → Alpha Vantage → Finnhub)
+  market_data.py         → Data harga (OANDA real-time → Yahoo → Alpha Vantage → Finnhub)
+  oanda_client.py        → Client OANDA v20 API (pricing real-time + candles)
   macro_data.py          → Data makro & kalender ekonomi (FRED, Finnhub, jadwal resmi)
   news_data.py           → Berita & sentimen (Finnhub, Marketaux, RSS)
   cache.py               → In-memory cache dengan TTL
@@ -130,6 +131,12 @@ python main.py
 | `GEMINI_API_KEY` | opsi | Fallback — https://aistudio.google.com/app/apikey |
 | `FRED_API_KEY` | opsi | Kalender ekonomi real-time resmi — https://fred.stlouisfed.org |
 | `FINNHUB_KEY` | opsi | Berita & sentimen |
+| `OANDA_API_KEY` | opsi* | **Real-time Forex & Gold** — token akun demo OANDA (https://www.oanda.com/demo-account/) |
+| `OANDA_ACCOUNT_ID` | opsi* | ID akun OANDA (kosongkan → auto-detect dari token) |
+| `OANDA_ENV` | opsi | `practice` (demo, default) atau `live` |
+| `OANDA_PRICE_TTL` | opsi | TTL cache harga OANDA (detik, default `30`) |
+
+*Tanpa `OANDA_API_KEY`, bot memakai Yahoo Finance (delayed 15-20 menit) seperti sebelumnya.
 | `SUPABASE_URL` / `SUPABASE_KEY` | opsi | User & subscriber morning brief + cache persisten (L2) |
 | `SUPABASE_CACHE_ENABLED` | opsi | Aktifkan cache persisten Supabase (`true`/`false`, default `true`) |
 | `CACHE_MAX_ENTRIES` | opsi | Batas entri memory cache (default `5000`) |
@@ -208,4 +215,4 @@ Test mencakup logika murni (tanpa network): sentiment analyzer, signal engine, s
 
 ## ⚠️ Disclaimer
 
-Bot ini adalah **alat edukasi**, bukan penyedia sinyal trading atau rekomendasi investasi. Semua analisis berbasis data publik yang bisa delay 15–20 menit. Keputusan trading sepenuhnya tanggung jawab pengguna.
+Bot ini adalah **alat edukasi**, bukan penyedia sinyal trading atau rekomendasi investasi. Harga Forex & Gold diambil real-time dari OANDA (demo); instrumen lain (IDR, DXY, index, crypto) berbasis Yahoo Finance yang bisa delay 15–20 menit. Keputusan trading sepenuhnya tanggung jawab pengguna.

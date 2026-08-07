@@ -125,6 +125,23 @@ YAHOO_SYMBOLS = {
     "hangseng": "^HSI",
 }
 
+# Simbol OANDA (v20) untuk instrumen yang didukung — kunci = simbol Yahoo yang
+# dipakai bot, nilai = nama instrumen OANDA (format XXX_YYY).
+# Instrumen di luar daftar ini (USD/IDR, DXY, index, crypto) tetap pakai Yahoo.
+OANDA_SYMBOLS = {
+    "EURUSD=X": "EUR_USD",
+    "GBPUSD=X": "GBP_USD",
+    "USDJPY=X": "USD_JPY",
+    "USDCHF=X": "USD_CHF",
+    "AUDUSD=X": "AUD_USD",
+    "NZDUSD=X": "NZD_USD",
+    "USDCAD=X": "USD_CAD",
+    "GC=F": "XAU_USD",         # Gold (spot OANDA — real-time)
+    "XAUUSD=X": "XAU_USD",     # Gold spot
+    "SI=F": "XAG_USD",         # Silver
+    "XAGUSD=X": "XAG_USD",
+}
+
 # Indikator makro FRED
 FRED_INDICATORS = {
     "nfp": "PAYEMS",              # Non-Farm Payrolls

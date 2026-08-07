@@ -1,8 +1,14 @@
 """
 Market Data Aggregator - Mengambil data harga dari multiple sources.
-Multi-source redundancy: Yahoo Finance (primary) -> Alpha Vantage -> Finnhub -> Twelve Data.
 
-Semua data delayed 15-20 menit (kecuali real-time berbayar).
+Sumber data:
+- OANDA (PRIMARY untuk Forex & Gold bila terkonfigurasi) — harga REAL-TIME
+  (streaming bid/ask via OANDA demo API), tidak delayed seperti Yahoo.
+- Yahoo Finance (fallback + instrumen non-OANDA: USD/IDR, DXY, index, crypto)
+- Alpha Vantage -> Finnhub (fallback cadangan)
+
+OANDA tidak terkonfigurasi? Semua instrumen otomatis kembali ke Yahoo Finance
+(perilaku lama, zero perubahan).
 """
 import asyncio
 import logging
@@ -19,9 +25,11 @@ from config.settings import (
     FINNHUB_KEY,
     TWELVEDATA_KEY,
     EXCHANGE_RATE_KEY,
+    OANDA_PRICE_TTL,
 )
-from config.providers import YAHOO_SYMBOLS
+from config.providers import YAHOO_SYMBOLS, OANDA_SYMBOLS
 from data.cache import cache, cached, CACHE_TTL_SECONDS
+from data.oanda_client import OandaClient
 
 logger = logging.getLogger(__name__)
 
@@ -52,13 +60,95 @@ class MarketDataAggregator:
         self.finnhub_key = FINNHUB_KEY
         self.twelve_key = TWELVEDATA_KEY
         self.exchange_key = EXCHANGE_RATE_KEY
+        self.oanda = OandaClient()
 
-    # ===================== YAHOO FINANCE (Primary) =====================
+    # ===================== OANDA (Primary — Forex & Gold) =====================
+
+    def _get_oanda_data(self, symbol: str, period: str, interval: str, ohlcv_limit: int) -> Dict:
+        """
+        Ambil data REAL-TIME dari OANDA untuk forex & gold.
+
+        - current_price = mid price streaming (bid/ask) — LIVE, bukan delayed.
+        - previous_close = close sesi trading sebelumnya (candle harian OANDA).
+        - ohlcv = candle OANDA (format sama persis dengan yfinance) untuk
+          chart & indikator teknikal.
+
+        Returns:
+            Dict dengan shape identik get_yahoo_data (source="OANDA ...").
+
+        Raises:
+            Exception bila data tidak bisa diambil — caller fallback ke Yahoo.
+        """
+        instrument = self.oanda.instrument_for(symbol)
+        if not instrument:
+            raise ValueError(f"{symbol} tidak didukung OANDA")
+
+        granularity = self.oanda.granularity_for(interval)
+        count = self.oanda.count_for(period, interval, ohlcv_limit)
+
+        # Candle untuk chart & indikator — gagal bukan akhir dunia, harga live
+        # tetap berharga (fallback price-only).
+        ohlcv = []
+        try:
+            ohlcv = self.oanda.get_candles(instrument, granularity=granularity, count=count)
+        except Exception as e:
+            logger.warning(f"OANDA candles gagal untuk {symbol}: {e}")
+
+        # Harga live (streaming). Kalau pricing gagal, degrade ke close candle
+        # terakhir agar data tetap tersedia (candle tetap lebih fresh dari Yahoo).
+        bid = ask = None
+        current_price = None
+        try:
+            price = self.oanda.get_mid_price(instrument)
+            current_price = price["mid"]
+            bid, ask = price["bid"], price["ask"]
+        except Exception as e:
+            logger.warning(f"OANDA pricing gagal untuk {symbol}, pakai close candle: {e}")
+            if ohlcv:
+                current_price = ohlcv[-1]["close"]
+
+        if current_price is None:
+            raise RuntimeError(f"OANDA tidak mengembalikan harga untuk {instrument}")
+
+        # Previous close dari candle harian — jangan sampai kegagalan sub-request
+        # ini membatalkan harga real-time yang sudah didapat.
+        previous_close = None
+        try:
+            previous_close = self.oanda.get_previous_close(instrument)
+        except Exception as e:
+            logger.warning(f"OANDA previous_close gagal untuk {symbol}: {e}")
+
+        change_pct = None
+        if previous_close and previous_close > 0:
+            change_pct = round(((current_price - previous_close) / previous_close) * 100, 2)
+
+        return {
+            "source": f"OANDA ({self.oanda.env_name})",
+            "symbol": symbol,
+            "instrument": instrument,
+            "current_price": current_price,
+            "bid": bid,
+            "ask": ask,
+            "previous_close": previous_close,
+            "change_pct": change_pct,
+            "high_52w": None,
+            "low_52w": None,
+            "volume": ohlcv[-1].get("volume", 0) if ohlcv else 0,
+            "market_cap": None,
+            "ohlcv": ohlcv[-ohlcv_limit:],
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    # ===================== YAHOO FINANCE (Fallback & Non-OANDA) =====================
 
     def get_yahoo_data(self, symbol: str, period: str = "5d", interval: str = "1h", ohlcv_limit: int = 5) -> Dict:
         """
-        Ambil data harga dari Yahoo Finance.
-        Sumber utama karena unlimited dan tanpa API key.
+        Ambil data harga — OANDA real-time dulu untuk forex & gold, fallback Yahoo.
+
+        Bila OANDA terkonfigurasi dan simbol didukung (lihat OANDA_SYMBOLS),
+        data diambil dari OANDA demo/live API (harga streaming, tidak delayed).
+        Jika OANDA gagal / tidak dikonfigurasi / instrumen non-OANDA (USD/IDR,
+        DXY, index, crypto), otomatis kembali ke Yahoo Finance.
 
         Args:
             symbol: Simbol Yahoo Finance (e.g. EURUSD=X, GC=F)
@@ -71,6 +161,30 @@ class MarketDataAggregator:
         Returns:
             Dict dengan data harga atau error message
         """
+        # OANDA real-time untuk forex & gold — TTL pendek (OANDA_PRICE_TTL)
+        # agar harga selalu segar; gagal apa pun → lanjut ke Yahoo di bawah.
+        if self.oanda.is_configured and symbol in OANDA_SYMBOLS:
+            oanda_key = f"oanda:{symbol}:{period}:{interval}:n{ohlcv_limit}"
+            cached_oanda = cache.get(oanda_key)
+            if cached_oanda:
+                if "error" not in cached_oanda:
+                    return cached_oanda
+                # Negative cache (OANDA sedang down) — lewati, pakai Yahoo.
+                cached_oanda = None
+            try:
+                result = self._get_oanda_data(symbol, period, interval, ohlcv_limit)
+                if result.get("current_price") is not None:
+                    cache.set(oanda_key, result, OANDA_PRICE_TTL)
+                    return result
+            except Exception as e:
+                logger.warning(f"OANDA gagal untuk {symbol}, fallback Yahoo: {e}")
+                # Negative cache pendek: jangan retry OANDA berulang saat down
+                # (mirip negative cache 429 Yahoo di bawah).
+                try:
+                    cache.set(oanda_key, {"error": str(e)}, max(OANDA_PRICE_TTL, 60))
+                except Exception:
+                    pass
+
         cache_key = f"yahoo:{symbol}:{period}:{interval}:n{ohlcv_limit}"
         cached_data = cache.get(cache_key)
         if cached_data:

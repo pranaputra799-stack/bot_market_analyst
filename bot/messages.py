@@ -106,7 +106,7 @@ Cukup kirim pertanyaan tentang pasar keuangan, dan saya akan menjawab dengan dat
 📌 *Tips:*
 • Semakin spesifik pertanyaan, semakin baik analisisnya
 • Bot support Bahasa Indonesia
-• Data delayed 15-20 menit (sumber gratis)
+• Forex & Gold pakai harga *real-time* OANDA; instrumen lain delayed 15-20 menit
 """
 
 ABOUT_MESSAGE = """
@@ -118,7 +118,7 @@ ABOUT_MESSAGE = """
 
 *Fitur Utama:*
 • ✅ Multi-AI Provider (OpenRouter primary — model gratis, Groq, Gemini, Cerebras, Mistral)
-• ✅ Multi-Source Data (Yahoo Finance, Alpha Vantage, Finnhub)
+• ✅ Multi-Source Data (OANDA real-time utk Forex & Gold + Yahoo Finance, Alpha Vantage, Finnhub)
 • ✅ Data Makroekonomi (FRED, World Bank)
 • ✅ Berita & Sentimen Pasar
 • ✅ Morning Brief Harian
@@ -129,7 +129,7 @@ Bot ini adalah alat edukasi untuk memahami dinamika pasar global. Bukan untuk ek
 
 *Teknologi:*
 • python-telegram-bot 20.x
-• yfinance untuk data pasar
+• OANDA v20 API (real-time) + yfinance untuk data pasar
 • Multi-AI fallback engine
 • In-memory caching
 
@@ -220,12 +220,33 @@ def get_analysis_engine_status() -> str:
 def get_data_sources_status(market_data, macro_data, news_fetcher) -> str:
     """Format status data sources."""
     lines = []
-    # Check Yahoo Finance
-    test = market_data.get_yahoo_data("EURUSD=X")
-    if "error" not in test:
-        lines.append("  ✅ Yahoo Finance (unlimited)")
+
+    # OANDA (real-time forex & gold) — get_yahoo_data otomatis memakai OANDA
+    # untuk EURUSD=X bila terkonfigurasi, jadi satu call sudah tes keduanya.
+    if market_data.oanda.is_configured:
+        test = market_data.get_yahoo_data("EURUSD=X")
+        src = test.get("source", "?")
+        if "error" not in test and test.get("current_price"):
+            if "OANDA" in src:
+                lines.append(f"  ✅ OANDA {market_data.oanda.env_name} (real-time) — EUR/USD via {src}")
+            else:
+                lines.append(f"  ⚠️ OANDA {market_data.oanda.env_name} terkonfigurasi tapi gagal — pakai {src}")
+        else:
+            lines.append("  ⚠️ OANDA terkonfigurasi tapi error — fallback Yahoo aktif")
+        # Yahoo tetap jadi fallback instrumen non-OANDA (IDR, DXY, index, crypto)
+        test_other = market_data.get_yahoo_data("USDIDR=X")
+        if "error" not in test_other:
+            lines.append("  🟡 Yahoo Finance (fallback: IDR, DXY, index, crypto)")
+        else:
+            lines.append("  ⚠️ Yahoo Finance: error")
     else:
-        lines.append("  ⚠️ Yahoo Finance: error")
+        lines.append("  ⬜ OANDA (belum dikonfigurasi — pakai Yahoo, delayed 15-20 mnt)")
+        # Check Yahoo Finance
+        test = market_data.get_yahoo_data("EURUSD=X")
+        if "error" not in test:
+            lines.append("  ✅ Yahoo Finance (unlimited)")
+        else:
+            lines.append("  ⚠️ Yahoo Finance: error")
 
     # Check Alpha Vantage
     if market_data.alpha_key:
@@ -351,7 +372,7 @@ Atau cukup klik tombol *📈 Chart* di menu utama!
 
 DISCLAIMER = """
 ---
-⚠️ *Disclaimer:* Analisis edukasi, bukan rekomendasi trading. Keputusan investasi/trading sepenuhnya tanggung jawab Anda. Data delayed 15-20 menit.
+⚠️ *Disclaimer:* Analisis edukasi, bukan rekomendasi trading. Keputusan investasi/trading sepenuhnya tanggung jawab Anda. Harga Forex & Gold real-time via OANDA; instrumen lain dapat delayed 15-20 menit.
 """
 
 

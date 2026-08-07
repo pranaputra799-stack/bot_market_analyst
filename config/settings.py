@@ -52,6 +52,25 @@ NEWSAPI_KEY = _get_key("NEWSAPI_KEY", "")
 EXCHANGE_RATE_KEY = _get_key("EXCHANGE_RATE_KEY", "")
 TWELVEDATA_KEY = _get_key("TWELVEDATA_KEY", "")
 
+# ===================== OANDA (REAL-TIME FOREX & GOLD) =====================
+# OANDA v20 API — sumber data REAL-TIME untuk Forex & Gold (XAU/USD).
+# Yahoo Finance (sumber lama) delayed 15-20 menit; OANDA demo memberi harga
+# streaming real-time gratis (akun demo = virtual money).
+#
+# Cara dapat kredensial:
+# 1) Daftar akun demo gratis: https://www.oanda.com/demo-account/
+# 2) Generate API token: https://www.oanda.com/demo-account/tpa/personal_token
+#    (login akun demo -> Manage API Access)
+# 3) OANDA_ACCOUNT_ID boleh dikosongkan — bot auto-detect akun pertama dari token
+#    via GET /v3/accounts.
+OANDA_API_KEY = _get_key("OANDA_API_KEY", "")
+OANDA_ACCOUNT_ID = _get_key("OANDA_ACCOUNT_ID", "")
+# "practice" (demo, default) atau "live"
+OANDA_ENV = os.getenv("OANDA_ENV", "practice").strip().lower()
+# TTL cache harga OANDA (detik). Lebih kecil = lebih realtime (harga segar),
+# tapi lebih banyak request API. Default 30 dtk.
+OANDA_PRICE_TTL = int(os.getenv("OANDA_PRICE_TTL", "30"))
+
 # ===================== DATABASE =====================
 SUPABASE_URL = _get_key("SUPABASE_URL", "")
 SUPABASE_KEY = _get_key("SUPABASE_KEY", "")
