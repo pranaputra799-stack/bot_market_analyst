@@ -36,7 +36,7 @@ from analysis.intent_classifier import IntentClassifier, IntentResult
 from analysis.indicators import compute_indicators, format_indicators_for_prompt
 from analysis.fact_check import build_fact_check_note
 from analysis.monitoring import metrics
-from data.cache import cache, safe_hash
+from data.cache import cache, persistent, safe_hash, CACHE_AI_TTL
 
 logger = logging.getLogger(__name__)
 
@@ -482,9 +482,19 @@ class AnalysisDirector:
             logger.debug(f"Fact check skipped: {e}")
 
     def _check_cache(self, question: str, conversation_history: str = "") -> Optional[AnalysisResult]:
-        """Check if we have a cached result for similar question."""
+        """
+        Check if we have a cached result for similar question.
+
+        Dua lapis: memori (L1) dulu, lalu app_cache Supabase (L2) — sehingga
+        analisis follow-up yang sama bertahan lintas restart/deploy. Bila hit
+        di L2, nilai diisi ulang ke L1 agar akses berikutnya cepat.
+        """
         cache_key = f"analysis:{safe_hash(question + conversation_history[:200])}"
         cached = cache.get(cache_key)
+        if cached is None and persistent.enabled:
+            cached = persistent.get(cache_key)
+            if cached is not None:
+                cache.set(cache_key, cached, CACHE_AI_TTL)
         if cached:
             try:
                 data = json.loads(cached) if isinstance(cached, str) else cached
@@ -502,14 +512,19 @@ class AnalysisDirector:
         return None
 
     def _cache_result(self, question: str, result: AnalysisResult):
-        """Cache the analysis result."""
+        """Cache the analysis result (L1 memori + L2 app_cache Supabase)."""
         cache_key = f"analysis:{safe_hash(question + result.conversation_history[:200])}"
         try:
-            cache.set(cache_key, {
+            payload = {
                 "intent": result.intent,
                 "final_response": result.final_response,
                 "agents_executed": result.agents_executed,
                 "confidence": result.confidence.to_dict() if result.confidence else None,
-            }, ttl=600)
+            }
+            cache.set(cache_key, payload, ttl=CACHE_AI_TTL)
+            # L2 persisten (fire-and-forget) — analisis follow-up bertahan
+            # setelah restart/deploy (app_cache), tidak hanya di RAM.
+            if persistent.enabled:
+                persistent.set(cache_key, payload, CACHE_AI_TTL)
         except Exception as e:
             logger.debug(f"Failed to cache analysis: {e}")
