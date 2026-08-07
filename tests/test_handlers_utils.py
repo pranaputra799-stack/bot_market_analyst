@@ -391,6 +391,74 @@ class _FakeContext:
         self.bot = None
 
 
+class TestOverviewRefreshButton(unittest.TestCase):
+    """Tombol '🔁 Refresh' di /overview — harga segar tanpa nunggu cache 10 menit."""
+
+    class _FakeQuery:
+        def __init__(self, data):
+            self.data = data
+            self.answered = False
+            self.edits = []
+            self.edit_kwargs = []
+
+        async def answer(self):
+            self.answered = True
+
+        async def edit_message_text(self, text, **kwargs):
+            self.edits.append(text)
+            self.edit_kwargs.append(kwargs)
+            return None
+
+    def _bot(self, calls):
+        class FakeMarketSummary:
+            def get_market_summary(self, refresh=False):
+                calls.append(refresh)
+                return "📊 *RINGKASAN PASAR*\n🟢 *EUR/USD*: 1.0850 (+0.10%)"
+
+        bot = MarketBot.__new__(MarketBot)
+        bot.market = FakeMarketSummary()
+        return bot
+
+    def test_overview_reply_has_refresh_button(self):
+        calls = []
+        bot = self._bot(calls)
+        message, kb = asyncio.run(bot._build_overview_reply(refresh=True))
+        self.assertEqual(calls, [True])  # refresh=True → bypass cache
+        self.assertIn("MARKET OVERVIEW", message)
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        self.assertEqual(callbacks, ["overview_refresh"])
+
+    def test_overview_refresh_callback_edits_message(self):
+        calls = []
+        bot = self._bot(calls)
+        query = self._FakeQuery("overview_refresh")
+        update = type("U", (), {
+            "callback_query": query,
+            "effective_chat": type("C", (), {"id": 777})(),
+        })()
+        asyncio.run(bot.handle_callback(update, None))
+        self.assertTrue(query.answered)
+        self.assertEqual(calls, [True])
+        self.assertTrue(any("MARKET OVERVIEW" in e for e in query.edits))
+        self.assertTrue(any(kw.get("reply_markup") is not None for kw in query.edit_kwargs))
+
+    def test_overview_menu_callback_has_refresh_button(self):
+        calls = []
+        bot = self._bot(calls)
+        query = self._FakeQuery("overview")
+        update = type("U", (), {
+            "callback_query": query,
+            "effective_chat": type("C", (), {"id": 777})(),
+        })()
+        async def _noop(*a, **k):
+            return None
+
+        ctx = type("Ctx", (), {"bot": type("B", (), {"send_chat_action": _noop})()})()
+        asyncio.run(bot.handle_callback(update, ctx))
+        self.assertTrue(query.answered)
+        self.assertTrue(any(kw.get("reply_markup") is not None for kw in query.edit_kwargs))
+
+
 class TestPriceAlertCommand(unittest.TestCase):
     """Branch /pa tanpa network: usage, list, clear, del."""
 

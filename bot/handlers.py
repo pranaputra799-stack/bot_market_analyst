@@ -1531,16 +1531,19 @@ class MarketBot:
                 "❌ Gagal memuat kalender ekonomi. Silakan coba lagi nanti.",
             )
 
-    async def _build_overview_message(self) -> str:
+    async def _build_overview_message(self, refresh: bool = False) -> str:
         """
         Bangun pesan overview pasar (dipakai perintah /overview & tombol menu).
         Data dari cache (10 menit) → respons instan tanpa menunggu AI.
+
+        Args:
+            refresh: Jika True, lewati cache & ambil harga terbaru.
 
         Returns:
             String pesan siap kirim (tidak pernah raise — fallback aman).
         """
         try:
-            summary = await asyncio.to_thread(self.market.get_market_summary)
+            summary = await asyncio.to_thread(self.market.get_market_summary, refresh=refresh)
             now_str = datetime.now(ZoneInfo(MORNING_BRIEF_TIMEZONE)).strftime("%A, %d %B %Y %H:%M")
             return (
                 f"🌍 *MARKET OVERVIEW*\n"
@@ -1554,6 +1557,12 @@ class MarketBot:
             logger.error(f"Overview error: {e}")
             return "❌ Gagal memuat overview pasar. Silakan coba lagi nanti."
 
+    async def _build_overview_reply(self, refresh: bool = False) -> Tuple[str, InlineKeyboardMarkup]:
+        """Bangun pesan /overview + tombol '🔁 Refresh' (dipakai perintah, menu,
+        dan tombol refresh — agar harga bisa dimuat ulang tanpa cache 10 menit)."""
+        message = await self._build_overview_message(refresh=refresh)
+        return message, self._add_refresh_button(None, callback="overview_refresh")
+
     async def overview_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         Handler untuk perintah /overview - Ringkasan cepat semua instrumen utama.
@@ -1561,12 +1570,13 @@ class MarketBot:
         """
         chat_id = update.effective_chat.id
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
-        message = await self._build_overview_message()
+        message, kb = await self._build_overview_reply()
         await safe_reply_text(
             update.message,
             message,
             parse_mode="Markdown",
             disable_web_page_preview=True,
+            reply_markup=kb,
         )
 
     async def morning_brief_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2259,13 +2269,32 @@ class MarketBot:
                 chat_id=update.effective_chat.id,
                 action="typing",
             )
-            message = await self._build_overview_message()
+            message, kb = await self._build_overview_reply()
             await safe_edit_message_text(
                 query,
                 message,
                 parse_mode="Markdown",
                 disable_web_page_preview=True,
+                reply_markup=kb,
             )
+
+        elif data == "overview_refresh":
+            # Muat ulang harga PAKSA (bypass cache 10 menit) lalu edit pesan
+            try:
+                message, kb = await self._build_overview_reply(refresh=True)
+                await safe_edit_message_text(
+                    query,
+                    message,
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True,
+                    reply_markup=kb,
+                )
+            except Exception as e:
+                logger.error(f"Overview refresh callback error: {e}")
+                await safe_edit_message_text(
+                    query,
+                    "❌ Gagal memuat ulang overview pasar. Silakan coba lagi nanti.",
+                )
 
         elif data == "gold_price":
             await context.bot.send_chat_action(
@@ -3218,11 +3247,11 @@ class MarketBot:
                 f"📰 {self._static_event_interpretation(event)}\n\n{DISCLAIMER}"
             )
 
-    def _add_refresh_button(self, kb: Optional[InlineKeyboardMarkup]) -> InlineKeyboardMarkup:
-        """Tambahkan baris tombol '🔁 Refresh' di bawah keyboard kalender.
-        Selalu ada — agar /calendar bisa dimuat ulang tanpa mengetik ulang."""
+    def _add_refresh_button(self, kb: Optional[InlineKeyboardMarkup], callback: str = "calendar_refresh") -> InlineKeyboardMarkup:
+        """Tambahkan baris tombol '🔁 Refresh' di bawah keyboard (kalender/overview).
+        Selalu ada — agar halaman bisa dimuat ulang tanpa mengetik ulang perintah."""
         rows = list(kb.inline_keyboard) if kb else []
-        rows.append([InlineKeyboardButton("🔁 Refresh", callback_data="calendar_refresh")])
+        rows.append([InlineKeyboardButton("🔁 Refresh", callback_data=callback)])
         return InlineKeyboardMarkup(rows)
 
     async def _build_calendar_reply(self, refresh: bool = False) -> Tuple[str, Optional[InlineKeyboardMarkup]]:

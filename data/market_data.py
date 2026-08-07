@@ -557,7 +557,7 @@ class MarketDataAggregator:
             "top_losers": [m for m in movers if m["change_pct"] < 0][:limit],
         }
 
-    def get_market_summary(self) -> str:
+    def get_market_summary(self, refresh: bool = False) -> str:
         """
         Mendapatkan ringkasan pasar untuk morning brief.
 
@@ -565,11 +565,16 @@ class MarketDataAggregator:
         data pasar memicu 7 request Yahoo beruntun dan memperparah rate limit.
         Kalau SEMUA simbol gagal, hasil TIDAK di-cache agar pemulihan Yahoo tidak
         tertutup — per-symbol negative cache (5 menit) tetap mencegah request ulang.
+
+        Args:
+            refresh: Jika True, LEWATI cache dan ambil harga terbaru dari Yahoo
+                (dipakai tombol '🔁 Refresh' di /overview).
         """
         cache_key = "market_summary"
-        cached_data = cache.get(cache_key)
-        if cached_data:
-            return cached_data
+        if not refresh:
+            cached_data = cache.get(cache_key)
+            if cached_data:
+                return cached_data
 
         pairs = {
             "EUR/USD": "EURUSD=X",
