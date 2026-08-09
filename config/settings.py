@@ -2,7 +2,10 @@
 Konfigurasi utama Bot AI Market Analysis.
 Membaca semua environment variables dan menyediakan default values.
 """
+import hashlib
 import os
+import re
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -246,10 +249,6 @@ WEBHOOK_LISTEN = os.getenv("WEBHOOK_LISTEN", "0.0.0.0")
 # valid dibuang), (2) bila kosong, diturunkan deterministik dari sha256 token
 # (hex = 0-9a-f, dijamin valid, 64 karakter). Konsisten dengan validasi header
 # X-Telegram-Bot-Api-Secret-Token di build_webhook_app (sama-sama baca konstan ini).
-import hashlib
-import re
-
-
 def _safe_webhook_secret(raw: str) -> str:
     """Sisakan hanya karakter yang diizinkan Telegram pada secret token."""
     return re.sub(r"[^A-Za-z0-9_-]", "", raw)[:256]
