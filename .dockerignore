@@ -1,0 +1,43 @@
+# ============================================================
+# .dockerignore — perkecil build context Docker (hemat bandwidth,
+# build lebih cepat, image lebih ramping). Resource gratis.
+# ============================================================
+
+# Git & CI
+.git
+.github
+.gitignore
+
+# Python cache
+__pycache__
+*.py[cod]
+*.so
+.eggs
+*.egg-info
+
+# Environment & secrets (JANGAN pernah masuk image)
+.env
+.env.*
+!.env.example
+
+# Data runtime & log
+bot.log
+*.log
+*.pkl
+data/*.db
+/data
+
+# Virtual env
+.venv
+venv
+env
+
+# Test & dev (tidak dibutuhkan di production)
+tests/
+
+# IDE & OS
+.idea
+.vscode
+*.swp
+.DS_Store
+Thumbs.db

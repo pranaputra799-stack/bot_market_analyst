@@ -1,12 +1,11 @@
 # ============================================================
-# Procfile - Railway Start Command
+# Procfile - Start Command (dibaca Railway; JustRunMy & Render memakai
+# Dockerfile CMD, jadi file ini opsional di platform tersebut)
 # ============================================================
-# Railway akan membaca Procfile untuk menentukan cara menjalankan app
-# 
-# web: Untuk webhook mode (Railway akan routing HTTP ke port ini)
-# worker: Untuk polling mode (background worker)
+# web: webhook mode (platform routing HTTP ke port ini)
+# worker: polling mode (background worker)
 #
-# Pakai web karena kita pakai webhook di Railway
+# Pakai web karena kita memakai webhook di Railway
 # ============================================================
 
 web: python main.py

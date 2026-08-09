@@ -294,8 +294,15 @@ class SentimentAnalyzer:
             )
 
             # generate() sinkron (requests) → jalankan di thread
+            # max_tokens=600: output hanya JSON skor + driver + assessment
+            # singkat — default 4096 jelas over-provision untuk tugas ini.
             response = await asyncio.to_thread(
-                self.ai.generate, prompt, 2, True, SENTIMENT_SYSTEM
+                self.ai.generate,
+                prompt,
+                max_retries=2,
+                use_cache=True,
+                system_override=SENTIMENT_SYSTEM,
+                max_tokens=600,
             )
 
             text = clean_json_response(response)

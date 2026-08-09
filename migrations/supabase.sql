@@ -192,6 +192,41 @@ DROP POLICY IF EXISTS "subscribers_all_anon" ON public.subscribers;
 CREATE POLICY "subscribers_all_anon" ON public.subscribers
     FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
+-- ------------------------------------------------------------
+-- N) news_predictions — prediksi arah emas (XAU/USD) terhadap event
+--     ekonomi high-impact + hasil benar/salah (fitur /prediksi).
+--     Satu prediksi per event (event_key UNIQUE = nama|waktu rilis UTC).
+--     Disimpan upsert; dibaca seluruhnya saat bot start (memori).
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.news_predictions (
+    event_key           TEXT PRIMARY KEY,
+    event_name          TEXT NOT NULL,
+    event_time          TEXT DEFAULT '',
+    event_dt_utc        TIMESTAMPTZ,
+    country             TEXT DEFAULT '',
+    country_emoji       TEXT DEFAULT '',
+    direction           TEXT NOT NULL,               -- 'naik' | 'turun'
+    price_at_prediction DOUBLE PRECISION,
+    reasoning           TEXT DEFAULT '',
+    market_line         TEXT DEFAULT '',
+    predicted_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    status              TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'settled'
+    actual_direction    TEXT,                        -- 'naik' | 'turun' | 'flat'
+    result              TEXT,                        -- 'benar' | 'salah' | 'flat'
+    price_after         DOUBLE PRECISION,
+    move_pct            DOUBLE PRECISION,
+    result_reasoning    TEXT DEFAULT '',
+    settled_at          TIMESTAMPTZ,
+    actual              TEXT,
+    forecast            TEXT,
+    prev                TEXT,
+    unit                TEXT DEFAULT '',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_news_predictions_status
+    ON public.news_predictions (status);
+
 -- Grant eksplisit (pengaman tambahan; Supabase biasanya sudah
 -- memberi default privileges untuk schema public)
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.app_cache TO anon, authenticated, service_role;
@@ -203,6 +238,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_reports TO anon, auth
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.price_alerts TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_alert_subscribers TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_alert_notified TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.news_predictions TO anon, authenticated, service_role;
 
 -- ============================================================
 -- Verifikasi cepat (jalankan setelah semua statement di atas):
@@ -211,8 +247,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_alert_notified TO ano
 --   where table_schema = 'public'
 --   and table_name in ('app_cache', 'users', 'subscribers', 'watchlist',
 --                      'price_history', 'event_reports', 'price_alerts',
---                      'event_alert_subscribers', 'event_alert_notified');
+--                      'event_alert_subscribers', 'event_alert_notified',
+--                      'news_predictions');
 --
--- Harus mengembalikan 9 baris. Jika sudah pernah punya tabel
+-- Harus mengembalikan 10 baris. Jika sudah pernah punya tabel
 -- users/subscribers sebelumnya, baris lama tetap aman (IF NOT EXISTS).
 -- ============================================================

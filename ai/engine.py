@@ -22,7 +22,7 @@ from config.settings import (
     GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY,
     CEREBRAS_API_KEY, MISTRAL_API_KEY, AI_FALLBACK_ORDER,
     AI_MAX_TOTAL_WAIT_SECONDS, AI_REQUEST_TIMEOUT, AI_MIN_INTERVAL_SECONDS,
-    AI_TEMPERATURE,
+    AI_TEMPERATURE, AI_MAX_TOKENS_DEFAULT,
 )
 from config.providers import PROVIDER_CONFIGS
 from data.cache import get_cached_ai_response, set_cached_ai_response, safe_hash
@@ -56,6 +56,13 @@ class AIFallbackEngine:
     # tanpa restart bot).
     _DEAD_MODEL_TTL = 600  # 10 menit
 
+    # TTL cache untuk PESAN ERROR total (detik). Saat semua provider gagal,
+    # pesan error di-cache sebentar agar request identik yang berbarengan
+    # (single-flight) ikut menggabung ke kegagalan yang sama — mencegah semua
+    # waiter me-retry pipeline yang sedang down (amplifikasi beban di jalur
+    # error). Sukses berikutnya otomatis menimpa cache ini.
+    _FAILURE_CACHE_TTL = 30
+
     def __init__(self, fallback_order: Optional[List[str]] = None):
         self.fallback_order = fallback_order or AI_FALLBACK_ORDER
         self.api_keys = {
@@ -71,7 +78,20 @@ class AIFallbackEngine:
             "failed": 0,
             "provider_usage": {p: 0 for p in self.fallback_order},
             "last_error": None,
+            # Pemakaian token kumulatif (LiteLLM-style budget tracking):
+            # prompt/completion/total + rincian per provider. Diisi dari field
+            # usage pada response API (Groq/OpenRouter/Cerebras/Mistral) dan
+            # usageMetadata (Gemini). Dipakai /status agar hemat token terlihat.
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "by_provider": {},
+            },
         }
+        # Lock untuk akumulasi usage lintas thread (increment bukan operasi
+        # atomik, walau GIL membuatnya aman — lock menjaga kebenaran hitungan).
+        self._usage_lock = threading.Lock()
         # State rate-limit per provider (aman dibaca/ditulis lintas thread di GIL):
         # - _provider_cooldown: provider → timestamp sampai kapan dihindari (429).
         # - _rate_limit_hints:   provider → durasi tunggu (detik) yang diminta server.
@@ -93,6 +113,12 @@ class AIFallbackEngine:
         if AI_MIN_INTERVAL_SECONDS and AI_MIN_INTERVAL_SECONDS > 0:
             self.throttle_min_interval_override = AI_MIN_INTERVAL_SECONDS
         self._order_index: Dict[str, int] = {p: i for i, p in enumerate(self.fallback_order)}
+        # Single-flight / request coalescing: peta cache_key → Event untuk
+        # request identik yang sedang berjalan. Banyak user bertanya SAMA
+        # bersamaan → hanya SATU request API yang benar-benar diproses;
+        # thread lain menunggu lalu memakai hasil dari cache (hemat token).
+        self._inflight: Dict[str, threading.Event] = {}
+        self._inflight_lock = threading.Lock()
         # Catatan thread-safety: system_override & max_tokens dikirim PER-REQUEST
         # (bukan state instance), sehingga generate() aman dipanggil paralel dari
         # banyak thread (asyncio.to_thread di handlers/sentiment/agents) tanpa
@@ -111,7 +137,7 @@ class AIFallbackEngine:
             except Exception:
                 pass
 
-    def generate(self, prompt: str, max_retries: int = 3, use_cache: bool = True, system_override: Optional[str] = None, max_tokens: int = 4096, max_total_wait: Optional[float] = None) -> str:
+    def generate(self, prompt: str, max_retries: int = 3, use_cache: bool = True, system_override: Optional[str] = None, max_tokens: int = AI_MAX_TOKENS_DEFAULT, max_total_wait: Optional[float] = None) -> str:
         """
         Generate response dengan fallback otomatis.
 
@@ -120,7 +146,10 @@ class AIFallbackEngine:
             max_retries: Max retry per provider
             use_cache: Apakah menggunakan cache untuk pertanyaan identik
             system_override: System prompt khusus untuk menggantikan default
-            max_tokens: Batas token output (4096 agar teks tidak terpotong)
+            max_tokens: Batas token output (default AI_MAX_TOKENS_DEFAULT=2048
+                — cukup untuk jawaban panjang; call site yang butuh teks lebih
+                besar men-set eksplisit, mis. morning brief 4096. Membatasi
+                output mencegah model bertele-tele yang membakar token).
             max_total_wait: Batas waktu total (detik) sebelum menyerah. Default
                 dari AI_MAX_TOTAL_WAIT_SECONDS — menjamin user tidak menunggu
                 menit-menit saat semua provider down/rate-limit.
@@ -137,11 +166,21 @@ class AIFallbackEngine:
         if system_override:
             cache_key = f"{safe_hash(system_override)}:{prompt}"
 
+        inflight_registered = False
         if use_cache:
             cached = get_cached_ai_response(cache_key)
             if cached:
                 logger.info("Using cached AI response")
                 return cached
+
+            # Single-flight / request coalescing: kalau prompt IDENTIK sedang
+            # diproses thread lain (banyak user bertanya sama dalam waktu
+            # bersamaan), tunggu sebentar lalu pakai hasilnya dari cache —
+            # menghindari duplikasi panggilan API yang mahal.
+            inflight_registered, coalesced = self._wait_or_register_inflight(cache_key)
+            if coalesced:
+                logger.info("Using coalesced AI response (single-flight)")
+                return coalesced
 
         # Budget waktu total: berhenti mencoba provider lain setelah deadline
         # tercapai agar latensi maksimal respons tetap wajar (user tidak menunggu
@@ -149,104 +188,118 @@ class AIFallbackEngine:
         effective_budget = max_total_wait if max_total_wait and max_total_wait > 0 else AI_MAX_TOTAL_WAIT_SECONDS
         deadline = time.time() + effective_budget
 
-        # Coba provider satu per satu. system & max_tokens dikirim per-request
-        # sehingga request paralel dari thread berbeda tidak saling menimpa.
-        # Urutan provider bersifat dinamis: provider yang baru kena rate-limit
-        # (429) dipindah ke belakang antrean agar request berikutnya langsung
-        # mencoba provider yang sehat.
-        for provider in self._ordered_providers():
-            for attempt in range(max_retries):
-                # Cek deadline sebelum tiap attempt
-                if time.time() >= deadline:
-                    logger.warning(
-                        f"AI total wait budget ({effective_budget:.0f}s) exceeded — stopping fallback"
-                    )
-                    break
-
-                try:
-                    logger.info(f"Trying provider: {provider} (attempt {attempt + 1}/{max_retries})")
-
-                    config = PROVIDER_CONFIGS.get(provider)
-                    if not config:
-                        logger.warning(f"Provider {provider} not found in config")
-                        continue
-
-                    key = self.api_keys.get(provider)
-                    if not key:
-                        logger.warning(f"No API key for {provider}")
-                        break  # Skip to next provider
-
-                    response = self._call_provider(provider, prompt, system, max_tokens)
-                    if response:
-                        # Provider sehat — bersihkan state rate-limit lama (jika ada)
-                        self._rate_limit_hints.pop(provider, None)
-                        self._provider_cooldown.pop(provider, None)
-
-                        self.stats["successful"] += 1
-                        self.stats["provider_usage"][provider] += 1
-
-                        # Only wrap with via tag if NOT using system_override (internal agent call)
-                        if system_override:
-                            formatted = response
-                        else:
-                            formatted = f"[via {config['name']}] 🤖\n\n{response}"
-
-                        # Cache response
-                        if use_cache:
-                            set_cached_ai_response(cache_key, formatted)
-
-                        return formatted
-
-                    # 429 = kuota AKUN habis (bukan masalah model/prompt). Retry
-                    # dalam hitungan detik hanya memperparah rate limit & membakar
-                    # request — langsung pindah ke provider berikutnya.
-                    # Catatan: check cooldown aktif dari 429 MANA PUN (termasuk
-                    # thread paralel lain) — kalau provider baru saja 429,
-                    # me-retry sekarang tetap kemungkinan besar gagal.
-                    if self._provider_cooldown.get(provider, 0.0) > time.time():
-                        logger.info(
-                            f"{provider} rate-limited (429) — skip retry, pindah provider"
+        try:
+            # Coba provider satu per satu. system & max_tokens dikirim per-request
+            # sehingga request paralel dari thread berbeda tidak saling menimpa.
+            # Urutan provider bersifat dinamis: provider yang baru kena rate-limit
+            # (429) dipindah ke belakang antrean agar request berikutnya langsung
+            # mencoba provider yang sehat.
+            for provider in self._ordered_providers():
+                for attempt in range(max_retries):
+                    # Cek deadline sebelum tiap attempt
+                    if time.time() >= deadline:
+                        logger.warning(
+                            f"AI total wait budget ({effective_budget:.0f}s) exceeded — stopping fallback"
                         )
                         break
 
-                    # Provider merespon kosong (bukan 429). Backoff dihitung
-                    # SATU KALI di sini (hint Retry-After server bila ada, atau
-                    # exponential + jitter) dan dibatasi sisa budget waktu total.
-                    if attempt < max_retries - 1:
-                        wait = self._backoff_wait(provider, attempt, deadline)
-                        if wait <= 0:
-                            logger.info(f"{provider} — sisa budget habis, pindah provider")
+                    try:
+                        logger.info(f"Trying provider: {provider} (attempt {attempt + 1}/{max_retries})")
+
+                        config = PROVIDER_CONFIGS.get(provider)
+                        if not config:
+                            logger.warning(f"Provider {provider} not found in config")
+                            continue
+
+                        key = self.api_keys.get(provider)
+                        if not key:
+                            logger.warning(f"No API key for {provider}")
+                            break  # Skip to next provider
+
+                        response = self._call_provider(provider, prompt, system, max_tokens)
+                        if response:
+                            # Provider sehat — bersihkan state rate-limit lama (jika ada)
+                            self._rate_limit_hints.pop(provider, None)
+                            self._provider_cooldown.pop(provider, None)
+
+                            self.stats["successful"] += 1
+                            self.stats["provider_usage"][provider] += 1
+
+                            # Only wrap with via tag if NOT using system_override (internal agent call)
+                            if system_override:
+                                formatted = response
+                            else:
+                                formatted = f"[via {config['name']}] 🤖\n\n{response}"
+
+                            # Cache response
+                            if use_cache:
+                                set_cached_ai_response(cache_key, formatted)
+
+                            return formatted
+
+                        # 429 = kuota AKUN habis (bukan masalah model/prompt). Retry
+                        # dalam hitungan detik hanya memperparah rate limit & membakar
+                        # request — langsung pindah ke provider berikutnya.
+                        # Catatan: check cooldown aktif dari 429 MANA PUN (termasuk
+                        # thread paralel lain) — kalau provider baru saja 429,
+                        # me-retry sekarang tetap kemungkinan besar gagal.
+                        if self._provider_cooldown.get(provider, 0.0) > time.time():
+                            logger.info(
+                                f"{provider} rate-limited (429) — skip retry, pindah provider"
+                            )
                             break
-                        logger.info(f"{provider} returned empty response, retrying in {wait:.0f}s...")
-                        time.sleep(wait)
 
-                except Exception as e:
-                    logger.warning(f"{provider} attempt {attempt + 1} failed: {e}")
-                    self.stats["last_error"] = f"{provider}: {e}"
-                    if attempt < max_retries - 1:
-                        wait = self._backoff_wait(provider, attempt, deadline)
-                        if wait <= 0:
-                            break
-                        logger.info(f"Retrying in {wait:.0f}s...")
-                        time.sleep(wait)
+                        # Provider merespon kosong (bukan 429). Backoff dihitung
+                        # SATU KALI di sini (hint Retry-After server bila ada, atau
+                        # exponential + jitter) dan dibatasi sisa budget waktu total.
+                        if attempt < max_retries - 1:
+                            wait = self._backoff_wait(provider, attempt, deadline)
+                            if wait <= 0:
+                                logger.info(f"{provider} — sisa budget habis, pindah provider")
+                                break
+                            logger.info(f"{provider} returned empty response, retrying in {wait:.0f}s...")
+                            time.sleep(wait)
 
-            # Jika provider ini gagal total, log dan lanjut ke berikutnya
-            logger.info(f"{provider} exhausted, trying next provider...")
-            if time.time() >= deadline:
-                break
+                    except Exception as e:
+                        logger.warning(f"{provider} attempt {attempt + 1} failed: {e}")
+                        self.stats["last_error"] = f"{provider}: {e}"
+                        if attempt < max_retries - 1:
+                            wait = self._backoff_wait(provider, attempt, deadline)
+                            if wait <= 0:
+                                break
+                            logger.info(f"Retrying in {wait:.0f}s...")
+                            time.sleep(wait)
 
-        self.stats["failed"] += 1
-        error_msg = (
-            "Maaf, semua AI provider sedang tidak tersedia saat ini. "
-            "Silakan coba lagi nanti.\n\n"
-            "Tips:\n"
-            "• Coba beberapa menit lagi (rate limit mungkin sudah reset)\n"
-            "• Gunakan perintah /status untuk melihat status sistem\n"
-            "• Pastikan API keys sudah diisi di file .env"
-        )
-        return error_msg
+                # Jika provider ini gagal total, log dan lanjut ke berikutnya
+                logger.info(f"{provider} exhausted, trying next provider...")
+                if time.time() >= deadline:
+                    break
 
-    async def generate_async(self, prompt: str, max_retries: int = 3, use_cache: bool = True, system_override: Optional[str] = None, max_tokens: int = 4096, max_total_wait: Optional[float] = None) -> str:
+            self.stats["failed"] += 1
+            error_msg = (
+                "Maaf, semua AI provider sedang tidak tersedia saat ini. "
+                "Silakan coba lagi nanti.\n\n"
+                "Tips:\n"
+                "• Coba beberapa menit lagi (rate limit mungkin sudah reset)\n"
+                "• Gunakan perintah /status untuk melihat status sistem\n"
+                "• Pastikan API keys sudah diisi di file .env"
+            )
+            # Cache pesan error singkat agar request identik yang berbarengan
+            # tidak ikut me-retry pipeline yang sedang down (lihat
+            # _FAILURE_CACHE_TTL). Sukses berikutnya menimpa cache ini.
+            if use_cache:
+                try:
+                    set_cached_ai_response(cache_key, error_msg, ttl=self._FAILURE_CACHE_TTL)
+                except Exception:
+                    pass
+            return error_msg
+        finally:
+            # Lepas single-flight agar thread penunggu tidak menggantung & dict
+            # tidak membengkak — dijamin berjalan di semua jalur (sukses/gagal).
+            if inflight_registered:
+                self._release_inflight(cache_key)
+
+    async def generate_async(self, prompt: str, max_retries: int = 3, use_cache: bool = True, system_override: Optional[str] = None, max_tokens: int = AI_MAX_TOKENS_DEFAULT, max_total_wait: Optional[float] = None) -> str:
         """Async version of generate."""
         return await asyncio.to_thread(
             self.generate, prompt, max_retries, use_cache, system_override, max_tokens, max_total_wait
@@ -317,6 +370,78 @@ class AIFallbackEngine:
                 remaining,
             )
         return max(0.0, wait)
+
+    def _wait_or_register_inflight(self, cache_key: str, timeout: float = 15.0):
+        """
+        Single-flight / request coalescing untuk prompt identik yang berjalan
+        paralel (banyak user bertanya sama dalam waktu bersamaan).
+
+        Returns:
+            (registered, coalesced):
+              - registered=True: panggilan ini menjadi GENERATOR — caller WAJIB
+                memanggil _release_inflight() (di finally) setelah selesai.
+              - coalesced: hasil string dari thread lain yang request identiknya
+                sudah selesai sebelum timeout (dibaca dari cache); None bila
+                tidak ada request identik berjalan / timeout / belum selesai.
+        """
+        with self._inflight_lock:
+            event = self._inflight.get(cache_key)
+            if event is None:
+                # Batas ukuran dict agar tidak membengkak (best effort).
+                if len(self._inflight) > 5000:
+                    self._inflight.clear()
+                self._inflight[cache_key] = threading.Event()
+                return True, None
+
+        # Ada request identik yang sedang berjalan — tunggu hasilnya sebentar.
+        if event.wait(timeout=timeout):
+            cached = get_cached_ai_response(cache_key)
+            return False, cached
+        # Timeout: request generator terlalu lama — generate sendiri (best effort).
+        return False, None
+
+    def _release_inflight(self, cache_key: str):
+        """
+        Lepas registrasi single-flight + bangunkan thread yang menunggu.
+        Aman dipanggil berulang / untuk key yang tidak terdaftar.
+        """
+        with self._inflight_lock:
+            event = self._inflight.pop(cache_key, None)
+        if event is not None:
+            event.set()
+
+    def _record_usage(self, provider: str, usage: Optional[Dict]):
+        """
+        Akumulasi pemakaian token dari response API (LiteLLM-style budget
+        tracking). Parsing toleran: field yang hilang/tidak valid dihitung 0.
+
+        Args:
+            provider: Nama provider (groq, gemini, openrouter, ...)
+            usage: Objek usage dari response (OpenAI-compatible) atau dict yang
+                sudah dipetakan dari usageMetadata Gemini
+        """
+        if not usage or not isinstance(usage, dict):
+            return
+        try:
+            prompt_tok = int(usage.get("prompt_tokens") or 0)
+            completion_tok = int(usage.get("completion_tokens") or 0)
+            total_tok = int(usage.get("total_tokens") or (prompt_tok + completion_tok))
+        except (TypeError, ValueError):
+            logger.debug(f"Usage parsing gagal untuk {provider}: {usage}")
+            return
+        with self._usage_lock:
+            u = self.stats["usage"]
+            u["prompt_tokens"] += prompt_tok
+            u["completion_tokens"] += completion_tok
+            u["total_tokens"] += total_tok
+            by_provider = u["by_provider"].setdefault(provider, {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            })
+            by_provider["prompt_tokens"] += prompt_tok
+            by_provider["completion_tokens"] += completion_tok
+            by_provider["total_tokens"] += total_tok
 
     def _throttle(self, provider: str):
         """
@@ -432,6 +557,8 @@ class AIFallbackEngine:
                     message = data["choices"][0].get("message", {})
                     content = message.get("content", "")
                     if content:
+                        # Catat pemakaian token (usage) untuk budget tracking.
+                        self._record_usage(provider, data.get("usage"))
                         return content
 
                 if "error" in data:
@@ -541,6 +668,14 @@ class AIFallbackEngine:
                         if parts:
                             text = parts[0].get("text", "")
                             if text:
+                                # usageMetadata Gemini → format usage umum
+                                # (promptTokenCount/candidatesTokenCount/totalTokenCount).
+                                um = data.get("usageMetadata") or {}
+                                self._record_usage(provider, {
+                                    "prompt_tokens": um.get("promptTokenCount"),
+                                    "completion_tokens": um.get("candidatesTokenCount"),
+                                    "total_tokens": um.get("totalTokenCount"),
+                                })
                                 return text
 
                 if "promptFeedback" in data and "blockReason" in data["promptFeedback"]:

@@ -304,13 +304,22 @@ def get_cached_ai_response(prompt: str) -> Optional[str]:
     return None
 
 
-def set_cached_ai_response(prompt: str, response: str):
-    """Cache AI response ke memori + Supabase (background, jika L2 aktif)."""
+def set_cached_ai_response(prompt: str, response: str, ttl: int = CACHE_AI_TTL):
+    """
+    Cache AI response ke memori + Supabase (background, jika L2 aktif).
+
+    Args:
+        prompt: Prompt (dipakai sebagai basis key hash)
+        response: Konten yang di-cache
+        ttl: Durasi cache (detik). Default CACHE_AI_TTL (10 menit); TTL pendek
+            dipakai untuk pesan error sementara agar request identik yang
+            berbarengan ikut menggabung (single-flight) ke kegagalan yang sama.
+    """
     prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
     key = f"ai:{prompt_hash}"
-    cache.set(key, response, CACHE_AI_TTL)
+    cache.set(key, response, ttl)
     if persistent.enabled:
-        persistent.set(key, response, CACHE_AI_TTL)
+        persistent.set(key, response, ttl)
 
 
 def cleanup_all():

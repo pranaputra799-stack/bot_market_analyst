@@ -349,7 +349,13 @@ class IntentClassifier:
         try:
             # generate() sinkron (requests) → jalankan di thread agar tidak
             # memblokir event loop saat klassifikasi ambigu.
-            response = await asyncio.to_thread(self.ai.generate, prompt, use_cache=False)
+            # use_cache=True: pertanyaan ambigu yang sama tidak perlu membakar
+            # LLM call berulang (cache engine L1+L2 menangkapnya).
+            # max_tokens=30: output hanya SATU kata kategori — 4096 (default
+            # lama) jelas over-provision dan membuang kuota output.
+            response = await asyncio.to_thread(
+                self.ai.generate, prompt, use_cache=True, max_tokens=30
+            )
             response = response.strip().lower()
             valid_intents = self.INTENT_KEYWORDS.keys()
             for intent in valid_intents:

@@ -219,7 +219,10 @@ class ResearchAgent:
 
         prompt = RESEARCH_ANALYSIS_TEMPLATE.format(
             question=question,
-            context_data=format_context_for_prompt(context.raw_context),
+            # Potong konteks berdasarkan BUDGET TOKEN (bukan karakter) —
+            # konteks pasar mentah bisa panjang; tiktoken memotong presisi
+            # sehingga prompt tetap muat dan hemat token input.
+            context_data=format_context_for_prompt(context.raw_context, max_tokens=750),
             conversation_history=conversation_history or "Tidak ada percakapan sebelumnya.",
         )
 
@@ -230,6 +233,10 @@ class ResearchAgent:
             prompt,
             use_cache=False,
             system_override=RESEARCH_SYSTEM,
+            # Output hanya JSON terstruktur (key_drivers/key_levels/regime/
+            # analisis) — 1500 token sudah jauh lebih dari cukup dibanding
+            # default 4096 (mencegah model bertele-tele membuang token).
+            max_tokens=1500,
         )
 
         # Try to parse JSON from response

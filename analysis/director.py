@@ -131,6 +131,26 @@ class AnalysisDirector:
         """
         start_time = time.time()
 
+        # ===== CACHE CHECK (SEBELUM klasifikasi intent) =====
+        # Pertanyaan identik (termasuk lintas restart via L2 Supabase) langsung
+        # dikembalikan TANPA SATU PUN LLM call. Sebelumnya klasifikasi intent
+        # berjalan LEBIH DULU sehingga repeat question tetap membakar 1 LLM
+        # call (intent classifier) padahal analisis lengkapnya sudah di-cache.
+        # Cache key menyertakan history agar jawaban yang dikontekstualisasi
+        # percakapan user A tidak tersaji ke user lain dengan pertanyaan sama.
+        if self.enable_cache:
+            cached_result = self._check_cache(question, conversation_history)
+            if cached_result:
+                # Handle dibuat DULU baru record_cache_hit — record_cache_hit
+                # menambahkan hit ke _analyses[-1], jadi handle harus sudah ada
+                # agar hit tercatat di analisis cache-hit ini (bukan analisis
+                # sebelumnya).
+                metrics_handle = metrics.start_analysis(cached_result.intent, [])
+                metrics.record_cache_hit()
+                metrics.complete_analysis(metrics_handle)
+                logger.info(f"Cache hit for question: {question[:60]}...")
+                return cached_result
+
         # ===== INTENT CLASSIFICATION =====
         intent_result = await self.intent_classifier.classify(question)
         intent = intent_result.intent
@@ -145,16 +165,6 @@ class AnalysisDirector:
         metrics_handle = metrics.start_analysis(intent, [])
 
         try:
-            # Check cache for identical question
-            # Cache key menyertakan history agar jawaban yang dikontekstualisasi
-            # percakapan user A tidak tersaji ke user lain dengan pertanyaan sama.
-            if self.enable_cache:
-                cached_result = self._check_cache(question, conversation_history)
-                if cached_result:
-                    metrics.record_cache_hit()
-                    metrics.complete_analysis(metrics_handle)
-                    logger.info(f"Cache hit for question: {question[:60]}...")
-                    return cached_result
 
             # ===== STAGE 1: Research (intent-aware) =====
             logger.info(f"Director: Running Research Agent (intent={intent})...")
@@ -375,7 +385,9 @@ class AnalysisDirector:
         try:
             synthesis_prompt = build_analysis_prompt(
                 question=result.question,
-                context_data=format_context_for_prompt(research_str),
+                # Budget token (tiktoken) — konteks pasar mentah dipotong presisi
+                # agar sintesis tidak membuang token input berlebihan.
+                context_data=format_context_for_prompt(research_str, max_tokens=750),
                 research_output=research_str[:800] if research_str else "No research data",
                 signal_output=signal_str[:500] if signal_str else "No signal data",
                 indicators_output=result.indicators_summary,
@@ -387,7 +399,12 @@ class AnalysisDirector:
                 conversation_history=result.conversation_history,
             )
 
-            response = await asyncio.to_thread(self.ai.generate, synthesis_prompt, use_cache=False)
+            # max_tokens dibatasi (2048) — sintesis menyusun ulang output agent
+            # yang sudah terpotong di template, jadi output panjang tidak perlu
+            # lebih dari 2048 token (mencegah model bertele-tele membakar token).
+            response = await asyncio.to_thread(
+                self.ai.generate, synthesis_prompt, use_cache=False, max_tokens=2048
+            )
             if response and len(response) > 50:
                 return response
         except Exception as e:

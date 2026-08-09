@@ -33,7 +33,9 @@ from config.settings import (
     MEMORY_TTL_SECONDS,
     MEMORY_MAX_ENTRIES,
     MEMORY_MAX_EXCHANGES_IN_CONTEXT,
+    MEMORY_MAX_TOKENS_IN_CONTEXT,
 )
+from utils.token_budget import estimate_tokens, truncate_to_budget
 
 logger = logging.getLogger(__name__)
 
@@ -247,21 +249,16 @@ def format_history(user_id: int, max_exchanges: int = MAX_EXCHANGES_IN_CONTEXT) 
     """
     Format riwayat + konteks terakhir menjadi teks untuk prompt LLM.
 
+    HEMAT TOKEN: selain membatasi jumlah pertukaran (max_exchanges), total
+    riwayat juga dibatasi budget token (MEMORY_MAX_TOKENS_IN_CONTEXT). Jika
+    melebihi budget, pertukaran PALING LAMA dibuang lebih dulu (pertukaran
+    terbaru paling relevan untuk follow-up), lalu potong ekor sebagai usaha
+    terakhir. Konteks terstruktur selalu dipertahankan.
+
     Returns:
         String siap-suntik, atau "" jika tidak ada riwayat maupun konteks.
     """
-    lines: List[str] = []
-
     history = get_history(user_id)[-max_exchanges:]
-    if history:
-        lines.append("Percakapan sebelumnya (User ↔ Bot):")
-        for ex in history:
-            q = ex.get("q", "")
-            a = ex.get("a", "")
-            if q:
-                lines.append(f'User: "{q}"')
-            if a:
-                lines.append(f"Bot: {a}")
 
     # Konteks terstruktur membantu follow-up yang ambigu (mis. "support-nya berapa?")
     ctx = get_context(user_id)
@@ -270,8 +267,43 @@ def format_history(user_id: int, max_exchanges: int = MAX_EXCHANGES_IN_CONTEXT) 
         ctx_lines.append(f"• Fokus aset: {ctx['asset_focus']}")
     if ctx.get("direction"):
         ctx_lines.append(f"• Arah tren: {ctx['direction']}")
-    if ctx_lines:
-        lines.append("KONTEKS PERCAKAPAN TERAKHIR:")
-        lines.extend(ctx_lines)
+    ctx_block = "\n".join(["KONTEKS PERCAKAPAN TERAKHIR:", *ctx_lines]) if ctx_lines else ""
 
-    return "\n".join(lines)
+    # Satu blok per pertukaran — memudahkan membuang yang paling lama.
+    blocks: List[str] = []
+    for ex in history:
+        chunk = []
+        if ex.get("q"):
+            chunk.append(f'User: "{ex["q"]}"')
+        if ex.get("a"):
+            chunk.append(f"Bot: {ex['a']}")
+        if chunk:
+            blocks.append("\n".join(chunk))
+
+    if not blocks and not ctx_block:
+        return ""
+
+    header = "Percakapan sebelumnya (User ↔ Bot):" if blocks else ""
+
+    def _join(selected_blocks: List[str]) -> str:
+        parts = []
+        if header and selected_blocks:
+            parts.append(header)
+        parts.extend(selected_blocks)
+        if ctx_block:
+            parts.append(ctx_block)
+        return "\n".join(parts)
+
+    # Buang pertukaran paling lama (depan list) hingga muat budget token.
+    selected = list(blocks)
+    while selected and estimate_tokens(_join(selected)) > MEMORY_MAX_TOKENS_IN_CONTEXT:
+        selected.pop(0)
+
+    text = _join(selected)
+    if not text:
+        return ""
+    # Usaha terakhir: potong ekor (jarang terjadi — hanya jika 1 pertukaran
+    # terbaru sendirian sudah melebihi budget).
+    if estimate_tokens(text) > MEMORY_MAX_TOKENS_IN_CONTEXT:
+        return truncate_to_budget(text, MEMORY_MAX_TOKENS_IN_CONTEXT, "history")
+    return text

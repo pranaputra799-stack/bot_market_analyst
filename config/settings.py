@@ -53,6 +53,20 @@ AI_MIN_INTERVAL_SECONDS = float(os.getenv("AI_MIN_INTERVAL_SECONDS", "0") or "0"
 # Bisa di-override via env AI_TEMPERATURE. Nilai di-clamp ke [0, 1] agar env
 # typo (mis. AI_TEMPERATURE=2) tidak menghasilkan output aneh.
 AI_TEMPERATURE = max(0.0, min(1.0, float(os.getenv("AI_TEMPERATURE", "0.1"))))
+# Batas token output DEFAULT untuk SATU panggilan AI (max_tokens).
+# Default 2048 — cukup untuk jawaban panjang tapi mencegah model bertele-tele /
+# looping yang membakar token output. Call site yang butuh teks lebih panjang
+# (mis. morning brief) men-set max_tokens eksplisit (4096). Env:
+# AI_MAX_TOKENS_DEFAULT. Diklem ke rentang 256..8192 agar env typo tidak
+# menghasilkan output terpotong parah atau kuota membengkak.
+AI_MAX_TOKENS_DEFAULT = int(os.getenv("AI_MAX_TOKENS_DEFAULT", "2048"))
+AI_MAX_TOKENS_DEFAULT = max(256, min(AI_MAX_TOKENS_DEFAULT, 8192))
+# Response caching OpenRouter (header X-OpenRouter-Cache): payload identik
+# (system + prompt + params sama) dikembalikan dari cache server dengan biaya
+# $0 dan latensi milidetik — melengkapi cache lokal bot untuk panggilan
+# internal yang tidak di-cache di sisi bot (research/thesis/intent).
+# Set false jika tidak ingin respons disimpan di sisi OpenRouter.
+OPENROUTER_RESPONSE_CACHE = os.getenv("OPENROUTER_RESPONSE_CACHE", "true").lower() in ("1", "true", "yes")
 
 # ===================== DATA PROVIDERS =====================
 ALPHA_VANTAGE_KEY = _get_key("ALPHA_VANTAGE_KEY", "")
@@ -112,6 +126,13 @@ MEMORY_MAX_ENTRIES = max(2, min(MEMORY_MAX_ENTRIES, 30))
 # boleh melebihi jumlah yang disimpan). Env: MEMORY_MAX_EXCHANGES_IN_CONTEXT.
 MEMORY_MAX_EXCHANGES_IN_CONTEXT = int(os.getenv("MEMORY_MAX_EXCHANGES_IN_CONTEXT", "6"))
 MEMORY_MAX_EXCHANGES_IN_CONTEXT = max(1, min(MEMORY_MAX_EXCHANGES_IN_CONTEXT, MEMORY_MAX_ENTRIES))
+# Budget TOKEN untuk riwayat percakapan yang disuntikkan ke prompt LLM —
+# selain batas jumlah pertukaran di atas, total riwayat juga dibatasi token
+# agar konteks tidak membengkak (jawaban lama bisa panjang). Hitung akurat
+# via tiktoken bila tersedia (fallback estimasi karakter). Env:
+# MEMORY_MAX_TOKENS_IN_CONTEXT. Diklem 100..4000.
+MEMORY_MAX_TOKENS_IN_CONTEXT = int(os.getenv("MEMORY_MAX_TOKENS_IN_CONTEXT", "600"))
+MEMORY_MAX_TOKENS_IN_CONTEXT = max(100, min(MEMORY_MAX_TOKENS_IN_CONTEXT, 4000))
 # Batas maksimal entri di memory cache — entri terlama di-evict saat penuh agar
 # RAM proses bot tetap terkendali (0 = tanpa batas).
 CACHE_MAX_ENTRIES = int(os.getenv("CACHE_MAX_ENTRIES", "5000"))
@@ -141,6 +162,23 @@ EVENT_AFTERMATH_ENABLED = os.getenv("EVENT_AFTERMATH_ENABLED", "true").lower() i
 # Jendela jam ke belakang: event yang rilis dalam N jam terakhir akan dilaporkan
 # (setiap job check berjalan sekali per ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES).
 EVENT_AFTERMATH_LOOKBACK_HOURS = int(os.getenv("EVENT_AFTERMATH_LOOKBACK_HOURS", "6"))
+
+# ===================== NEWS PREDICTION (XAU/USD) =====================
+# Prediksi arah emas (naik/turun) untuk event ekonomi high-impact, dikirim ke
+# subscriber /alert. Alur: T-5 menit prediksi dikirim → setelah rilis (T+settle)
+# AI menilai benar/salah/flat → riwayat & win rate dilihat via /prediksi.
+NEWS_PREDICTION_ENABLED = os.getenv("NEWS_PREDICTION_ENABLED", "true").lower() in ("1", "true", "yes")
+# Menit sebelum rilis saat prediksi dikirim ("5 menit sebelum news")
+NEWS_PREDICTION_LEAD_MINUTES = int(os.getenv("NEWS_PREDICTION_LEAD_MINUTES", "5"))
+# Menit setelah rilis sebelum hasil dievaluasi (beri waktu harga bereaksi)
+NEWS_PREDICTION_SETTLE_MINUTES = int(os.getenv("NEWS_PREDICTION_SETTLE_MINUTES", "15"))
+# Interval pengecekan (menit) — kecil agar prediksi mendekati T-5 menit
+NEWS_PREDICTION_CHECK_INTERVAL_MINUTES = int(os.getenv("NEWS_PREDICTION_CHECK_INTERVAL_MINUTES", "1"))
+# Ambang pergerakan harga (persen): di bawah ini AI/aturan menyatakan "flat"
+# (pergerakan tidak signifikan — tidak dihitung benar/salah pada win rate)
+NEWS_PREDICTION_MIN_MOVE_PCT = float(os.getenv("NEWS_PREDICTION_MIN_MOVE_PCT", "0.05"))
+# Maksimum prediksi dibuat/dievaluasi per run (batas anggaran AI)
+NEWS_PREDICTION_MAX_PER_RUN = int(os.getenv("NEWS_PREDICTION_MAX_PER_RUN", "2"))
 
 # ===================== PRICE ALERTS =====================
 # Alert harga per-user (/pa): interval pengecekan harga target (menit).
@@ -172,7 +210,20 @@ KOYEB = os.getenv("KOYEB", os.getenv("KOYEB_SERVICE_ID", ""))
 IS_KOYEB = bool(KOYEB)
 
 # Detect any cloud platform
+# CATATAN: JustRunMy (justrunmy.app) TIDAK menyediakan env var deteksi
+# platform otomatis — deteksi JustRunMy dilakukan lewat WEBHOOK_URL terisi
+# atau BOT_RUN_MODE=webhook (lihat main.py).
 IS_CLOUD = IS_RAILWAY or IS_RENDER or IS_KOYEB
+
+# Mode menjalankan bot: "auto" (default) | "webhook" | "polling".
+# - auto: webhook bila IS_CLOUD (Railway/Render/Koyeb) ATAU WEBHOOK_URL terisi
+#   (cara deteksi JustRunMy), selain itu polling (cocok untuk dev & JustRunMy
+#   tanpa setup port).
+# - webhook: paksa webhook (butuh WEBHOOK_URL publik + PORT sesuai mapping
+#   port di panel JustRunMy).
+# - polling: paksa long polling (jalan tanpa port/URL — rekomendasi JustRunMy
+#   bila tidak mau setup HTTPS port).
+BOT_RUN_MODE = os.getenv("BOT_RUN_MODE", "auto").strip().lower()
 
 # ===================== WEBHOOK (untuk production) =====================
 PORT = int(os.getenv("PORT", os.getenv("WEBHOOK_PORT", "8080")))
@@ -193,6 +244,20 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", TELEGRAM_TOKEN[:64] if TELEGRAM_TOK
 # ===================== LOGGING =====================
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE = os.getenv("LOG_FILE", "bot.log")
+
+# ===================== HEALTH ENDPOINT =====================
+# Endpoint HTTP /health (aiohttp, port terpisah HEALTH_PORT) untuk uptime
+# monitoring / Docker healthcheck. Berjalan di daemon thread sehingga tidak
+# mengganggu webhook Telegram (PTB 20.x tidak punya hook untuk route custom).
+# Diaktifkan via env HEALTH_ENDPOINT_ENABLED=true.
+HEALTH_ENDPOINT_ENABLED = os.getenv("HEALTH_ENDPOINT_ENABLED", "true").lower() in ("1", "true", "yes")
+# Port /health — HARUS berbeda dari PORT webhook Telegram. Default 8090.
+HEALTH_PORT = int(os.getenv("HEALTH_PORT", "8090"))
+# Bind address /health. Default 127.0.0.1 (localhost) — aman untuk Docker
+# healthcheck (dijalankan di dalam container) & probe lokal tanpa membuka
+# endpoint ke publik. Ubah ke 0.0.0.0 hanya jika platform butuh probe remote
+# pada port ini.
+HEALTH_BIND = os.getenv("HEALTH_BIND", "127.0.0.1")
 
 # Nonaktifkan file logging di cloud (container temporary)
 # Catatan: bool("0") bernilai True, jadi parsing manual diperlukan.

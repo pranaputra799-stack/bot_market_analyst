@@ -1,0 +1,104 @@
+# ============================================================
+# Promptfoo Config — Evaluasi kualitas prompt bot MarketAI
+# Repo: https://github.com/promptfoo/promptfoo (MIT)
+#
+# Menjalankan pipeline NYATA bot (provider python → AIFallbackEngine) sehingga
+# eval mengukur kualitas output produksi: provider multi-LLM gratis, template
+# final_synthesis, dan ketahanan parser JSON agent.
+#
+# Cara pakai (dari direktori ini):
+#   npx promptfoo eval            # jalankan evaluasi
+#   npx promptfoo view            # buka dashboard hasil di browser
+#
+# Prasyarat: minimal satu API key AI di env (OPENROUTER_API_KEY
+# direkomendasikan — hanya model free). Set data policy OpenRouter ke
+# "Allow all" agar semua model free bisa dipakai.
+# ============================================================
+
+description: "Evaluasi kualitas output pipeline analisis bot (multi-provider AI gratis)"
+
+providers:
+  - id: "file://agent_provider.py:call_api"
+    label: "Synthesis (final response)"
+  - id: "file://agent_provider.py:call_confidence"
+    label: "Confidence Agent (JSON)"
+
+# Template prompt — {symbol} diisi dari vars tiap test
+prompts:
+  - "Analisis {symbol} sekarang"
+
+tests:
+  # ---------- Provider 1: Sintesis akhir (teks user-facing) ----------
+  # PENTING: setiap test perlu `provider:` agar TIDAK ikut dijalankan ke
+  # provider lain (promptfoo defaultnya cartesian semua provider).
+  - description: "Synthesis EUR/USD — lengkap, akurat, tanpa markdown rusak"
+    provider: "file://agent_provider.py:call_api"
+    vars:
+      symbol: "EUR/USD"
+    assert:
+      - type: contains
+        value: "EUR/USD"
+      - type: not-contains
+        value: "**"               # markdown rusak tidak boleh tampil
+      - type: not-contains
+        value: "Not analyzed"    # pipeline kosong = bug
+      - type: python
+        value: "len(output) > 200"
+
+  - description: "Synthesis XAU/USD (Gold) — lengkap & menyebut instrumen"
+    provider: "file://agent_provider.py:call_api"
+    vars:
+      symbol: "XAU/USD"
+    assert:
+      - type: contains
+        value: "Gold"
+      - type: not-contains
+        value: "**"
+      - type: python
+        value: "len(output) > 200"
+
+  # ---------- Provider 2: Agent Confidence (JSON) ----------
+  - description: "Confidence agent → JSON valid dengan skema benar"
+    provider: "file://agent_provider.py:call_confidence"
+    vars:
+      symbol: "EUR/USD"
+    assert:
+      - type: is-json
+        value:
+          type: object
+          required:
+            - overall
+            - level
+            - assessment
+          properties:
+            overall:
+              type: number
+              minimum: 0
+              maximum: 1
+            level:
+              type: string
+              enum: ["high", "moderate", "low", "very_low"]
+            assessment:
+              type: string
+            limitations:
+              type: array
+
+# ============================================================
+# Opsional — penilaian kualitas LLM (rubric). Aktifkan dengan membuka
+# komentar di bawah. Judge memakai model gratis OpenRouter via env
+# OPENROUTER_API_KEY (jangan lupa set data policy "Allow all").
+#
+# defaultTest:
+#   options:
+#     rubric: |
+#       Jawab HANYA dengan skor 1-5 (integer) untuk pertanyaan:
+#       Apakah analisis pasar ini (a) menyebut angka harga yang masuk akal,
+#       (b) jelas & terstruktur untuk trader retail Indonesia,
+#       (c) berhati-hati (ada disclaimer risiko)?
+#       Skor 5 = sangat baik, 1 = buruk.
+#     rubricPrompt: "Anda juri analisis pasar. Skor 1-5."
+#
+# Cara pakai: tambahkan ke setiap test:
+#   - type: llm-rubric
+#     value: "Skor minimal 3/5 untuk kualitas analisis."
+# ============================================================

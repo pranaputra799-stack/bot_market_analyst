@@ -112,6 +112,9 @@ class RiskGates:
                 prompt,
                 use_cache=True,
                 system_override=RISK_SYSTEM,
+                # Output JSON faktor risiko + summary — 800 token cukup;
+                # default 4096 over-provision untuk output terstruktur.
+                max_tokens=800,
             )
 
             llm_assessment = self._parse_response(response)

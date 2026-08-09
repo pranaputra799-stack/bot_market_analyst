@@ -90,6 +90,9 @@ class ScenariosAgent:
             prompt,
             use_cache=True,
             system_override=SCENARIOS_SYSTEM,
+            # Output JSON 3 skenario (bull/bear/base) — 1500 token cukup;
+            # default 4096 over-provision untuk output terstruktur pendek.
+            max_tokens=1500,
         )
 
         return self._parse_response(response)

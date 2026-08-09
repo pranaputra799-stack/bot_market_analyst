@@ -3,6 +3,8 @@ Konfigurasi detail untuk setiap AI provider.
 Digunakan oleh AIFallbackEngine untuk melakukan request ke API.
 """
 
+from config.settings import OPENROUTER_RESPONSE_CACHE
+
 PROVIDER_CONFIGS = {
     "groq": {
         "name": "Groq",
@@ -73,7 +75,18 @@ PROVIDER_CONFIGS = {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://github.com/market-ai-bot",
-            "X-Title": "Market AI Bot"
+            "X-Title": "Market AI Bot",
+            # Response caching OpenRouter: payload identik (system + prompt +
+            # params sama) dikembalikan dari cache server dengan BIAYA TOKEN $0
+            # dan latensi milidetik. Melengkapi cache lokal — menangkap panggilan
+            # internal use_cache=False (research/thesis/intent) yang payloadnya
+            # kebetulan identik (data pasar sama + pertanyaan sama antar user).
+            # Bisa dimatikan via env OPENROUTER_RESPONSE_CACHE=false.
+            **(
+                {"X-OpenRouter-Cache": "true"}
+                if OPENROUTER_RESPONSE_CACHE
+                else {}
+            ),
         },
         "payload_template": "openai",
         "rate_limit": 20,

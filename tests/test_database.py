@@ -65,15 +65,19 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
         m2.assert_called_once_with({"k3"})
 
     def test_save_event_alert_notified_replace_all(self):
+        sess = mock.Mock()
         delete_fake = mock.Mock()
         delete_fake.raise_for_status = mock.Mock()
+        sess.delete.return_value = delete_fake
         post_fake = mock.Mock()
         post_fake.raise_for_status = mock.Mock()
+        sess.post.return_value = post_fake
         with mock.patch("data.database._is_configured", return_value=True), \
-             mock.patch("data.database.requests.delete", return_value=delete_fake), \
-             mock.patch("data.database.requests.post", return_value=post_fake) as mpost:
+             mock.patch("data.database._session", return_value=sess):
             self.assertTrue(Database.save_event_alert_notified({"b", "a"}))
-        payload = mpost.call_args.kwargs["json"]
+        sess.delete.assert_called_once()
+        sess.post.assert_called_once()
+        payload = sess.post.call_args.kwargs["json"]
         self.assertEqual(payload, [{"key": "a"}, {"key": "b"}])
 
     def test_get_price_alerts_parses_rows_and_skips_malformed(self):
@@ -86,43 +90,51 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
             {"id": "bogus", "chat_id": 1, "user_id": 1, "symbol": "X",
              "target": 1.0, "direction": "above"},
         ])
+        sess = mock.Mock()
+        sess.get.return_value = fake
         with mock.patch("data.database._is_configured", return_value=True), \
-             mock.patch("data.database.requests.get", return_value=fake) as m:
+             mock.patch("data.database._session", return_value=sess):
             alerts = Database.get_price_alerts()
-        m.assert_called_once()
+        sess.get.assert_called_once()
         self.assertEqual(len(alerts), 1)
         self.assertEqual(alerts[0]["symbol"], "EURUSD=X")
         self.assertEqual(alerts[0]["target"], 1.1)
 
     def test_save_price_alerts_replace_all(self):
         """save_price_alerts menghapus semua lalu insert ulang (bulk)."""
+        sess = mock.Mock()
         delete_fake = mock.Mock()
         delete_fake.raise_for_status = mock.Mock()
+        sess.delete.return_value = delete_fake
         post_fake = mock.Mock()
         post_fake.raise_for_status = mock.Mock()
+        sess.post.return_value = post_fake
         with mock.patch("data.database._is_configured", return_value=True), \
-             mock.patch("data.database.requests.delete", return_value=delete_fake) as mdel, \
-             mock.patch("data.database.requests.post", return_value=post_fake) as mpost:
+             mock.patch("data.database._session", return_value=sess):
             ok = Database.save_price_alerts([
                 {"id": 1, "chat_id": 7, "user_id": 9, "symbol": "GC=F",
                  "display_name": "Gold", "target": 2350.0, "direction": "below"},
             ])
         self.assertTrue(ok)
-        mdel.assert_called_once()
-        mpost.assert_called_once()
-        payload = mpost.call_args.kwargs["json"]
+        sess.delete.assert_called_once()
+        sess.post.assert_called_once()
+        payload = sess.post.call_args.kwargs["json"]
         self.assertEqual(payload[0]["target"], 2350.0)
 
     def test_save_event_alert_subscribers_replace_all(self):
+        sess = mock.Mock()
         delete_fake = mock.Mock()
         delete_fake.raise_for_status = mock.Mock()
+        sess.delete.return_value = delete_fake
         post_fake = mock.Mock()
         post_fake.raise_for_status = mock.Mock()
+        sess.post.return_value = post_fake
         with mock.patch("data.database._is_configured", return_value=True), \
-             mock.patch("data.database.requests.delete", return_value=delete_fake), \
-             mock.patch("data.database.requests.post", return_value=post_fake) as mpost:
+             mock.patch("data.database._session", return_value=sess):
             self.assertTrue(Database.save_event_alert_subscribers({2, 1}))
-        payload = mpost.call_args.kwargs["json"]
+        sess.delete.assert_called_once()
+        sess.post.assert_called_once()
+        payload = sess.post.call_args.kwargs["json"]
         self.assertEqual(payload, [{"chat_id": 1}, {"chat_id": 2}])
 
 

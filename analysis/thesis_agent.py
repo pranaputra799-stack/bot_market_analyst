@@ -129,6 +129,9 @@ class ThesisAgent:
             prompt,
             use_cache=False,
             system_override=system_prompt,
+            # Output JSON dengan daftar evidence/risk — 2000 token cukup;
+            # default 4096 terlalu longgar untuk tesis terstruktur.
+            max_tokens=2000,
         )
 
         thesis = self._parse_response(response)

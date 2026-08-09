@@ -9,6 +9,7 @@ pesan bersamaan.
 """
 import asyncio
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -16,6 +17,19 @@ import requests
 from config.settings import SUPABASE_URL, SUPABASE_KEY
 
 logger = logging.getLogger(__name__)
+
+# Session per-thread (connection pooling): setiap thread pekerja (asyncio.to_thread)
+# memakai ulang koneksi TCP/TLS ke Supabase, hemat handshake per panggilan REST.
+_session_local = threading.local()
+
+
+def _session() -> "requests.Session":
+    """Session requests khusus thread — aman dipakai konkuren (tiap thread sendiri)."""
+    s = getattr(_session_local, "session", None)
+    if s is None:
+        s = requests.Session()
+        _session_local.session = s
+    return s
 
 
 def _get_headers():
@@ -47,7 +61,7 @@ class Database:
                 "first_name": first_name or "",
             }
             headers = {**_get_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"}
-            resp = requests.post(url, json=data, headers=headers, timeout=10)
+            resp = _session().post(url, json=data, headers=headers, timeout=10)
             resp.raise_for_status()
             return True
         except Exception as e:
@@ -60,7 +74,7 @@ class Database:
             return []
         try:
             url = f"{SUPABASE_URL}/rest/v1/subscribers?select=chat_id"
-            resp = requests.get(url, headers=_get_headers(), timeout=10)
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
             resp.raise_for_status()
             return [row["chat_id"] for row in resp.json()]
         except Exception as e:
@@ -73,7 +87,7 @@ class Database:
             return False
         try:
             url = f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.{chat_id}&select=chat_id"
-            resp = requests.get(url, headers=_get_headers(), timeout=10)
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
             resp.raise_for_status()
             return len(resp.json()) > 0
         except Exception as e:
@@ -87,7 +101,7 @@ class Database:
         try:
             url = f"{SUPABASE_URL}/rest/v1/subscribers"
             headers = {**_get_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"}
-            resp = requests.post(url, json={"chat_id": chat_id}, headers=headers, timeout=10)
+            resp = _session().post(url, json={"chat_id": chat_id}, headers=headers, timeout=10)
             resp.raise_for_status()
             return True
         except Exception as e:
@@ -100,7 +114,7 @@ class Database:
             return False
         try:
             url = f"{SUPABASE_URL}/rest/v1/subscribers?chat_id=eq.{chat_id}"
-            resp = requests.delete(url, headers=_get_headers(), timeout=10)
+            resp = _session().delete(url, headers=_get_headers(), timeout=10)
             resp.raise_for_status()
             return True
         except Exception as e:
@@ -119,7 +133,7 @@ class Database:
                 f"{SUPABASE_URL}/rest/v1/watchlist?chat_id=eq.{chat_id}"
                 f"&select=symbol,label&order=created_at.asc"
             )
-            resp = requests.get(url, headers=_get_headers(), timeout=10)
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -137,7 +151,7 @@ class Database:
                 **_get_headers(),
                 "Prefer": "resolution=merge-duplicates,return=minimal",
             }
-            resp = requests.post(
+            resp = _session().post(
                 url,
                 json={"chat_id": chat_id, "symbol": symbol, "label": label or ""},
                 headers=headers,
@@ -156,7 +170,7 @@ class Database:
             return False
         try:
             url = f"{SUPABASE_URL}/rest/v1/watchlist?chat_id=eq.{chat_id}&symbol=eq.{symbol}"
-            resp = requests.delete(url, headers=_get_headers(), timeout=10)
+            resp = _session().delete(url, headers=_get_headers(), timeout=10)
             resp.raise_for_status()
             return True
         except Exception as e:
@@ -170,7 +184,7 @@ class Database:
             return []
         try:
             url = f"{SUPABASE_URL}/rest/v1/watchlist?select=symbol"
-            resp = requests.get(url, headers=_get_headers(), timeout=10)
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
             resp.raise_for_status()
             return sorted({row["symbol"] for row in resp.json()})
         except Exception as e:
@@ -199,7 +213,7 @@ class Database:
                 "bid": bid,
                 "ask": ask,
             }
-            resp = requests.post(url, json=data, headers=_get_headers(), timeout=10)
+            resp = _session().post(url, json=data, headers=_get_headers(), timeout=10)
             resp.raise_for_status()
             return True
         except Exception as e:
@@ -216,7 +230,7 @@ class Database:
                 f"{SUPABASE_URL}/rest/v1/price_history?symbol=eq.{symbol}"
                 f"&select=price,bid,ask,change_pct,created_at&order=created_at.desc&limit={limit}"
             )
-            resp = requests.get(url, headers=_get_headers(), timeout=10)
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -231,7 +245,7 @@ class Database:
         try:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
             url = f"{SUPABASE_URL}/rest/v1/price_history?created_at=lt.{cutoff}"
-            resp = requests.delete(url, headers=_get_headers(), timeout=10)
+            resp = _session().delete(url, headers=_get_headers(), timeout=10)
             resp.raise_for_status()
             return True
         except Exception as e:
@@ -248,7 +262,7 @@ class Database:
         try:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
             url = f"{SUPABASE_URL}/rest/v1/event_reports?select=key&created_at=gte.{cutoff}"
-            resp = requests.get(url, headers=_get_headers(), timeout=10)
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
             resp.raise_for_status()
             return {row["key"] for row in resp.json()}
         except Exception as e:
@@ -266,7 +280,7 @@ class Database:
                 **_get_headers(),
                 "Prefer": "resolution=merge-duplicates,return=minimal",
             }
-            resp = requests.post(url, json={"key": key}, headers=headers, timeout=10)
+            resp = _session().post(url, json={"key": key}, headers=headers, timeout=10)
             resp.raise_for_status()
             return True
         except Exception as e:
@@ -287,7 +301,7 @@ class Database:
             return []
         try:
             url = f"{SUPABASE_URL}/rest/v1/price_alerts?select=*&order=id.asc"
-            resp = requests.get(url, headers=_get_headers(), timeout=10)
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
             resp.raise_for_status()
             alerts = []
             for row in resp.json():
@@ -316,7 +330,7 @@ class Database:
         try:
             headers = _get_headers()
             url = f"{SUPABASE_URL}/rest/v1/price_alerts"
-            requests.delete(url, headers=headers, timeout=10).raise_for_status()
+            _session().delete(url, headers=headers, timeout=10).raise_for_status()
             if not alerts:
                 return True
             rows = [
@@ -332,7 +346,7 @@ class Database:
                 for a in alerts
             ]
             headers = {**headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
-            resp = requests.post(url, json=rows, headers=headers, timeout=10)
+            resp = _session().post(url, json=rows, headers=headers, timeout=10)
             resp.raise_for_status()
             return True
         except Exception as e:
@@ -350,7 +364,7 @@ class Database:
             return set()
         try:
             url = f"{SUPABASE_URL}/rest/v1/event_alert_subscribers?select=chat_id"
-            resp = requests.get(url, headers=_get_headers(), timeout=10)
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
             resp.raise_for_status()
             return {int(row["chat_id"]) for row in resp.json()}
         except Exception as e:
@@ -365,12 +379,12 @@ class Database:
         try:
             headers = _get_headers()
             url = f"{SUPABASE_URL}/rest/v1/event_alert_subscribers"
-            requests.delete(url, headers=headers, timeout=10).raise_for_status()
+            _session().delete(url, headers=headers, timeout=10).raise_for_status()
             rows = [{"chat_id": c} for c in sorted(set(subscribers))]
             if not rows:
                 return True
             headers = {**headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
-            resp = requests.post(url, json=rows, headers=headers, timeout=10)
+            resp = _session().post(url, json=rows, headers=headers, timeout=10)
             resp.raise_for_status()
             return True
         except Exception as e:
@@ -388,7 +402,7 @@ class Database:
             return set()
         try:
             url = f"{SUPABASE_URL}/rest/v1/event_alert_notified?select=key"
-            resp = requests.get(url, headers=_get_headers(), timeout=10)
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
             resp.raise_for_status()
             return {row["key"] for row in resp.json()}
         except Exception as e:
@@ -403,17 +417,58 @@ class Database:
         try:
             headers = _get_headers()
             url = f"{SUPABASE_URL}/rest/v1/event_alert_notified"
-            requests.delete(url, headers=headers, timeout=10).raise_for_status()
+            _session().delete(url, headers=headers, timeout=10).raise_for_status()
             rows = [{"key": k} for k in sorted(set(keys))]
             if not rows:
                 return True
             headers = {**headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
-            resp = requests.post(url, json=rows, headers=headers, timeout=10)
+            resp = _session().post(url, json=rows, headers=headers, timeout=10)
             resp.raise_for_status()
             return True
         except Exception as e:
             logger.error(f"Error saving event_alert_notified: {e}")
             return False
+
+    # ===================== NEWS PREDICTIONS (XAU/USD) =====================
+    # Prediksi arah emas terhadap event ekonomi high-impact + hasil benar/salah.
+    # Tabel news_predictions (event_key UNIQUE). Disimpan upsert per baris saat
+    # prediksi dibuat/dievaluasi; dibaca seluruhnya saat bot start ke memori
+    # (data/news_predictions.py) agar win rate bertahan setelah restart.
+
+    @staticmethod
+    def save_news_prediction(record: dict) -> bool:
+        """Upsert satu record prediksi news (idempotent per event_key)."""
+        if not _is_configured():
+            return False
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/news_predictions"
+            headers = {
+                **_get_headers(),
+                "Prefer": "resolution=merge-duplicates,return=minimal",
+            }
+            resp = _session().post(url, json=record, headers=headers, timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error saving news prediction: {e}")
+            return False
+
+    @staticmethod
+    def get_news_predictions(limit: int = 1000) -> list:
+        """Semua prediksi news, terurut terbaru (untuk dimuat ke memori)."""
+        if not _is_configured():
+            return []
+        try:
+            url = (
+                f"{SUPABASE_URL}/rest/v1/news_predictions?select=*"
+                f"&order=predicted_at.desc&limit={int(limit)}"
+            )
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.error(f"Error fetching news predictions: {e}")
+            return []
 
     # ===================== ASYNC WRAPPERS =====================
     # Handler Telegram (python-telegram-bot v20) berjalan di event loop asyncio.
@@ -507,6 +562,14 @@ class Database:
     @staticmethod
     async def save_event_alert_notified_async(keys) -> bool:
         return await asyncio.to_thread(Database.save_event_alert_notified, keys)
+
+    @staticmethod
+    async def save_news_prediction_async(record: dict) -> bool:
+        return await asyncio.to_thread(Database.save_news_prediction, record)
+
+    @staticmethod
+    async def get_news_predictions_async(limit: int = 1000) -> list:
+        return await asyncio.to_thread(Database.get_news_predictions, limit)
 
 
 db = Database()

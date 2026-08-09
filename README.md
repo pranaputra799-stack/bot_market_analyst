@@ -21,7 +21,10 @@ Dibuat untuk trader retail Indonesia — semua jawaban dalam Bahasa Indonesia, b
 - **Aftermath Event Analysis** 📰 — Notifikasi otomatis SETELAH event high-impact rilis: angka Actual vs Forecast/Previous, interpretasi arah DXY (US Dollar Index), analisis AI dampak ke Gold & FX, dan penjelasan berita — dedup persisten agar tidak dobel
 - **Alert Harga** 🎯 — Pasang target harga per instrumen (`/pa eurusd 1.0900`), bot mengirim notifikasi saat tersentuh
 - **Sentimen Pasar** 🧠 — Skor sentimen berbasis berita (Finnhub + lexicon + LLM)
-- **Grafik Harga Lokal** 📈 — Candlestick/line chart digambar langsung di server (matplotlib), tanpa layanan eksternal
+- **Grafik Harga Lokal** 📈 — Candlestick chart profesional (mplfinance): dark theme, panel volume, overlay MA 5/10/20 — fallback otomatis ke penggambaran manual bila mplfinance tidak ada
+- **Harga Crypto Real-time** 🪙 — BTC/ETH dari exchange publik (Binance, Coinbase, Kraken, OKX, Bybit, KuCoin) via ccxt **tanpa API key** — harga spot DAN candle OHLCV (chart & analisis teknikal BTC/ETH ikut real-time), Yahoo untuk crypto delayed 15-20 menit
+- **Health Endpoint** 💚 — `GET /health` (aiohttp, port `HEALTH_PORT`) untuk uptime monitoring & Docker healthcheck
+- **Prompt Evaluation** 🧪 — Scaffolding promptfoo (`promptfoo/`) untuk menguji kualitas prompt & validitas JSON agent lintas provider (dev-time)
 - **Error Tracking** (opsional) — Sentry, aktif otomatis jika `SENTRY_DSN` diisi
 - **Memory Percakapan** 💬 — Bot mengingat konteks percakapan per-user (±15 menit) sehingga pertanyaan follow-up seperti *"kalau begitu level support-nya di mana?"* tetap dipahami konteksnya
 
@@ -47,7 +50,8 @@ ai/
   engine.py              → AI fallback engine multi-provider
   openrouter_client.py   → Auto-discovery model gratis OpenRouter
 data/
-  market_data.py         → Data harga (OANDA real-time → Yahoo → Alpha Vantage → Finnhub)
+  market_data.py         → Data harga (OANDA real-time → ccxt crypto → Yahoo → Alpha Vantage → Finnhub)
+  ccxt_client.py         → Harga crypto real-time dari exchange publik (tanpa API key, multi-exchange failover)
   oanda_client.py        → Client OANDA v20 API (pricing real-time + candles + position/order book)
   oanda_stream.py        → Streaming harga WebSocket real-time (daemon thread)
   macro_data.py          → Data makro & kalender ekonomi (FRED, Finnhub, jadwal resmi)
@@ -60,7 +64,10 @@ prompts/
   loader.py              → Loader template prompt (single source of truth)
   *.txt                  → Template prompt analisis — edit di sini tanpa ubah kode
 utils/
-  chart_generator.py     → Chart lokal (matplotlib, dark theme)
+  chart_generator.py     → Chart lokal (mplfinance dark theme + fallback matplotlib)
+  health_server.py       → Endpoint /health (aiohttp daemon thread)
+  token_budget.py        → Token counting & truncation presisi (tiktoken opsional)
+promptfoo/               → Scaffolding evaluasi prompt (promptfoo, dev-time)
 tests/                   → Unit tests (unittest / pytest-compatible)
 ```
 
@@ -155,6 +162,16 @@ python main.py
 | `ECONOMIC_ALERT_ENABLED` | opsi | Notifikasi event ekonomi (`true`/`false`) |
 | `EVENT_AFTERMATH_ENABLED` | opsi | Analisis aftermath setalah event rilis (`true`/`false`) |
 | `EVENT_AFTERMATH_LOOKBACK_HOURS` | opsi | Jendela jam ke belakang untuk laporan aftermath (default `6`) |
+| `NEWS_PREDICTION_ENABLED` | opsi | Prediksi arah emas (XAU/USD) sebelum news high-impact (`true`/`false`, default `true`) |
+| `NEWS_PREDICTION_LEAD_MINUTES` | opsi | Menit sebelum rilis saat prediksi dikirim (default `5`) |
+| `NEWS_PREDICTION_SETTLE_MINUTES` | opsi | Menit setelah rilis sebelum hasil dievaluasi (default `15`) |
+| `NEWS_PREDICTION_MIN_MOVE_PCT` | opsi | Ambang pergerakan harga untuk status flat (default `0.05`) |
+| `HEALTH_ENDPOINT_ENABLED` | opsi | Endpoint `/health` untuk monitoring (`true`/`false`, default `true`) |
+| `HEALTH_PORT` | opsi | Port `/health` — beda dari PORT webhook (default `8090`) |
+| `CCXT_PRICE_TTL` | opsi | TTL cache harga crypto ccxt dalam detik (default `30`) |
+| `CCXT_OHLCV_TTL` | opsi | TTL cache candle OHLCV crypto ccxt dalam detik (default `60`) |
+| `MEMORY_MAX_TOKENS_IN_CONTEXT` | opsi | Budget token riwayat percakapan dalam prompt (default `600`) |
+| `BOT_RUN_MODE` | opsi | `auto` (default) / `webhook` / `polling` — JustRunMy: `auto` = polling kecuali `WEBHOOK_URL` terisi |
 
 Lihat `.env.example` untuk daftar lengkap.
 
@@ -186,16 +203,53 @@ mode memory-only tanpa error.
 
 ## 📦 Deploy
 
-**Docker (justrunmy / Railway / Render):**
+### JustRunMy (justrunmy.app) — yang kamu pakai
+
+JustRunMy **tidak** meng-inject env var platform atau URL publik secara otomatis
+(beda dengan Railway/Render). Karena itu bot memakai mode eksplisit:
+
+| Mode | Cara set | Kapan dipakai |
+|---|---|---|
+| **Polling** (rekomendasi) | Tidak perlu apa-apa — cukup `TELEGRAM_BOT_TOKEN` | Paling simpel: Telegram yang menghubungi bot, tidak butuh port/URL publik. Default `BOT_RUN_MODE=auto` otomatis memilih ini di JustRunMy (tidak ada deteksi cloud, `WEBHOOK_URL` kosong) |
+| **Webhook** | Panel → tambah **HTTPS port** (mapping ke port 8080 container) → set `WEBHOOK_URL=https://<app>.justrunmy.app` + `PORT=8080` + `BOT_RUN_MODE=webhook` | Latensi lebih rendah, dianjurkan untuk production |
+
+**Langkah deploy (git push):**
 
 ```bash
-# Build & push ke registry Anda, atau
-git push origin deploy   # justrunmy: otomatis build Dockerfile + restart app
+# 1. Buat app di justrunmy.app, lalu tambah remote git-nya
+#    (JustRunMy menampilkan URL remote git + perintah setup di dashboard)
+git remote add jrma https://git.justrunmy.app/<user>/<app>.git
+git push jrma main
 ```
 
-- `IS_CLOUD` terdeteksi otomatis (Railway/Render/Koyeb) → bot jalan dalam mode **webhook**
-- `PORT` diisi otomatis oleh platform
-- `WEBHOOK_URL` auto-detect dari platform
+Alternatif: **zip upload** (dashboard menerima arsip; JustRunMy mendeteksi
+Dockerfile / requirements.txt dan build otomatis) atau **docker push** image
+prebuilt.
+
+**Env var yang wajib/sering diisi di panel JustRunMy:**
+
+- `TELEGRAM_BOT_TOKEN` (wajib) + minimal satu AI key (`OPENROUTER_API_KEY` direkomendasikan)
+- `OANDA_API_KEY` (opsional, real-time forex/gold) — lihat bagian setup OANDA
+- `SUPABASE_URL` / `SUPABASE_KEY` (opsional, cache persisten)
+- `BOT_RUN_MODE` (opsional; default `auto`)
+- `WEBHOOK_URL` + `PORT=8080` — **hanya** untuk mode webhook
+
+Catatan: endpoint `/health` berjalan di port 8090 (localhost) — JustRunMy hanya
+mengekspos port yang kamu mapping di panel, jadi `/health` dipakai untuk
+healthcheck Docker / probe lokal, bukan probe publik.
+
+**Docker healthcheck:** Dockerfile sudah menyertakan `HEALTHCHECK` yang mengecek
+`GET http://127.0.0.1:8090/health` (script `utils/healthcheck.py`, stdlib-only).
+Bila endpoint dinonaktifkan (`HEALTH_ENDPOINT_ENABLED=false`), script otomatis
+fallback ke cek proses `main.py` masih hidup — jadi container tidak pernah
+salah ditandai unhealthy karena konfigurasi itu. Platform yang mendukung
+(auto-restart saat unhealthy) akan me-restart container yang crash.
+
+### Railway / Render / Koyeb
+
+- `IS_CLOUD` terdeteksi otomatis dari env var platform → bot jalan mode **webhook**
+- `PORT` & `WEBHOOK_URL` diisi otomatis oleh platform (tanpa set manual)
+- Docker: `git push origin deploy` atau push ke registry lalu deploy
 
 ## 🧪 Testing
 
@@ -206,7 +260,23 @@ python -m unittest discover -s tests -v
 # pytest tests/ -v
 ```
 
-Test mencakup logika murni (tanpa network): sentiment analyzer, signal engine, split pesan panjang, kalender ekonomi, dan AI fallback engine (provider di-stub).
+Test mencakup logika murni (tanpa network): sentiment analyzer, signal engine, split pesan panjang, kalender ekonomi, AI fallback engine (provider di-stub), chart mplfinance smoke, client ccxt (exchange di-mock), dan payload health endpoint.
+
+### Evaluasi kualitas prompt (promptfoo)
+
+```bash
+cd app/bot-telegram/promptfoo
+export OPENROUTER_API_KEY=sk-or-v1-...   # model gratis, biaya $0
+npx promptfoo eval && npx promptfoo view
+```
+
+Detail lengkap di `promptfoo/README.md`.
+
+### Cek kesehatan bot
+
+```bash
+curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
+```
 
 ## 📚 Perintah Bot
 
@@ -222,7 +292,8 @@ Test mencakup logika murni (tanpa network): sentiment analyzer, signal engine, s
 | `/watch` | Watchlist instrumen persisten (`/watch add eurusd`, `/watch list`, `/watch del eurusd`) |
 | `/riwayat` | Riwayat harga tersimpan tiap 30 menit (contoh: `/riwayat eurusd`) |
 | `/calendar` | Kalender ekonomi high-impact bulan ini |
-| `/alert on\|off` | Notifikasi event ekonomi otomatis — digest harian, reminder sebelum rilis, **+ analisis aftermath (dampak ke DXY) setelah rilis** |
+| `/alert on\|off` | Notifikasi event ekonomi otomatis — digest harian, reminder sebelum rilis, **+ analisis aftermath (dampak ke DXY) + prediksi arah emas** |
+| `/prediksi` | 🎯 Win rate prediksi news (XAU/USD) — total, benar/salah/flat, 10 prediksi terakhir (`/prediksi history` untuk 25) |
 | `/pa <simbol> <harga>` | 🎯 Alert harga — notifikasi saat harga menyentuh target (contoh: `/pa eurusd 1.0900`; kelola: `/pa list`, `/pa del <id>`) |
 | `/chart <simbol>` | Grafik harga (contoh: `/chart gold`, `/chart eurusd`) |
 | `/overview` | Ringkasan instan semua instrumen utama (tanpa AI) |

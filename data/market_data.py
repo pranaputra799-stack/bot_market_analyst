@@ -31,6 +31,7 @@ from config.providers import YAHOO_SYMBOLS, OANDA_SYMBOLS
 from data.cache import cache, cached, CACHE_TTL_SECONDS
 from data.oanda_client import OandaClient
 from data.oanda_stream import oanda_stream
+from data.ccxt_client import get_crypto_ticker, get_crypto_ohlcv, CRYPTO_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
@@ -156,12 +157,15 @@ class MarketDataAggregator:
 
     def get_yahoo_data(self, symbol: str, period: str = "5d", interval: str = "1h", ohlcv_limit: int = 5) -> Dict:
         """
-        Ambil data harga — OANDA real-time dulu untuk forex & gold, fallback Yahoo.
+        Ambil data harga — OANDA real-time dulu untuk forex & gold, lalu ccxt
+        untuk crypto (BTC/ETH), fallback Yahoo.
 
         Bila OANDA terkonfigurasi dan simbol didukung (lihat OANDA_SYMBOLS),
         data diambil dari OANDA demo/live API (harga streaming, tidak delayed).
-        Jika OANDA gagal / tidak dikonfigurasi / instrumen non-OANDA (USD/IDR,
-        DXY, index, crypto), otomatis kembali ke Yahoo Finance.
+        Crypto (BTC-USD/ETH-USD) memakai exchange publik via ccxt (real-time,
+        tanpa API key). Jika sumber-sumber itu gagal / tidak dikonfigurasi /
+        instrumen non-OANDA-non-crypto (USD/IDR, DXY, index), otomatis kembali
+        ke Yahoo Finance.
 
         Args:
             symbol: Simbol Yahoo Finance (e.g. EURUSD=X, GC=F)
@@ -197,6 +201,24 @@ class MarketDataAggregator:
                     cache.set(oanda_key, {"error": str(e)}, max(OANDA_PRICE_TTL, 60))
                 except Exception:
                     pass
+
+        # Crypto (BTC-USD / ETH-USD): data REAL-TIME dari exchange publik
+        # (ccxt, tanpa API key) — Yahoo delayed 15-20 menit untuk crypto.
+        # - Query harga spot (ohlcv_limit <= 5) → ticker (change 24 jam).
+        # - Query OHLCV (chart / analisis teknikal, ohlcv_limit > 5) → candle
+        #   real-time ccxt, jadi chart BTC/ETH & indikator ikut real-time.
+        # Gagal apa pun → lanjut ke Yahoo di bawah (negative cache ccxt
+        # mencegah request beruntun saat exchange down).
+        if symbol in CRYPTO_SYMBOLS:
+            if ohlcv_limit <= 5:
+                crypto = get_crypto_ticker(symbol)
+                if crypto and crypto.get("current_price") is not None:
+                    return crypto
+            else:
+                crypto_ohlcv = get_crypto_ohlcv(symbol, interval=interval, limit=ohlcv_limit)
+                if crypto_ohlcv:
+                    return self._build_crypto_ohlcv_result(symbol, crypto_ohlcv)
+            logger.info(f"ccxt tidak tersedia untuk {symbol}, fallback Yahoo")
 
         cache_key = f"yahoo:{symbol}:{period}:{interval}:n{ohlcv_limit}"
         cached_data = cache.get(cache_key)
@@ -297,6 +319,33 @@ class MarketDataAggregator:
             except Exception:
                 pass
             return error_result
+
+    @staticmethod
+    def _build_crypto_ohlcv_result(symbol: str, ohlcv: List[Dict]) -> Dict:
+        """
+        Bentuk hasil lengkap dari candle ccxt — shape identik get_yahoo_data
+        (dengan ohlcv terisi) sehingga chart / analisis teknikal bisa langsung
+        memakai: current_price = close terakhir, change vs bar sebelumnya.
+        """
+        closes = [float(c["close"]) for c in ohlcv if c.get("close") is not None]
+        current_price = closes[-1] if closes else None
+        previous_close = closes[-2] if len(closes) >= 2 else None
+        change_pct = None
+        if current_price and previous_close:
+            change_pct = round(((current_price - previous_close) / previous_close) * 100, 2)
+        return {
+            "source": "ccxt (OHLCV real-time)",
+            "symbol": symbol,
+            "current_price": current_price,
+            "previous_close": previous_close,
+            "change_pct": change_pct,
+            "high_52w": None,
+            "low_52w": None,
+            "volume": ohlcv[-1].get("volume", 0) if ohlcv else 0,
+            "market_cap": None,
+            "ohlcv": ohlcv,
+            "timestamp": datetime.now().isoformat(),
+        }
 
     def get_ohlcv_history(self, symbol: str, period: str = "3mo", interval: str = "1d", limit: int = 60) -> List[Dict]:
         """

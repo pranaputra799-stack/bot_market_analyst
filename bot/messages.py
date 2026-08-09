@@ -147,12 +147,24 @@ def get_ai_providers_status(ai_engine) -> str:
             icon = "⚠️"  # baru kena rate-limit (cooldown)
         else:
             icon = "✅" if usage > 0 else "🟡"
-        lines.append(f"  {icon} {name}: {usage}x dipakai")
+        # Pemakaian token per provider (dari usage API — hemat token terlihat).
+        tok = stats.get("usage", {}).get("by_provider", {}).get(provider, {})
+        tok_total = (tok.get("prompt_tokens") or 0) + (tok.get("completion_tokens") or 0)
+        tok_part = f" · {tok_total:,} token" if tok_total else ""
+        lines.append(f"  {icon} {name}: {usage}x dipakai{tok_part}")
     if degraded:
         lines.append("")
         lines.append(f"  ⚠️ Rate-limited sementara: {', '.join(sorted(degraded))}")
     if not lines:
         lines.append("  ❌ Tidak ada provider terkonfigurasi")
+    # Ringkasan total token (budget tracking ala LiteLLM)
+    tot = stats.get("usage", {}) or {}
+    if (tot.get("total_tokens") or 0) > 0:
+        lines.append("")
+        lines.append(
+            f"  💰 Total token: {tot.get('total_tokens', 0):,} "
+            f"(input {tot.get('prompt_tokens', 0):,} / output {tot.get('completion_tokens', 0):,})"
+        )
     return "\n".join(lines)
 
 

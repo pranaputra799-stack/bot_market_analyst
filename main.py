@@ -49,6 +49,8 @@ from config.settings import (
     ECONOMIC_ALERT_DIGEST_HOUR,
     ECONOMIC_ALERT_DIGEST_MINUTE,
     ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES,
+    NEWS_PREDICTION_ENABLED,
+    NEWS_PREDICTION_CHECK_INTERVAL_MINUTES,
     PRICE_ALERT_CHECK_MINUTES,
     BOT_USERNAME,
     BOT_NAME,
@@ -57,11 +59,13 @@ from config.settings import (
     WEBHOOK_LISTEN,
     WEBHOOK_SECRET,
     IS_CLOUD,
+    BOT_RUN_MODE,
 )
 from bot.handlers import MarketBot
 from data.cache import cache, cleanup_all
 from data.database import db
 from data.oanda_stream import start_stream
+from utils.health_server import start_health_server
 
 # ===================== LOGGING SETUP =====================
 log_handlers = [logging.StreamHandler()]
@@ -182,6 +186,32 @@ async def event_aftermath_callback(context):
             await bot_instance.check_event_aftermath(context.application)
         except Exception as e:
             logger.warning(f"Event aftermath check failed: {e}")
+
+
+async def news_prediction_callback(context):
+    """
+    Callback untuk membuat & mengirim prediksi arah emas (XAU/USD) menjelang
+    event ekonomi high-impact rilis. Dipanggil berkala.
+    """
+    bot_instance = context.application.bot_data.get("market_bot")
+    if bot_instance:
+        try:
+            await bot_instance.check_news_predictions(context.application)
+        except Exception as e:
+            logger.warning(f"News prediction check failed: {e}")
+
+
+async def news_prediction_settle_callback(context):
+    """
+    Callback untuk mengevaluasi prediksi news yang sudah lewat masa rilis
+    (AI menilai benar/salah) & mengirim hasilnya. Dipanggil berkala.
+    """
+    bot_instance = context.application.bot_data.get("market_bot")
+    if bot_instance:
+        try:
+            await bot_instance.settle_news_predictions(context.application)
+        except Exception as e:
+            logger.warning(f"News prediction settle failed: {e}")
 
 
 async def price_alert_callback(context):
@@ -322,6 +352,26 @@ def setup_scheduler(application: Application, bot: MarketBot):
                 f"Event aftermath analysis scheduled every {ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES} minutes"
             )
 
+        # ===== News Prediction (XAU/USD) =====
+        # Prediksi arah emas sebelum event high-impact rilis + evaluasi setelah
+        # rilis. Interval kecil (default 1 menit) agar prediksi mendekati T-5 menit.
+        if NEWS_PREDICTION_ENABLED:
+            application.job_queue.run_repeating(
+                news_prediction_callback,
+                interval=timedelta(minutes=NEWS_PREDICTION_CHECK_INTERVAL_MINUTES),
+                first=45,  # Mulai 45 detik setelah start
+                name="news_predictions",
+            )
+            application.job_queue.run_repeating(
+                news_prediction_settle_callback,
+                interval=timedelta(minutes=NEWS_PREDICTION_CHECK_INTERVAL_MINUTES),
+                first=75,  # Mulai 75 detik setelah start
+                name="news_prediction_settle",
+            )
+            logger.info(
+                f"News predictions scheduled every {NEWS_PREDICTION_CHECK_INTERVAL_MINUTES} minutes"
+            )
+
         # ===== Price Alerts =====
         # Alert harga per-user (/pa) diperiksa berkala; lebih cepat dari interval
         # event reminder karena harga bergerak terus.
@@ -381,6 +431,7 @@ def register_handlers(application: Application, bot: MarketBot):
     application.add_handler(CommandHandler("sentiment", bot.sentiment_command))
     application.add_handler(CommandHandler("calendar", bot.calendar_command))
     application.add_handler(CommandHandler("aftermath", bot.aftermath_command))
+    application.add_handler(CommandHandler("prediksi", bot.prediksi_command))
     application.add_handler(CommandHandler("alert", bot.alert_command))
     application.add_handler(CommandHandler("pa", bot.price_alert_command))
     application.add_handler(CommandHandler("chart", bot.chart_command))
@@ -431,13 +482,35 @@ def run_polling():
     )
 
 
+def resolve_run_mode(bot_run_mode: str, is_cloud: bool, webhook_url: str) -> str:
+    """
+    Tentukan mode menjalankan bot (murni — mudah di-test).
+
+    Prioritas:
+    1. BOT_RUN_MODE eksplisit ("webhook" / "polling") — untuk JustRunMy
+       pengguna memilih secara eksplisit (platform tidak terdeteksi otomatis).
+    2. auto: webhook bila platform cloud terdeteksi (Railway/Render/Koyeb)
+       ATAU WEBHOOK_URL terisi (cara deteksi JustRunMy yang sudah di-set
+       manual); selain itu polling (dev lokal / JustRunMy tanpa port mapping).
+
+    Returns:
+        "webhook" atau "polling".
+    """
+    mode = (bot_run_mode or "auto").strip().lower()
+    if mode in ("webhook", "polling"):
+        return mode
+    # auto
+    if is_cloud or webhook_url:
+        return "webhook"
+    return "polling"
+
+
 def run_webhook():
     """Jalankan bot dengan webhook (untuk production/deploy).
-    
-    Di Railway:
-    - PORT = 8080 (dari env Railway)
-    - WEBHOOK_URL = https://{RAILWAY_PUBLIC_DOMAIN} (auto-detect)
-    - Listen di 0.0.0.0
+
+    Di Railway/Render: PORT & WEBHOOK_URL diisi otomatis oleh platform.
+    Di JustRunMy: set manual di panel — PORT=8080 (sesuai mapping port HTTPS
+    yang dibuat) + WEBHOOK_URL=https://<app>.justrunmy.app + BOT_RUN_MODE=webhook.
     """
     logger.info(f"Starting bot in webhook mode on port {PORT}...")
     logger.info(f"Webhook URL: {WEBHOOK_URL}/{TELEGRAM_TOKEN[:8]}...")
@@ -465,13 +538,32 @@ def main():
         )
         sys.exit(1)
 
-    # Auto-detect: cloud -> webhook, else -> polling lokal
-    if IS_CLOUD:
-        logger.info("Cloud environment detected! Using webhook mode.")
-        run_webhook()
-    elif "--webhook" in sys.argv:
+    # Health endpoint (aiohttp daemon thread, port terpisah HEALTH_PORT) untuk
+    # uptime monitoring / Docker healthcheck. Opsional — nonaktifkan via
+    # HEALTH_ENDPOINT_ENABLED=false. Gagal start tidak menghentikan bot.
+    try:
+        start_health_server()
+    except Exception as e:
+        logger.warning(f"Health endpoint gagal diinisialisasi: {e}")
+
+    # Pilih mode: BOT_RUN_MODE eksplisit > auto-detect (cloud / WEBHOOK_URL) >
+    # polling. Flag --webhook tetap didukung sebagai override cepat.
+    mode = resolve_run_mode(BOT_RUN_MODE, IS_CLOUD, WEBHOOK_URL)
+    if "--webhook" in sys.argv:
+        mode = "webhook"
+
+    if mode == "webhook":
+        logger.info(
+            f"Webhook mode terpilih (BOT_RUN_MODE={BOT_RUN_MODE!r}, "
+            f"IS_CLOUD={IS_CLOUD}, WEBHOOK_URL={'set' if WEBHOOK_URL else 'kosong'})"
+        )
         run_webhook()
     else:
+        logger.info(
+            f"Polling mode terpilih (BOT_RUN_MODE={BOT_RUN_MODE!r}, "
+            f"WEBHOOK_URL={'set' if WEBHOOK_URL else 'kosong'}) — "
+            "long polling jalan tanpa perlu port publik/URL."
+        )
         run_polling()
 
 

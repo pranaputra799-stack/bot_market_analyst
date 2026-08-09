@@ -15,6 +15,21 @@ websockets>=12.0
 # AI Engine
 # (tidak perlu library tambahan, cukup requests)
 
+# Token counting akurat untuk budget konteks (tiktoken, encoding cl100k_base).
+# OPSIONAL: bila tidak terpasang, bot memakai estimasi 1 token ≈ 4 karakter
+# (utils/token_budget.py) sehingga tetap berfungsi normal.
+tiktoken>=0.7.0
+
+# Harga crypto REAL-TIME dari exchange publik (Binance/Coinbase/Kraken/dll)
+# TANPA API key — pengganti Yahoo Finance yang delayed 15-20 menit untuk
+# BTC-USD & ETH-USD (data/ccxt_client.py). Public REST, gratis, rate-limit
+# longgar. Bila gagal, data layer otomatis fallback ke Yahoo.
+ccxt>=4.0,<5.0
+
+# Candlestick chart profesional (dark theme, volume, MA overlay) — pengganti
+# penggambaran Rectangle manual di utils/chart_generator.py. MIT license.
+mplfinance>=0.12.10b0,<1.0
+
 # Chart LOKAL (candlestick/line) — pengganti QuickChart eksternal
 matplotlib>=3.8,<4.0
 
@@ -24,6 +39,11 @@ backports.zoneinfo; python_version < "3.9"
 
 # Error tracking (opsional — aktif otomatis jika SENTRY_DSN diisi)
 sentry-sdk>=2.0,<3.0
+
+# WAJIB untuk mode webhook python-telegram-bot 20.x (production). Tornado adalah
+# HTTP server internal PTB untuk menerima update dari Telegram. Tanpa ini,
+# webhook crash saat start di cloud (bug laten: dulu tidak pernah terpasang).
+tornado>=6.3,<7.0
 
 # Logging
 # (built-in logging sudah cukup)

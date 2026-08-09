@@ -90,6 +90,9 @@ class ContradictionAgent:
             prompt,
             use_cache=True,
             system_override=CONTRADICTION_SYSTEM,
+            # Output JSON daftar kontradiksi (max 3-4 item) — 1200 token
+            # jauh lebih hemat dari default 4096.
+            max_tokens=1200,
         )
 
         return self._parse_response(response)

@@ -33,6 +33,11 @@ from config.settings import (
     ECONOMIC_ALERT_LEAD_HOURS,
     EVENT_AFTERMATH_ENABLED,
     EVENT_AFTERMATH_LOOKBACK_HOURS,
+    NEWS_PREDICTION_ENABLED,
+    NEWS_PREDICTION_LEAD_MINUTES,
+    NEWS_PREDICTION_SETTLE_MINUTES,
+    NEWS_PREDICTION_MIN_MOVE_PCT,
+    NEWS_PREDICTION_MAX_PER_RUN,
 )
 
 try:
@@ -46,6 +51,7 @@ from data.macro_data import MacroDataFetcher
 from data.news_data import NewsFetcher
 from data.cache import cache
 from data.database import db
+from data.news_predictions import NewsPredictionStore
 from data.conversation_memory import format_history, add_exchange, get_context, get_history, clear
 from utils.chart_generator import ChartGenerator
 from analysis.director import AnalysisDirector
@@ -442,6 +448,7 @@ class MarketBot:
         self.news = NewsFetcher()
         self.chart = ChartGenerator()
         self.sentiment = SentimentAnalyzer(ai_engine=self.ai, news_fetcher=self.news)
+        self.news_preds = NewsPredictionStore()
         self.start_time = time.time()
         self.total_questions = 0
 
@@ -3212,6 +3219,536 @@ class MarketBot:
                 await self._persist_alert_subscribers(application)
         except Exception as e:
             logger.error(f"Event aftermath error: {e}")
+
+    # ===================== NEWS PREDICTION (XAU/USD) =====================
+    # Prediksi arah emas (naik/turun) sebelum event ekonomi high-impact rilis
+    # (dikirim NEWS_PREDICTION_LEAD_MINUTES menit sebelum jadwal), lalu setelah
+    # rilis + NEWS_PREDICTION_SETTLE_MINUTES menit AI menilai benar/salah/flat.
+    # Dedup via NewsPredictionStore (event_key unik). Dikirim ke subscriber /alert.
+    # Riwayat & win rate dilihat via /prediksi.
+
+    GOLD_PREDICTION_SYMBOL = "GC=F"
+
+    PREDICTION_USAGE = (
+        "🎯 *PREDIKSI NEWS — XAU/USD (GOLD)*\n\n"
+        "Bot memprediksi arah emas (*naik*/turun) 5 menit sebelum event ekonomi "
+        "high-impact rilis (NFP, CPI, FOMC, GDP, dll), lalu AI menilai benar/salah "
+        "setelah rilis. Notifikasi dikirim ke subscriber `/alert`.\n\n"
+        "`/prediksi` — statistik win rate + 10 prediksi terakhir\n"
+        "`/prediksi history` — riwayat 25 prediksi terakhir\n"
+        "`/prediksi help` — bantuan ini"
+    )
+
+    @staticmethod
+    def _parse_ai_direction(text: Optional[str]) -> Optional[str]:
+        """Ambil kata pertama 'naik'/'turun' dari output AI (awali satu kata)."""
+        if not text:
+            return None
+        first = text.strip().split()[0].strip(".!?:;\"'()[]-–—*_#").lower()
+        return first if first in ("naik", "turun") else None
+
+    @staticmethod
+    def _parse_ai_verdict(text: Optional[str]) -> Optional[str]:
+        """Ambil kata pertama 'benar'/'salah'/'flat' dari output AI."""
+        if not text:
+            return None
+        first = text.strip().split()[0].strip(".!?:;\"'()[]-–—*_#").lower()
+        return first if first in ("benar", "salah", "flat") else None
+
+    @staticmethod
+    def _rule_based_gold_direction(event: Dict) -> Tuple[str, str]:
+        """
+        Fallback arah emas berbasis aturan (saat AI tidak tersedia/gagal).
+        Mengembalikan (direction, alasan). Arah DXY diestimasi dari Forecast vs
+        Previous ala _static_event_interpretation; emas umumnya berkorelasi
+        terbalik dengan DXY dalam reaksi jangka pendek.
+        """
+        name = (event.get("event") or "").lower()
+        forecast = event.get("estimate")
+        prev = event.get("prev")
+        try:
+            fv = float(forecast) if forecast not in (None, "") else None
+            pv = float(prev) if prev not in (None, "") else None
+        except (TypeError, ValueError):
+            fv = pv = None
+
+        # Keputusan suku bunga: arah tidak bisa diestimasi dari angka
+        if "fed" in name or "fomc" in name or "rate decision" in name:
+            return (
+                "naik",
+                "Keputusan suku bunga Fed menentukan arah lewat nada statement & "
+                "guidance — di tengah ketidakpastian emas cenderung didukung "
+                "permintaan safe-haven.",
+            )
+        if fv is None or pv is None:
+            return (
+                "naik",
+                "Ekspektasi pasar belum tersedia untuk perbandingan — perkiraan "
+                "default: emas didukung status safe-haven.",
+            )
+
+        diff = fv - pv
+        if "cpi" in name or "inflasi" in name or "ppi" in name:
+            if diff > 0:
+                return (
+                    "turun",
+                    f"Forecast inflasi {fv} di atas previous {pv} → ekspektasi inflasi "
+                    "lebih tinggi → yield & USD berpotensi naik → emas cenderung turun.",
+                )
+            return (
+                "naik",
+                f"Forecast inflasi {fv} di bawah previous {pv} → tekanan inflasi mereda "
+                "→ ekspektasi dovish → emas cenderung naik.",
+            )
+        if (
+            "non-farm" in name
+            or "payroll" in name
+            or "gdp" in name
+            or "retail" in name
+            or "durable" in name
+            or "manufaktur" in name
+        ):
+            if diff > 0:
+                return (
+                    "turun",
+                    f"Forecast {fv} di atas previous {pv} → ekonomi diprediksi lebih "
+                    "kuat → USD menguat → emas cenderung turun.",
+                )
+            return (
+                "naik",
+                f"Forecast {fv} di bawah previous {pv} → ekonomi diprediksi melambat → "
+                "USD melemah → emas cenderung naik.",
+            )
+        if "unemployment" in name or "pengangguran" in name or "claims" in name:
+            if diff < 0:
+                return (
+                    "turun",
+                    f"Forecast pengangguran/klaim {fv} di bawah previous {pv} → pasar "
+                    "tenaga kerja kuat → USD menguat → emas cenderung turun.",
+                )
+            return (
+                "naik",
+                f"Forecast pengangguran/klaim {fv} di atas previous {pv} → pasar tenaga "
+                "kerja melemah → USD melemah → emas cenderung naik.",
+            )
+        if diff > 0:
+            return (
+                "turun",
+                f"Forecast {fv} di atas previous {pv} → ekspektasi USD lebih kuat → emas "
+                "cenderung turun.",
+            )
+        return (
+            "naik",
+            f"Forecast {fv} di bawah previous {pv} → ekspektasi USD lebih lemah → emas "
+            "cenderung naik.",
+        )
+
+    @staticmethod
+    def _compute_rule_result(
+        predicted: str,
+        pred_price: Optional[float],
+        now_price: Optional[float],
+        min_move_pct: float = 0.05,
+    ) -> Optional[Dict]:
+        """
+        Hasil evaluasi berbasis aturan (dasar sebelum AI menilai).
+        Returns {"result", "actual_direction", "move_pct"} atau None bila harga
+        tidak tersedia (prediksi tetap pending — coba lagi run berikutnya).
+        """
+        if pred_price is None or now_price is None or pred_price <= 0:
+            return None
+        move_pct = (now_price - pred_price) / pred_price * 100.0
+        if abs(move_pct) < min_move_pct:
+            return {"result": "flat", "actual_direction": "flat", "move_pct": move_pct}
+        if move_pct > 0:
+            return {
+                "result": "benar" if predicted == "naik" else "salah",
+                "actual_direction": "naik",
+                "move_pct": move_pct,
+            }
+        return {
+            "result": "benar" if predicted == "turun" else "salah",
+            "actual_direction": "turun",
+            "move_pct": move_pct,
+        }
+
+    async def _fetch_gold_price(self) -> Optional[float]:
+        """Harga emas (XAU/USD) saat ini — tidak pernah raise."""
+        try:
+            data = await asyncio.to_thread(
+                self.market.get_yahoo_data,
+                self.GOLD_PREDICTION_SYMBOL,
+                period="2d",
+                interval="1h",
+                ohlcv_limit=1,
+            )
+            if "error" not in data and data.get("current_price") is not None:
+                return float(data["current_price"])
+        except Exception as e:
+            logger.warning(f"Gold price fetch gagal: {e}")
+        return None
+
+    async def _create_news_prediction(
+        self, event_key: str, event: Dict, market_line: str, gold_price: Optional[float]
+    ) -> Optional[dict]:
+        """Buat prediksi (AI dulu, fallback aturan) & simpan ke store."""
+        direction, reasoning = self._rule_based_gold_direction(event)
+        try:
+            prompt = format_prompt(
+                "news_prediction",
+                EVENT_NAME=event.get("event", "Event Ekonomi"),
+                COUNTRY=event.get("country", "US"),
+                TIME=event.get("time", ""),
+                FORECAST=self._fmt_ev_value(event.get("estimate")),
+                PREV=self._fmt_ev_value(event.get("prev")),
+                UNIT=event.get("unit", ""),
+                MARKET_LINE=market_line,
+                GOLD_PRICE=format_price(gold_price, "GC=F") if gold_price else "tidak tersedia",
+            )
+            ai_text = await asyncio.to_thread(
+                self.ai.generate, prompt, max_tokens=300, use_cache=True
+            )
+            parsed = self._parse_ai_direction(ai_text)
+            if parsed:
+                direction = parsed
+                lines = (ai_text or "").strip().splitlines()
+                extra = "\n".join(lines[1:]).strip()
+                if extra:
+                    reasoning = extra
+        except Exception as e:
+            logger.warning(f"AI prediksi gagal untuk {event.get('event')}: {e}")
+
+        return self.news_preds.add_prediction(
+            event_key=event_key,
+            event_name=event.get("event", "Event Ekonomi"),
+            event_time=event.get("time", ""),
+            event_dt_utc=event.get("_dt_utc"),
+            country=event.get("country", ""),
+            country_emoji=event.get("country_emoji", ""),
+            direction=direction,
+            price_at_prediction=gold_price,
+            reasoning=reasoning,
+            market_line=market_line,
+            actual=event.get("actual"),
+            forecast=event.get("estimate"),
+            prev=event.get("prev"),
+            unit=event.get("unit", ""),
+        )
+
+    def _format_prediction_message(self, record: dict) -> str:
+        arrow = "📈 naik" if record.get("direction") == "naik" else "📉 turun"
+        price = record.get("price_at_prediction")
+        price_str = format_price(price, "GC=F") if price else "—"
+        lines = [
+            "🎯 *PREDIKSI NEWS — XAU/USD*\n",
+            f"{record.get('country_emoji', '')} *{record.get('event_name', 'Event Ekonomi')}*\n",
+            f"🕐 {record.get('event_time', '')}\n",
+            f"Prediksi emas: *{arrow}*\n",
+            f"💰 Harga saat ini: {price_str}\n",
+        ]
+        if record.get("reasoning"):
+            lines.append(f"💡 *Alasan:* {record.get('reasoning')}\n")
+        lines.append(
+            f"⏳ Hasil dievaluasi ±{NEWS_PREDICTION_SETTLE_MINUTES} menit setelah rilis.\n"
+        )
+        lines.append(DISCLAIMER)
+        return "\n".join(lines)
+
+    def _format_verdict_message(self, record: dict) -> str:
+        result = record.get("result")
+        if result == "benar":
+            head = "✅ *PREDIKSI BENAR*"
+        elif result == "salah":
+            head = "❌ *PREDIKSI SALAH*"
+        else:
+            head = "➖ *PREDIKSI FLAT*"
+        arrow = "📈 naik" if record.get("direction") == "naik" else "📉 turun"
+        price_pred = record.get("price_at_prediction")
+        price_now = record.get("price_after")
+        move = record.get("move_pct")
+        move_str = f"{move:+.2f}%" if move is not None else "—"
+        p_pred = format_price(price_pred, "GC=F") if price_pred else "—"
+        p_now = format_price(price_now, "GC=F") if price_now else "—"
+        lines = [
+            f"{head}\n",
+            f"{record.get('country_emoji', '')} *{record.get('event_name', 'Event Ekonomi')}*\n",
+            f"🕐 {record.get('event_time', '')}\n",
+            f"Prediksi: *{arrow}*\n",
+            f"💰 Harga: {p_pred} → sekarang {p_now} ({move_str})\n",
+        ]
+        if record.get("result_reasoning"):
+            lines.append(f"📊 *Evaluasi:* {record.get('result_reasoning')}\n")
+        lines.append(DISCLAIMER)
+        return "\n".join(lines)
+
+    async def check_news_predictions(self, application: Application):
+        """
+        Job berkala: buat & kirim prediksi arah emas untuk event high-impact yang
+        akan rilis dalam NEWS_PREDICTION_LEAD_MINUTES menit. Dedup via store.
+        Dikirim ke subscriber /alert.
+        """
+        if not NEWS_PREDICTION_ENABLED:
+            return
+        subscribers = self._get_alert_subscribers(application)
+        if not subscribers:
+            return
+        before_subscribers = set(subscribers)
+
+        try:
+            await asyncio.to_thread(self.news_preds.ensure_loaded)
+            events = await self.macro.get_economic_calendar()
+        except Exception as e:
+            logger.error(f"News prediction calendar error: {e}")
+            return
+
+        now_utc = datetime.now(timezone.utc)
+        lead = timedelta(minutes=NEWS_PREDICTION_LEAD_MINUTES)
+        candidates = []
+        for e in events:
+            if e.get("impact") != "high":
+                continue
+            dt = e.get("_dt_utc")
+            if not dt or dt.tzinfo is None:
+                continue
+            if now_utc < dt <= now_utc + lead:
+                key = self._aftermath_key(e)
+                if self.news_preds.get_prediction(key):
+                    continue
+                candidates.append((key, e))
+            if len(candidates) >= NEWS_PREDICTION_MAX_PER_RUN:
+                break
+
+        if not candidates:
+            return
+
+        # Konteks pasar SEKALI per run (DXY + Gold + EUR/USD) + harga emas
+        market_line = await self._build_market_line()
+        gold_price = await self._fetch_gold_price()
+
+        for key, e in candidates:
+            if gold_price is None:
+                # Tanpa harga acuan, prediksi tidak bisa dievaluasi nanti —
+                # lewati & coba lagi di run berikutnya (event masih dalam jendela).
+                logger.warning(f"Lewati prediksi {e.get('event')}: harga emas tidak tersedia.")
+                continue
+            try:
+                record = await self._create_news_prediction(key, e, market_line, gold_price)
+            except Exception as ex:
+                logger.warning(f"Buat prediksi gagal untuk {e.get('event')}: {ex}")
+                continue
+            if not record:
+                continue
+            # Persist dulu (best-effort) agar restart tidak membuat prediksi dobel
+            try:
+                await db.save_news_prediction_async(record)
+            except Exception as ex:
+                logger.debug(f"save_news_prediction gagal: {ex}")
+            message = self._format_prediction_message(record)
+            for chat_id in list(subscribers):
+                try:
+                    await safe_send_message(
+                        application.bot, chat_id=chat_id, text=message, parse_mode="Markdown"
+                    )
+                except Exception as ex:
+                    logger.error(f"Gagal kirim prediksi ke {chat_id}: {ex}")
+                    if "Forbidden" in str(ex):
+                        subscribers.discard(chat_id)
+
+            application.bot_data["event_alert_subscribers"] = subscribers
+            if subscribers != before_subscribers:
+                await self._persist_alert_subscribers(application)
+
+    async def settle_news_predictions(self, application: Application):
+        """
+        Job berkala: evaluasi prediksi yang event-nya sudah lewat
+        NEWS_PREDICTION_SETTLE_MINUTES menit. AI menilai benar/salah/flat dengan
+        konteks: pergerakan harga + Actual vs Forecast + berita. Kirim hasil ke
+        subscriber /alert & simpan ke store + Supabase.
+        """
+        if not NEWS_PREDICTION_ENABLED:
+            return
+        # Settlement adalah operasi data (win rate /prediksi) — tetap berjalan
+        # walau tidak ada subscriber; hanya pengiriman pesan yang di-gate subscriber.
+        subscribers = self._get_alert_subscribers(application)
+        before_subscribers = set(subscribers)
+
+        try:
+            await asyncio.to_thread(self.news_preds.ensure_loaded)
+        except Exception as e:
+            logger.warning(f"News prediction load gagal: {e}")
+            return
+
+        pending = self.news_preds.get_pending(settle_minutes=NEWS_PREDICTION_SETTLE_MINUTES)
+        if not pending:
+            return
+
+        gold_price = await self._fetch_gold_price()
+        market_line = await self._build_market_line()
+
+        settled_in_run = 0
+        for record in pending:
+            if settled_in_run >= NEWS_PREDICTION_MAX_PER_RUN:
+                break  # budget AI per run — sisanya di run berikutnya
+            try:
+                updated = await self._evaluate_news_prediction(
+                    record, gold_price, market_line
+                )
+            except Exception as ex:
+                logger.warning(
+                    f"Evaluasi prediksi gagal {record.get('event_name')}: {ex}"
+                )
+                continue
+            if not updated or updated.get("status") != "settled":
+                continue  # harga belum tersedia — coba lagi run berikutnya
+            settled_in_run += 1
+            # Persist hasil dulu (best-effort) agar restart tidak menilai ulang
+            try:
+                await db.save_news_prediction_async(updated)
+            except Exception as ex:
+                logger.debug(f"save_news_prediction (settle) gagal: {ex}")
+            if not subscribers:
+                continue
+            message = self._format_verdict_message(updated)
+            for chat_id in list(subscribers):
+                try:
+                    await safe_send_message(
+                        application.bot, chat_id=chat_id, text=message, parse_mode="Markdown"
+                    )
+                except Exception as ex:
+                    logger.error(f"Gagal kirim verdict ke {chat_id}: {ex}")
+                    if "Forbidden" in str(ex):
+                        subscribers.discard(chat_id)
+
+            application.bot_data["event_alert_subscribers"] = subscribers
+            if subscribers != before_subscribers:
+                await self._persist_alert_subscribers(application)
+
+    async def _evaluate_news_prediction(
+        self, record: dict, gold_price: Optional[float], market_line: str
+    ) -> Optional[dict]:
+        """
+        Evaluasi satu prediksi: aturan dulu (harga), lalu AI menilai dengan
+        konteks lengkap. Mengembalikan record terselesaikan, atau None bila
+        harga tidak tersedia (tetap pending).
+        """
+        rule = self._compute_rule_result(
+            record.get("direction") or "naik",
+            record.get("price_at_prediction"),
+            gold_price,
+            NEWS_PREDICTION_MIN_MOVE_PCT,
+        )
+        if rule is None:
+            return None
+
+        result = rule["result"]
+        actual_direction = rule["actual_direction"]
+        move_pct = rule["move_pct"]
+        reasoning = (
+            f"Harga emas bergerak {move_pct:+.2f}% dari "
+            f"{format_price(record.get('price_at_prediction'), 'GC=F')} ke "
+            f"{format_price(gold_price, 'GC=F')}. Prediksi: {record.get('direction')}."
+        )
+
+        try:
+            unit = record.get("unit", "")
+            numbers = (
+                f"Actual: {self._fmt_ev_value(record.get('actual'))}{unit} | "
+                f"Forecast: {self._fmt_ev_value(record.get('forecast'))}{unit} | "
+                f"Previous: {self._fmt_ev_value(record.get('prev'))}{unit}"
+            )
+            news_summary = ""
+            try:
+                news_summary = await self.news.get_news_summary("GC=F")
+            except Exception as ex:
+                logger.debug(f"News summary gagal: {ex}")
+            prompt = format_prompt(
+                "news_prediction_verdict",
+                DIRECTION=record.get("direction", "naik"),
+                DIRECTION_LABEL=record.get("direction", "naik"),
+                REASONING=record.get("reasoning", ""),
+                PRICE_AT_PREDICTION=format_price(record.get("price_at_prediction"), "GC=F"),
+                MARKET_LINE_AT_PREDICTION=record.get("market_line", "tidak tersedia"),
+                PRICE_NOW=format_price(gold_price, "GC=F"),
+                MOVE_PCT=f"{move_pct:+.2f}%",
+                MOVE_ABS=f"{abs(move_pct):.2f}%",
+                ACTUAL_VS_FORECAST=numbers,
+                NEWS=(news_summary or "")[:600],
+                MIN_MOVE_PCT=f"{NEWS_PREDICTION_MIN_MOVE_PCT}%",
+            )
+            ai_text = await asyncio.to_thread(
+                self.ai.generate, prompt, max_tokens=300, use_cache=True
+            )
+            parsed = self._parse_ai_verdict(ai_text)
+            if parsed:
+                result = parsed
+                lines = (ai_text or "").strip().splitlines()
+                extra = "\n".join(lines[1:]).strip()
+                if extra:
+                    reasoning = f"{reasoning}\n{extra}"
+        except Exception as e:
+            logger.warning(f"AI verdict gagal: {e}")
+
+        return self.news_preds.settle(
+            event_key=record["event_key"],
+            result=result,
+            actual_direction=actual_direction,
+            price_after=gold_price,
+            move_pct=move_pct,
+            reasoning=reasoning,
+        )
+
+    async def prediksi_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler /prediksi — win rate & riwayat prediksi news (XAU/USD)."""
+        text = update.message.text or ""
+        arg = text.replace("/prediksi", "").strip().lower()
+
+        if arg in ("help", "bantuan"):
+            await safe_reply_text(update.message, self.PREDICTION_USAGE, parse_mode="Markdown")
+            return
+
+        try:
+            await asyncio.to_thread(self.news_preds.ensure_loaded)
+        except Exception as e:
+            logger.warning(f"News predictions load gagal: {e}")
+
+        stats = self.news_preds.get_stats()
+        limit = 25 if arg in ("history", "riwayat") else 10
+        recent = self.news_preds.get_recent(limit)
+
+        if stats["total"] == 0:
+            await safe_reply_text(
+                update.message,
+                "🎯 *PREDIKSI NEWS — XAU/USD*\n\n"
+                "Belum ada prediksi tercatat. Prediksi otomatis dibuat 5 menit "
+                "sebelum event ekonomi high-impact rilis dan dikirim ke subscriber "
+                "`/alert`.\n\nAktifkan notifikasi: `/alert`\nBantuan: `/prediksi help`",
+                parse_mode="Markdown",
+            )
+            return
+
+        wr = stats["win_rate"]
+        wr_str = f"{wr:.1f}%" if wr is not None else "— (belum ada hasil)"
+        lines = [
+            "🎯 *WIN RATE PREDIKSI NEWS — XAU/USD*\n",
+            f"📊 Total prediksi: *{stats['total']}*",
+            f"✅ Benar: *{stats['benar']}*",
+            f"❌ Salah: *{stats['salah']}*",
+            f"➖ Flat: *{stats['flat']}*",
+            f"🏆 Win rate: *{wr_str}*\n",
+        ]
+        if recent:
+            lines.append(f"*{len(recent)} Prediksi Terakhir:*")
+            icons = {"benar": "✅", "salah": "❌", "flat": "➖", "pending": "⏳"}
+            for i, r in enumerate(recent, 1):
+                arrow = "📈 naik" if r.get("direction") == "naik" else "📉 turun"
+                res = r.get("result") or "pending"
+                name = (r.get("event_name") or "")[:38]
+                lines.append(
+                    f"{i}. {r.get('country_emoji', '')} *{name}* — {arrow} {icons.get(res, '⏳')} {res}"
+                )
+            lines.append("\n`/prediksi history` — riwayat lebih panjang")
+
+        await safe_reply_text(update.message, "\n".join(lines), parse_mode="Markdown")
 
     # ===================== /AFTERMATH (MANUAL EVENT ANALYSIS) =====================
 

@@ -16,8 +16,10 @@ Prompt engineering best practices applied (riset 2026):
 """
 
 from datetime import datetime, timezone
+from typing import Optional
 
 from prompts.loader import load_prompt
+from utils.token_budget import truncate_to_budget
 
 # Aturan format output bersama untuk semua prompt: bot menampilkan plain text,
 # jadi AI dilarang memakai simbol markdown yang bisa tampil mentah di Telegram.
@@ -147,10 +149,27 @@ FINAL_SYNTHESIS_TEMPLATE = load_prompt("final_synthesis_template")
 # UTILITY: Format helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def format_context_for_prompt(context_data: str, max_length: int = 3000) -> str:
-    """Format context data for prompt, truncating if needed."""
+def format_context_for_prompt(
+    context_data: str,
+    max_length: int = 3000,
+    max_tokens: Optional[int] = None,
+) -> str:
+    """
+    Format context data for prompt, truncating if needed.
+
+    Args:
+        context_data: Data konteks mentah
+        max_length: Batas panjang karakter (dipakai bila max_tokens None)
+        max_tokens: Bila diisi, potong berdasarkan BUDGET TOKEN (lebih akurat
+            dari karakter — teknik tiktoken; lihat utils/token_budget.py)
+
+    Returns:
+        Teks konteks yang muat di batas (dengan marker terpotong bila perlu)
+    """
     if not context_data:
         return "Tidak ada data konteks yang tersedia."
+    if max_tokens is not None:
+        return truncate_to_budget(context_data, max_tokens, "context")
     if len(context_data) > max_length:
         return context_data[:max_length] + "\n...[data truncated]"
     return context_data

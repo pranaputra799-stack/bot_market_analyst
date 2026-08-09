@@ -124,6 +124,9 @@ class ConfidenceAgent:
                 prompt,
                 use_cache=True,
                 system_override=CONFIDENCE_SYSTEM,
+                # Output JSON skor + assessment singkat — 800 token sudah
+                # lebih dari cukup (default 4096 hanya membuang kuota).
+                max_tokens=800,
             )
 
             llm_data = self._parse_response(response)

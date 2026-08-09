@@ -1,13 +1,20 @@
 """
-Chart Generator - Membuat grafik harga secara LOKAL dengan matplotlib.
+Chart Generator - Membuat grafik harga secara LOKAL.
 
 Sebelumnya memakai QuickChart.io (layanan eksternal) yang ternyata merender
 gambar candlestick KOSONG (0 pixel candle) dan rawan rate-limit. Sekarang chart
 digambar langsung di server dan dikirim sebagai file PNG ke Telegram — tanpa
 ketergantungan layanan pihak ketiga.
 
+Rendering candlestick (upgrade mplfinance — repo matplotlib/mplfinance, MIT):
+- Style dark theme profesional (matching palet warna bot).
+- Panel volume di bawah chart + overlay MA (5/10/20) bila data cukup.
+- API contract TIDAK berubah: build_candlestick_chart(ohlcv_data, symbol) → path PNG.
+- Fallback otomatis ke penggambaran manual (matplotlib Rectangle) bila
+  mplfinance tidak terpasang — hasil visual tetap sama baiknya.
+
 Mendukung:
-- Candlestick chart (forex, gold, index)
+- Candlestick chart (forex, gold, index, crypto)
 - Line chart (data time-series)
 """
 import logging
@@ -26,6 +33,15 @@ except Exception:
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
 from matplotlib.ticker import FuncFormatter  # noqa: E402
+
+# mplfinance (opsional — upgrade visual candlestick). Bila tidak terpasang,
+# fallback ke penggambaran manual Rectangle di bawah (perilaku lama).
+try:
+    import mplfinance as mpf  # type: ignore
+    import pandas as pd  # type: ignore
+except ImportError:  # pragma: no cover - jalur fallback bila belum terpasang
+    mpf = None  # type: ignore
+    pd = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +71,7 @@ SYMBOL_DISPLAY_NAMES = {
 
 class ChartGenerator:
     """
-    Generator grafik harga lokal (matplotlib).
+    Generator grafik harga lokal (matplotlib + mplfinance).
     Menghasilkan file PNG yang langsung dikirim ke Telegram.
     """
 
@@ -139,6 +155,41 @@ class ChartGenerator:
             logger.error(f"Failed to save chart: {e}")
             return None
 
+    # ===================== CANDLESTICK (mplfinance + fallback manual) =====================
+
+    @staticmethod
+    def _parse_candles(ohlcv_data: List[Dict], max_points: int) -> List[Dict]:
+        """
+        Parse OHLCV → list candle {dt, o, h, l, c, v} (urutan asli data).
+
+        Baris dengan tanggal/harga tidak valid dibuang (bukan dibatalkan
+        seluruhnya — satu baris rusak tidak boleh menggagalkan chart).
+        """
+        candles = []
+        for row in ohlcv_data[-max_points:]:
+            dt = ChartGenerator._parse_date(row.get("date", ""))
+            try:
+                candles.append({
+                    "dt": dt,
+                    "o": float(row.get("open", 0)),
+                    "h": float(row.get("high", 0)),
+                    "l": float(row.get("low", 0)),
+                    "c": float(row.get("close", 0)),
+                    "v": ChartGenerator._safe_volume(row.get("volume")),
+                })
+            except (TypeError, ValueError):
+                continue
+        return candles
+
+    @staticmethod
+    def _safe_volume(value) -> float:
+        """Volume → float aman (None/NaN/negatif → 0)."""
+        try:
+            v = float(value)
+            return v if v > 0 else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
     def build_candlestick_chart(
         self,
         ohlcv_data: List[Dict],
@@ -149,6 +200,9 @@ class ChartGenerator:
     ) -> Optional[str]:
         """
         Generate candlestick chart LOKAL dari data OHLCV.
+
+        Primary: mplfinance (dark theme, panel volume, overlay MA). Bila
+        mplfinance tidak tersedia / gagal → fallback penggambaran manual.
 
         Args:
             ohlcv_data: List of {date, open, high, low, close, volume}
@@ -163,35 +217,143 @@ class ChartGenerator:
             logger.warning(f"Not enough OHLCV data for {symbol}")
             return None
 
+        candles = self._parse_candles(ohlcv_data, max_points)
+        if len(candles) < 2:
+            logger.warning(f"Not enough valid candles for {symbol}")
+            return None
+
+        if mpf is not None:
+            try:
+                path = self._build_candlestick_mpf(candles, symbol, width, height)
+                if path:
+                    return path
+                logger.info(f"mplfinance menghasilkan output kosong utk {symbol} — fallback manual")
+            except Exception as e:
+                logger.warning(f"mplfinance error utk {symbol}, fallback manual: {e}")
+
+        return self._build_candlestick_manual(candles, symbol, width, height)
+
+    def _build_candlestick_mpf(
+        self,
+        candles: List[Dict],
+        symbol: str,
+        width: int,
+        height: int,
+    ) -> Optional[str]:
+        """
+        Candlestick via mplfinance — dark theme + panel volume + MA overlay.
+
+        Index harus DatetimeIndex naik ketat (tidak ada duplikat / NaT).
+        """
+        rows = [
+            (c["dt"], c["o"], c["h"], c["l"], c["c"], c["v"])
+            for c in candles
+            if c["dt"] is not None
+        ]
+        if len(rows) < 2:
+            return None
+
+        df = pd.DataFrame(rows, columns=["date", "Open", "High", "Low", "Close", "Volume"])
+        df = df.dropna(subset=["Open", "High", "Low", "Close"])
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        # mplfinance butuh index unik & ascending — duplikat dibuang (ambil terakhir)
+        df = df[~df.index.duplicated(keep="last")].sort_index()
+        df["Volume"] = df["Volume"].fillna(0.0)
+        if len(df) < 2:
+            return None
+
         display_name = self._get_display_name(symbol)
 
-        # Siapkan candle (kronologis: dari paling lama ke terbaru)
-        candles = []
-        for row in ohlcv_data[-max_points:]:
-            dt = self._parse_date(row.get("date", ""))
-            try:
-                candles.append({
-                    "dt": dt,
-                    "o": float(row.get("open", 0)),
-                    "h": float(row.get("high", 0)),
-                    "l": float(row.get("low", 0)),
-                    "c": float(row.get("close", 0)),
-                })
-            except (TypeError, ValueError):
-                continue
-        candles.reverse()
+        # Style dark theme custom — warna candle mengikuti palet bot
+        marketcolors = mpf.make_marketcolors(
+            up=self.CANDLE_UP_COLOR,
+            down=self.CANDLE_DOWN_COLOR,
+            edge="inherit",
+            wick="inherit",
+            volume="inherit",
+        )
+        style = mpf.make_mpf_style(
+            base_mpf_style="charles",
+            marketcolors=marketcolors,
+            facecolor=self.CHART_BG_COLOR,
+            figcolor=self.CHART_BG_COLOR,
+            gridcolor=self.GRID_COLOR,
+            gridstyle="--",
+            rc={
+                "axes.titlecolor": self.TEXT_COLOR,
+                "axes.labelcolor": self.TEXT_COLOR,
+                "xtick.color": self.TEXT_COLOR,
+                "ytick.color": self.TEXT_COLOR,
+            },
+        )
 
-        if len(candles) < 2:
-            return None
+        # MA overlay hanya bila data cukup (rolling mean butuh window + 1 bar)
+        mav = None
+        if len(df) >= 30:
+            mav = (5, 10, 20)
+        elif len(df) >= 12:
+            mav = (5, 10)
+
+        fd, path = tempfile.mkstemp(suffix=".png", prefix="chart_")
+        os.close(fd)
+        try:
+            plot_kwargs = dict(
+                type="candle",
+                style=style,
+                volume=True,
+                figsize=(width, height),
+                tight_layout=True,
+                title=display_name,
+                ylabel="Harga",
+                ylabel_lower="Volume",
+                datetime_format="%d/%m",
+                xrotation=30,
+                savefig=dict(fname=path, dpi=130),
+            )
+            if mav:
+                plot_kwargs["mav"] = mav
+            mpf.plot(df, **plot_kwargs)
+
+            if os.path.getsize(path) > 0:
+                logger.info(f"Chart saved (mplfinance): {path} ({os.path.getsize(path)} bytes)")
+                return path
+        except Exception:
+            # File temp dibersihkan bila render gagal di tengah jalan
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            raise
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return None
+
+    def _build_candlestick_manual(
+        self,
+        candles: List[Dict],
+        symbol: str,
+        width: int,
+        height: int,
+    ) -> Optional[str]:
+        """
+        Fallback penggambaran candlestick manual (matplotlib Rectangle) —
+        perilaku lama, dipakai bila mplfinance tidak tersedia/gagal.
+        """
+        display_name = self._get_display_name(symbol)
+        # Gambar dari candle terbaru ke kiri (urutan visual seperti versi lama)
+        ordered = list(reversed(candles))
 
         try:
             fig, ax = plt.subplots(figsize=(width, height))
-            n = len(candles)
+            n = len(ordered)
 
-            last_price = candles[-1]["c"]
+            last_price = ordered[-1]["c"]
             decimals = self._decimals_for_price(last_price)
 
-            for i, c in enumerate(candles):
+            for i, c in enumerate(ordered):
                 color = self.CANDLE_UP_COLOR if c["c"] >= c["o"] else self.CANDLE_DOWN_COLOR
                 # Sumbu (wick)
                 ax.plot([i, i], [c["l"], c["h"]], color=color, linewidth=1.2, zorder=2)
@@ -213,7 +375,7 @@ class ChartGenerator:
                 tick_positions.append(n - 1)
             ax.set_xticks(tick_positions)
             ax.set_xticklabels([
-                (candles[i]["dt"].strftime("%d/%m") if candles[i]["dt"] else str(i))
+                (ordered[i]["dt"].strftime("%d/%m") if ordered[i]["dt"] else str(i))
                 for i in tick_positions
             ], rotation=30, ha="right")
 
@@ -233,13 +395,15 @@ class ChartGenerator:
 
             return self._save_figure(fig)
         except Exception as e:
-            logger.error(f"Candlestick chart failed for {symbol}: {e}")
+            logger.error(f"Candlestick chart (manual) failed for {symbol}: {e}")
             return None
         finally:
             try:
                 plt.close(fig)
             except Exception:
                 pass
+
+    # ===================== LINE CHART (fallback) =====================
 
     def build_line_chart(
         self,
@@ -298,6 +462,8 @@ class ChartGenerator:
                 plt.close(fig)
             except Exception:
                 pass
+
+    # ===================== SYMBOL DETECTION =====================
 
     @staticmethod
     def get_chart_symbol_from_text(text: str) -> Tuple[Optional[str], Optional[str]]:
