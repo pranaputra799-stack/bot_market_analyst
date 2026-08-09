@@ -15,8 +15,7 @@ try:
 except ImportError:
     from backports.zoneinfo import ZoneInfo  # type: ignore
 
-import requests
-import aiohttp
+from data.http_session import get_aiohttp_session, get_requests_session
 
 from config.settings import FRED_API_KEY, FINNHUB_KEY
 from config.providers import FRED_INDICATORS
@@ -61,7 +60,7 @@ class MacroDataFetcher:
                 "sort_order": "desc",
                 "limit": limit,
             }
-            resp = requests.get(url, params=params, timeout=15)
+            resp = get_requests_session().get(url, params=params, timeout=15)
             data = resp.json()
 
             if "observations" not in data:
@@ -164,7 +163,7 @@ class MacroDataFetcher:
             url = f"http://api.worldbank.org/v2/country/{country}/indicator/{indicator}"
             params = {"format": "json", "per_page": 5}
 
-            resp = requests.get(url, params=params, timeout=15)
+            resp = get_requests_session().get(url, params=params, timeout=15)
             data = resp.json()
 
             if len(data) < 2 or not data[1]:
@@ -237,9 +236,9 @@ class MacroDataFetcher:
                 "token": self.finnhub_key,
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=15) as resp:
-                    data = await resp.json()
+            session = get_aiohttp_session()
+            async with session.get(url, params=params, timeout=15) as resp:
+                data = await resp.json()
 
             if "economicCalendar" not in data:
                 err_msg = str(data.get("error", ""))
@@ -453,7 +452,9 @@ class MacroDataFetcher:
                 "file_type": "json",
             }
             try:
-                resp = await asyncio.to_thread(requests.get, url, params=params, timeout=15)
+                resp = await asyncio.to_thread(
+                    lambda: get_requests_session().get(url, params=params, timeout=15)
+                )
                 return release_id, resp.json()
             except Exception as e:
                 logger.warning(f"FRED release calendar error (release {release_id}): {e}")
@@ -757,7 +758,7 @@ class MacroDataFetcher:
                 "sort_order": "desc",
                 "limit": limit,
             }
-            resp = requests.get(url, params=params, timeout=15)
+            resp = get_requests_session().get(url, params=params, timeout=15)
             data = resp.json()
             obs = []
             for o in data.get("observations", []):

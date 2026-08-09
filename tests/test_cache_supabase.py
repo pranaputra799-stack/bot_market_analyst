@@ -7,6 +7,7 @@ kontrak get/set/delete/enabled.
 import hashlib
 import time
 import unittest
+from contextlib import contextmanager
 
 import data.cache as cache_mod
 import data.conversation_memory as cm
@@ -38,6 +39,36 @@ class FakePersistent:
 
     def cleanup_expired(self):
         pass
+
+
+class FakeSession:
+    """Session requests tiruan untuk patch data.cache._session (tanpa network)."""
+
+    def __init__(self, get_resp=None):
+        self.get_resp = get_resp
+        self.post_resp = None
+        self.captured = {}
+
+    def get(self, *a, **k):
+        return self.get_resp
+
+    def post(self, *a, **k):
+        self.captured["json"] = k.get("json")
+        return self.post_resp
+
+    def delete(self, *a, **k):
+        return self.get_resp
+
+
+@contextmanager
+def _patch_session(fake):
+    """Alihkan data.cache._session ke FakeSession untuk durasi blok."""
+    original = cache_mod._session
+    cache_mod._session = lambda: fake
+    try:
+        yield fake
+    finally:
+        cache_mod._session = original
 
 
 class TestMemoryCacheBound(unittest.TestCase):
@@ -103,49 +134,34 @@ class TestSupabaseCacheParsing(unittest.TestCase):
 
     def test_get_returns_parsed_string(self):
         sc = self._sc()
-        original = cache_mod.requests.get
-        try:
-            cache_mod.requests.get = lambda *a, **k: self._fake_resp("JAWABAN")
+        with _patch_session(FakeSession(self._fake_resp("JAWABAN"))):
             self.assertEqual(sc.get("ai:abc"), "JAWABAN")
-        finally:
-            cache_mod.requests.get = original
 
     def test_get_returns_parsed_list(self):
         sc = self._sc()
-        original = cache_mod.requests.get
-        try:
-            rows = [{"q": "pertanyaan", "a": "jawaban"}]
-            cache_mod.requests.get = lambda *a, **k: self._fake_resp(rows)
+        rows = [{"q": "pertanyaan", "a": "jawaban"}]
+        with _patch_session(FakeSession(self._fake_resp(rows))):
             self.assertEqual(sc.get("conversation:1"), rows)
-        finally:
-            cache_mod.requests.get = original
 
     def test_get_expired_returns_none(self):
         from datetime import datetime, timedelta, timezone
 
         sc = self._sc()
-        original = cache_mod.requests.get
-        try:
-            expired = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-            cache_mod.requests.get = lambda *a, **k: self._fake_resp("LAMA", expired)
+        expired = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        with _patch_session(FakeSession(self._fake_resp("LAMA", expired))):
             self.assertIsNone(sc.get("ai:old"))
-        finally:
-            cache_mod.requests.get = original
 
     def test_get_http_error_returns_none(self):
         sc = self._sc()
-        original = cache_mod.requests.get
-        try:
-            class ErrResp:
-                status_code = 404
 
-                def json(self):
-                    return []
+        class ErrResp:
+            status_code = 404
 
-            cache_mod.requests.get = lambda *a, **k: ErrResp()
+            def json(self):
+                return []
+
+        with _patch_session(FakeSession(ErrResp())):
             self.assertIsNone(sc.get("ai:missing"))
-        finally:
-            cache_mod.requests.get = original
 
 
 class TestSupabaseCacheWritePayload(unittest.TestCase):
@@ -159,7 +175,7 @@ class TestSupabaseCacheWritePayload(unittest.TestCase):
         return cache_mod.SupabaseCache(url="https://x.supabase.co", key="k", enabled=True)
 
     def _capture_post(self):
-        captured = {}
+        fake = FakeSession()
 
         class FakeResp:
             status_code = 201
@@ -167,11 +183,8 @@ class TestSupabaseCacheWritePayload(unittest.TestCase):
             def json(self):
                 return []
 
-        def fake_post(*a, **k):
-            captured["json"] = k.get("json")
-            return FakeResp()
-
-        return captured, fake_post
+        fake.post_resp = FakeResp()
+        return fake
 
     def _wait_for(self, captured, timeout=3.0):
         """Tunggu deterministik sampai background thread mengirim payload."""
@@ -184,44 +197,33 @@ class TestSupabaseCacheWritePayload(unittest.TestCase):
 
     def test_set_sends_raw_string_value(self):
         sc = self._sc()
-        captured, fake_post = self._capture_post()
-        original = cache_mod.requests.post
-        try:
-            cache_mod.requests.post = fake_post
+        fake = self._capture_post()
+        with _patch_session(fake):
             sc.set("ai:abc", "TEXT_POLOS", 300)
-            self._wait_for(captured)
-            payload = captured["json"]
+            self._wait_for(fake.captured)
+            payload = fake.captured["json"]
             self.assertEqual(payload["key"], "ai:abc")
             self.assertEqual(payload["value"], "TEXT_POLOS")
             self.assertIn("expires_at", payload)
-        finally:
-            cache_mod.requests.post = original
 
     def test_set_sends_raw_list_value(self):
         sc = self._sc()
-        captured, fake_post = self._capture_post()
-        original = cache_mod.requests.post
-        try:
-            cache_mod.requests.post = fake_post
+        fake = self._capture_post()
+        with _patch_session(fake):
             rows = [{"q": "tanya", "a": "jawab"}]
             sc.set("conversation:1", rows, 900)
-            self._wait_for(captured)
+            self._wait_for(fake.captured)
             # Nilai list dikirim mentah (bukan string hasil json.dumps)
-            self.assertEqual(captured["json"]["value"], rows)
-        finally:
-            cache_mod.requests.post = original
+            self.assertEqual(fake.captured["json"]["value"], rows)
 
     def test_set_disabled_sends_nothing(self):
         sc = cache_mod.SupabaseCache(url="https://x.supabase.co", key="k", enabled=False)
-        sent = []
-        original = cache_mod.requests.post
-        try:
-            cache_mod.requests.post = lambda *a, **k: sent.append(k)
+        fake = FakeSession()
+        with _patch_session(fake):
             sc.set("ai:x", "y", 300)
             time.sleep(0.4)
-            self.assertEqual(sent, [])
-        finally:
-            cache_mod.requests.post = original
+            # enabled=False → worker tidak pernah dipanggil
+            self.assertEqual(fake.captured, {})
 
 
 class TestLayeredAICache(unittest.TestCase):

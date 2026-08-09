@@ -87,7 +87,9 @@ class TestCandlestickManualFallback(unittest.TestCase):
 
     def test_fallback_when_mpf_missing(self):
         original = chart_generator.mpf
+        original_attempted = chart_generator._MPF_ATTEMPTED
         chart_generator.mpf = None  # simulasikan mplfinance tidak terpasang
+        chart_generator._MPF_ATTEMPTED = True  # cegah lazy-loader meng-import ulang
         try:
             chart = ChartGenerator()
             path = chart.build_candlestick_chart(_sample_ohlcv(), "GC=F")
@@ -96,15 +98,19 @@ class TestCandlestickManualFallback(unittest.TestCase):
             os.remove(path)
         finally:
             chart_generator.mpf = original
+            chart_generator._MPF_ATTEMPTED = original_attempted
 
     def test_manual_fallback_insufficient_data(self):
         original = chart_generator.mpf
+        original_attempted = chart_generator._MPF_ATTEMPTED
         chart_generator.mpf = None
+        chart_generator._MPF_ATTEMPTED = True
         try:
             chart = ChartGenerator()
             self.assertIsNone(chart.build_candlestick_chart(_sample_ohlcv(1), "GC=F"))
         finally:
             chart_generator.mpf = original
+            chart_generator._MPF_ATTEMPTED = original_attempted
 
 
 class TestLineChart(unittest.TestCase):

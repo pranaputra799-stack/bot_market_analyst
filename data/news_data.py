@@ -15,8 +15,7 @@ try:
 except ImportError:
     from backports.zoneinfo import ZoneInfo  # type: ignore
 
-import aiohttp
-import requests
+from data.http_session import get_aiohttp_session
 
 from config.settings import FINNHUB_KEY, MARKETAUX_KEY, NEWSAPI_KEY, MORNING_BRIEF_TIMEZONE
 from data.cache import cache
@@ -68,9 +67,9 @@ class NewsFetcher:
                 "minId": 0,
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=15) as resp:
-                    data = await resp.json()
+            session = get_aiohttp_session()
+            async with session.get(url, params=params, timeout=15) as resp:
+                data = await resp.json()
 
             if not isinstance(data, list):
                 return {"source": "Finnhub", "articles": []}
@@ -141,9 +140,9 @@ class NewsFetcher:
                 "api_token": self.marketaux_key,
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=15) as resp:
-                    data = await resp.json()
+            session = get_aiohttp_session()
+            async with session.get(url, params=params, timeout=15) as resp:
+                data = await resp.json()
 
             articles = []
             for item in data.get("data", []):
@@ -177,33 +176,33 @@ class NewsFetcher:
         ]
 
         articles = []
-        async with aiohttp.ClientSession() as session:
-            for feed_url in rss_feeds:
-                try:
-                    async with session.get(feed_url, timeout=10) as resp:
-                        content = await resp.text()
+        session = get_aiohttp_session()
+        for feed_url in rss_feeds:
+            try:
+                async with session.get(feed_url, timeout=10) as resp:
+                    content = await resp.text()
 
-                    root = ET.fromstring(content)
-                    for item in root.iter("item") if root.tag == "rss" else root.iter("entry"):
-                        title = item.findtext("title", "")
-                        link = item.findtext("link", "")
-                        desc = item.findtext("description", "")
-                        pub_date = item.findtext("pubDate", "")
+                root = ET.fromstring(content)
+                for item in root.iter("item") if root.tag == "rss" else root.iter("entry"):
+                    title = item.findtext("title", "")
+                    link = item.findtext("link", "")
+                    desc = item.findtext("description", "")
+                    pub_date = item.findtext("pubDate", "")
 
-                        if title:
-                            articles.append({
-                                "title": title,
-                                "description": desc[:200],
-                                "url": link,
-                                "source": feed_url.split("/")[2],
-                                "published": pub_date,
-                            })
+                    if title:
+                        articles.append({
+                            "title": title,
+                            "description": desc[:200],
+                            "url": link,
+                            "source": feed_url.split("/")[2],
+                            "published": pub_date,
+                        })
 
-                        if len(articles) >= limit:
-                            break
+                    if len(articles) >= limit:
+                        break
 
-                except Exception as e:
-                    logger.warning(f"RSS error for {feed_url}: {e}")
+            except Exception as e:
+                logger.warning(f"RSS error for {feed_url}: {e}")
 
         return articles[:limit]
 

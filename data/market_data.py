@@ -18,8 +18,8 @@ from typing import Dict, List, Optional, Any
 
 import yfinance as yf
 import requests
-import aiohttp
 
+from data.http_session import get_aiohttp_session
 from config.settings import (
     ALPHA_VANTAGE_KEY,
     FINNHUB_KEY,
@@ -400,9 +400,9 @@ class MarketDataAggregator:
                 "apikey": self.alpha_key,
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=10) as resp:
-                    data = await resp.json()
+            session = get_aiohttp_session()
+            async with session.get(url, params=params, timeout=10) as resp:
+                data = await resp.json()
 
             if "Global Quote" not in data:
                 return {"source": "Alpha Vantage", "error": data.get("Note", "Unknown error")}
@@ -435,32 +435,32 @@ class MarketDataAggregator:
             av_symbol = "XAUUSD"
 
         indicators = {}
-        async with aiohttp.ClientSession() as session:
-            for func, name in [("RSI", "rsi"), ("MACD", "macd"), ("SMA", "sma_50")]:
-                try:
-                    params = {
-                        "function": func,
-                        "symbol": av_symbol,
-                        "interval": "daily",
-                        "time_period": 50 if func == "SMA" else 14,
-                        "series_type": "close",
-                        "apikey": self.alpha_key,
-                    }
-                    async with session.get(
-                        "https://www.alphavantage.co/query",
-                        params=params,
-                        timeout=10
-                    ) as resp:
-                        data = await resp.json()
+        session = get_aiohttp_session()
+        for func, name in [("RSI", "rsi"), ("MACD", "macd"), ("SMA", "sma_50")]:
+            try:
+                params = {
+                    "function": func,
+                    "symbol": av_symbol,
+                    "interval": "daily",
+                    "time_period": 50 if func == "SMA" else 14,
+                    "series_type": "close",
+                    "apikey": self.alpha_key,
+                }
+                async with session.get(
+                    "https://www.alphavantage.co/query",
+                    params=params,
+                    timeout=10
+                ) as resp:
+                    data = await resp.json()
 
-                    key = f"Technical Analysis: {func}"
-                    if key in data:
-                        values = list(data[key].values())
-                        if values:
-                            indicators[name] = float(values[0][func])
+                key = f"Technical Analysis: {func}"
+                if key in data:
+                    values = list(data[key].values())
+                    if values:
+                        indicators[name] = float(values[0][func])
 
-                except Exception as e:
-                    logger.warning(f"Alpha Vantage {func} error: {e}")
+            except Exception as e:
+                logger.warning(f"Alpha Vantage {func} error: {e}")
 
         return {"source": "Alpha Vantage", "indicators": indicators}
 
@@ -480,9 +480,9 @@ class MarketDataAggregator:
             url = f"https://finnhub.io/api/v1/quote"
             params = {"symbol": fh_symbol, "token": self.finnhub_key}
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=10) as resp:
-                    data = await resp.json()
+            session = get_aiohttp_session()
+            async with session.get(url, params=params, timeout=10) as resp:
+                data = await resp.json()
 
             if "c" not in data or data["c"] == 0:
                 return {"source": "Finnhub", "error": "No data"}
@@ -512,9 +512,9 @@ class MarketDataAggregator:
 
         try:
             url = f"https://v6.exchangerate-api.com/v6/{self.exchange_key}/pair/{base}/{target}"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=10) as resp:
-                    data = await resp.json()
+            session = get_aiohttp_session()
+            async with session.get(url, timeout=10) as resp:
+                data = await resp.json()
 
             if data.get("result") != "success":
                 return {"source": "Exchange Rate API", "error": data.get("error-type", "Unknown")}

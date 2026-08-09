@@ -20,30 +20,59 @@ Mendukung:
 import logging
 import os
 import tempfile
+import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-# Backend Agg (headless) WAJIB sebelum import pyplot
-os.environ.setdefault("MPLBACKEND", "Agg")
-import matplotlib  # noqa: E402
-try:
-    matplotlib.use("Agg", force=True)
-except Exception:
-    pass
-import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.patches import Rectangle  # noqa: E402
-from matplotlib.ticker import FuncFormatter  # noqa: E402
-
-# mplfinance (opsional — upgrade visual candlestick). Bila tidak terpasang,
-# fallback ke penggambaran manual Rectangle di bawah (perilaku lama).
-try:
-    import mplfinance as mpf  # type: ignore
-    import pandas as pd  # type: ignore
-except ImportError:  # pragma: no cover - jalur fallback bila belum terpasang
-    mpf = None  # type: ignore
-    pd = None  # type: ignore
-
 logger = logging.getLogger(__name__)
+
+# Library plot (matplotlib + pandas + mplfinance ≈ 150MB RAM) di-load SECARA
+# LAZY — hanya saat chart pertama diminta. Sebelumnya di-import saat startup
+# sehingga bot start lebih lambat & makan memori besar di container kecil.
+mpf = None  # type: ignore
+pd = None  # type: ignore
+plt = None  # type: ignore
+Rectangle = None  # type: ignore
+FuncFormatter = None  # type: ignore
+_PLOT_LOCK = threading.Lock()
+_MPF_ATTEMPTED = False
+
+
+def _ensure_plot_libs() -> bool:
+    """Muat matplotlib & mplfinance secara lazy (thread-safe).
+
+    Semua nama module-global (plt, Rectangle, FuncFormatter, mpf, pd) diisi
+    di sini dan dipakai fungsi-fungsi penggambar. Test lama yang menonaktifkan
+    mplfinance cukup mengeset `chart_generator.mpf = None` — lazy loader TIDAK
+    meng-import ulang bila _MPF_ATTEMPTED sudah True.
+    """
+    global plt, Rectangle, FuncFormatter, mpf, pd, _MPF_ATTEMPTED
+    if plt is None:
+        with _PLOT_LOCK:
+            if plt is None:
+                try:
+                    # Backend Agg (headless) WAJIB sebelum import pyplot
+                    os.environ.setdefault("MPLBACKEND", "Agg")
+                    import matplotlib
+                    matplotlib.use("Agg", force=True)
+                    import matplotlib.pyplot as _plt
+                    from matplotlib.patches import Rectangle as _Rectangle
+                    from matplotlib.ticker import FuncFormatter as _FuncFormatter
+                    plt, Rectangle, FuncFormatter = _plt, _Rectangle, _FuncFormatter
+                except Exception as e:
+                    logger.error(f"matplotlib gagal dimuat: {e}")
+                    return False
+    if not _MPF_ATTEMPTED:
+        with _PLOT_LOCK:
+            if not _MPF_ATTEMPTED:
+                _MPF_ATTEMPTED = True
+                try:
+                    import mplfinance as _mpf  # type: ignore
+                    import pandas as _pd  # type: ignore
+                    mpf, pd = _mpf, _pd
+                except ImportError:  # pragma: no cover - jalur fallback
+                    mpf, pd = None, None
+    return True
 
 # Nama display untuk setiap simbol
 SYMBOL_DISPLAY_NAMES = {
@@ -117,6 +146,8 @@ class ChartGenerator:
     @staticmethod
     def _price_formatter(decimals: int):
         """Formatter sumbu Y dengan jumlah desimal sesuai instrumen."""
+        if FuncFormatter is None:  # pragma: no cover - hanya bila lib belum di-load
+            return lambda x, _: f"{x:,.{decimals}f}"
         return FuncFormatter(lambda x, _: f"{x:,.{decimals}f}")
 
     @staticmethod
@@ -220,6 +251,10 @@ class ChartGenerator:
         candles = self._parse_candles(ohlcv_data, max_points)
         if len(candles) < 2:
             logger.warning(f"Not enough valid candles for {symbol}")
+            return None
+
+        if not _ensure_plot_libs():
+            logger.error(f"Library plot tidak tersedia untuk {symbol}")
             return None
 
         if mpf is not None:
@@ -425,6 +460,9 @@ class ChartGenerator:
         data_points = data_points[-max_points:]
         labels = labels[-max_points:]
         n = len(data_points)
+
+        if not _ensure_plot_libs():
+            return None
 
         try:
             fig, ax = plt.subplots(figsize=(width, height))

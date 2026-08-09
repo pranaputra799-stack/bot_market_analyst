@@ -19,7 +19,7 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
-import requests
+from data.http_session import get_requests_session as _session
 
 from config.settings import (
     CACHE_TTL_SECONDS,
@@ -157,7 +157,7 @@ class SupabaseCache:
             return None
         try:
             q = urllib.parse.quote(cache_key, safe="")
-            resp = requests.get(
+            resp = _session().get(
                 f"{self.url}/rest/v1/{self.TABLE}?key=eq.{q}&select=value,expires_at",
                 headers=self._headers(),
                 timeout=10,
@@ -205,10 +205,14 @@ class SupabaseCache:
             name="supabase-cache-set",
         ).start()
 
+    # Tulis berjalan di background thread — session requests per-thread dibuat
+    # di thread ini (pola http_session). Fire-and-forget: handshake tambahan
+    # tidak memengaruhi latensi jawaban bot (yang penting jalur get() di
+    # thread utama sudah memakai session bersama).
     def _set_worker(self, payload: Dict):
         try:
             headers = {**self._headers(), "Prefer": "resolution=merge-duplicates,return=minimal"}
-            requests.post(
+            _session().post(
                 f"{self.url}/rest/v1/{self.TABLE}",
                 json=payload,
                 headers=headers,
@@ -231,7 +235,7 @@ class SupabaseCache:
     def _delete_worker(self, cache_key: str):
         try:
             q = urllib.parse.quote(cache_key, safe="")
-            requests.delete(
+            _session().delete(
                 f"{self.url}/rest/v1/{self.TABLE}?key=eq.{q}",
                 headers=self._headers(),
                 timeout=10,
@@ -245,7 +249,7 @@ class SupabaseCache:
             return
         try:
             now_iso = datetime.now(timezone.utc).isoformat()
-            requests.delete(
+            _session().delete(
                 f"{self.url}/rest/v1/{self.TABLE}?expires_at=lt.{now_iso}",
                 headers=self._headers(),
                 timeout=10,
