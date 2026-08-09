@@ -639,21 +639,34 @@ def run_webhook():
 
 
 async def _token_valid_async(token: str) -> bool:
-    """Cek token Telegram valid via getMe (tanpa crash). Hanya Unauthorized
-    yang dianggap fatal; error jaringan/sementara → lanjut (bot tetap mencoba
-    jalan dan error nyata tampil di log)."""
+    """Cek token Telegram valid via getMe (tanpa crash).
+
+    Hanya token yang DITOLAK Telegram (InvalidToken) dianggap fatal; error
+    jaringan/sementara (NetworkError, TimedOut, dll) → lanjut (bot tetap
+    mencoba jalan dan error nyata tampil di log).
+
+    Catatan PTB 20.x: exception untuk token ditolak adalah
+    telegram.error.InvalidToken (bukan Unauthorized yang ada di PTB <20).
+    """
     from telegram import Bot
-    from telegram.error import Unauthorized
-    bot = Bot(token=token, read_timeout=15, connect_timeout=15)
+    from telegram.error import InvalidToken, TelegramError
+    bot = Bot(token=token)
     try:
-        me = await bot.get_me()
+        # PTB 20.x: timeout dioper per-method (bukan di Bot.__init__).
+        me = await bot.get_me(read_timeout=15, connect_timeout=15)
         logger.info(f"Token valid — bot @{me.username} (id {me.id})")
         return True
-    except Unauthorized:
-        logger.error("Token Telegram DITOLAK (Unauthorized) — cek token di @BotFather.")
+    except InvalidToken:
+        logger.error("Token Telegram DITOLAK (InvalidToken) — cek token di @BotFather.")
         return False
+    except TelegramError as e:
+        logger.warning(f"Gagal memvalidasi token ({type(e).__name__}, sementara): {e}")
+        return True
     except Exception as e:
-        logger.warning(f"Gagal memvalidasi token (jaringan/sementara): {e}")
+        # Hanya token yang DITOLAK eksplisit yang fatal. Error lain (jaringan,
+        # non-Telegram, dll.) dianggap sementara — bot tetap coba jalan dan
+        # error nyata tetap tampil di log.
+        logger.warning(f"Gagal memvalidasi token ({type(e).__name__}, dianggap sementara): {e}")
         return True
     finally:
         try:
