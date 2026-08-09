@@ -3094,7 +3094,19 @@ class MarketBot:
         if not ai_section:
             ai_section = f"\n📰 *Interpretasi:*\n{static}\n"
 
-        return header + ai_section + f"\n{DISCLAIMER}"
+        # Section prediksi bot (XAU/USD) — tampil bila event ini punya prediksi
+        # tercatat (fitur /prediksi): arah prediksi + hasil benar/salah + pergerakan.
+        pred_section = ""
+        try:
+            if getattr(self, "news_preds", None) is not None:
+                await asyncio.to_thread(self.news_preds.ensure_loaded)
+                record = self.news_preds.get_prediction(self._aftermath_key(event))
+                if record:
+                    pred_section = self._format_prediction_section(record)
+        except Exception as e:
+            logger.debug(f"Section prediksi aftermath gagal: {e}")
+
+        return header + ai_section + pred_section + f"\n{DISCLAIMER}"
 
     async def _build_market_line(self) -> str:
         """
@@ -3434,6 +3446,18 @@ class MarketBot:
             prev=event.get("prev"),
             unit=event.get("unit", ""),
         )
+
+    @staticmethod
+    def _format_prediction_section(record: dict) -> str:
+        """Section 🎯 Prediksi Bot untuk pesan aftermath (dari record store)."""
+        arrow = "📈 naik" if record.get("direction") == "naik" else "📉 turun"
+        if record.get("status") == "settled" and record.get("result"):
+            res = record.get("result")
+            icon = {"benar": "✅", "salah": "❌", "flat": "➖"}.get(res, "➖")
+            move = record.get("move_pct")
+            move_str = f"{move:+.2f}%" if move is not None else "—"
+            return f"\n🎯 *Prediksi Bot:* {arrow} → {icon} {res} (pergerakan {move_str})\n"
+        return f"\n🎯 *Prediksi Bot:* {arrow} — ⏳ hasil belum dievaluasi\n"
 
     def _format_prediction_message(self, record: dict) -> str:
         arrow = "📈 naik" if record.get("direction") == "naik" else "📉 turun"

@@ -120,8 +120,22 @@ async def post_init(application: Application):
         BotCommand("unsubscribe", "🔕 Berhenti langganan"),
         BotCommand("about", "ℹ️ Tentang bot ini"),
     ]
-    await application.bot.set_my_commands(commands)
-    logger.info(f"Bot {BOT_NAME} (@{BOT_USERNAME}) started successfully!")
+    # Kegagalan set menu perintah TIDAK boleh mematikan bot (mis. transient
+    # network error / token bermasalah) — log & lanjut agar bot tetap merespons.
+    try:
+        await application.bot.set_my_commands(commands)
+    except Exception as e:
+        logger.warning(f"set_my_commands gagal (bot tetap jalan): {e}")
+
+    # Log diagnostik startup: token (termask) + mode — membantu cek konfigurasi
+    # di panel JustRunMy bila bot tidak merespons.
+    token_hint = (
+        f"{TELEGRAM_TOKEN[:6]}...{TELEGRAM_TOKEN[-4:]}" if TELEGRAM_TOKEN else "(KOSONG!)"
+    )
+    logger.info(
+        f"Bot {BOT_NAME} (@{BOT_USERNAME}) started! token={token_hint} "
+        f"run_mode={BOT_RUN_MODE} webhook_url={'set' if WEBHOOK_URL else 'kosong'}"
+    )
 
     # Muat state persisten dari Supabase — alert harga (/pa) & subscriber
     # notifikasi event (/alert). Dulunya RAM-only, jadi hilang saat restart;

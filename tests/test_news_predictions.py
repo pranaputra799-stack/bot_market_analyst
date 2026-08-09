@@ -290,6 +290,61 @@ class TestComputeRuleResult(unittest.TestCase):
         self.assertIsNone(MarketBot._compute_rule_result("naik", 0.0, 2410.0, 0.05))
 
 
+class TestAftermathPredictionSection(unittest.TestCase):
+    """Section 🎯 Prediksi Bot di pesan aftermath (integrasi /prediksi → aftermath)."""
+
+    def _bot_with_store(self):
+        bot = MarketBot.__new__(MarketBot)
+        bot.ai = None  # tanpa network — fallback interpretasi statis
+        bot.news_preds = NewsPredictionStore()
+        bot.news_preds._loaded = True
+        return bot
+
+    def test_section_shows_verdict_when_settled(self):
+        bot = self._bot_with_store()
+        event = _event("Non-Farm Payrolls (NFP)", minutes_to=1)
+        key = MarketBot._aftermath_key(event)
+        bot.news_preds.add_prediction(
+            event_key=key, event_name=event["event"], direction="naik",
+            price_at_prediction=2400.0, event_dt_utc=event["_dt_utc"],
+        )
+        bot.news_preds.settle(
+            event_key=key, result="benar", actual_direction="naik",
+            price_after=2410.0, move_pct=0.42, reasoning="sesuai",
+        )
+        msg = asyncio.run(bot._build_aftermath_message(event, "DXY: 104.2", manual=True))
+        self.assertIn("Prediksi Bot", msg)
+        self.assertIn("benar", msg)
+        self.assertIn("+0.42%", msg)
+
+    def test_section_shows_pending_when_not_settled(self):
+        bot = self._bot_with_store()
+        event = _event()
+        key = MarketBot._aftermath_key(event)
+        bot.news_preds.add_prediction(
+            event_key=key, event_name=event["event"], direction="turun",
+            price_at_prediction=2400.0, event_dt_utc=event["_dt_utc"],
+        )
+        msg = asyncio.run(bot._build_aftermath_message(event, "DXY: 104.2", manual=True))
+        self.assertIn("Prediksi Bot", msg)
+        self.assertIn("belum dievaluasi", msg)
+
+    def test_no_section_without_record(self):
+        bot = self._bot_with_store()
+        msg = asyncio.run(
+            bot._build_aftermath_message(_event("CPI / Inflasi AS (YoY)"), "DXY: 104.2", manual=True)
+        )
+        self.assertNotIn("Prediksi Bot", msg)
+
+    def test_no_crash_without_store_attr(self):
+        # Pola test lama: bot tanpa news_preds — aftermath tetap jalan
+        bot = MarketBot.__new__(MarketBot)
+        bot.ai = None
+        msg = asyncio.run(bot._build_aftermath_message(_event(), "DXY: 104.2", manual=True))
+        self.assertNotIn("Prediksi Bot", msg)
+        self.assertIn("ANALISIS DAMPAK", msg)
+
+
 class TestNewsPredictionFlows(unittest.TestCase):
 
     def _bot(self, ai_text="naik\nEmas naik karena data lemah."):

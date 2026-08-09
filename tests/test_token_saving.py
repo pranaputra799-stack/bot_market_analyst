@@ -24,7 +24,9 @@ from utils.token_budget import estimate_tokens, truncate_to_budget
 def _make_engine():
     """Engine dengan key groq palsu & _call_provider di-stub (tanpa network)."""
     eng = AIFallbackEngine()
-    eng.api_keys["groq"] = "test-key"
+    # Hermetic: abaikan key .env lokal (mis. OPENROUTER_API_KEY) — hanya groq
+    # yang punya key agar urutan provider & hitungan deterministik.
+    eng.api_keys = {"groq": "test-key"}
     eng.throttle_min_interval_override = 0.0  # matikan throttle agar test cepat
     return eng
 

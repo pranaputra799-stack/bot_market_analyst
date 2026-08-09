@@ -20,7 +20,9 @@ from config.providers import PROVIDER_CONFIGS
 def _make_engine():
     """Engine dengan key groq palsu & _call_provider di-stub."""
     eng = AIFallbackEngine()
-    eng.api_keys["groq"] = "test-key"
+    # Hermetic: ABAIKAN key dari .env (mis. OPENROUTER_API_KEY lokal) — hanya
+    # groq yang punya key agar urutan provider & pemakaian deterministik.
+    eng.api_keys = {"groq": "test-key"}
     eng.throttle_min_interval_override = 0.0  # matikan throttle agar test cepat
 
     def fake_call(provider, prompt, system, max_tokens):
@@ -41,7 +43,9 @@ class TestGenerateBasics(unittest.TestCase):
     def test_no_key_returns_error_message(self):
         import logging
 
-        eng = AIFallbackEngine()  # semua key kosong
+        eng = AIFallbackEngine()
+        # Hermetic: kosongkan semua key (abaikan .env lokal) → error total
+        eng.api_keys = {}
         with self.assertLogs(level="WARNING"):
             out = eng.generate("prompt-2", use_cache=False)
         self.assertIn("semua AI provider sedang tidak tersedia", out)

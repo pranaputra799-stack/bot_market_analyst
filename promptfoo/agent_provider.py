@@ -51,20 +51,69 @@ def _strip_provider_prefix(text: str) -> str:
     return text
 
 
+# Data agent realistis per simbol — eval ini menguji KUALITAS SINTESIS
+# (template final_synthesis + DIRECTOR_SYSTEM + LLM nyata), bukan pipeline
+# pengambilan data (yang butuh network & tak stabil di CI). Tanpa data ini
+# template diisi "Not analyzed" → LLM jujur bilang tidak bisa menganalisis.
+_SYNTH_DATA = {
+    "EUR/USD": {
+        "research_output": "EUR/USD diperdagangkan 1.0850, uptrend jangka pendek. "
+            "DXY 104.2 melemah -0.2%. Data makro: CPI Zona Euro 2.4% vs forecast 2.5%, "
+            "ECB berpeluang dovish.",
+        "signal_output": "RSI 62 (bullish), EMA 20 di atas EMA 50, MACD positif, "
+            "harga bertahan di atas support.",
+        "indicators_output": "RSI 62, EMA20 1.0840, EMA50 1.0810, Bollinger atas 1.0920 "
+            "bawah 1.0780, ATR 40 pip.",
+        "thesis_output": "Bias naik menuju resistance 1.0920; base case konsolidasi "
+            "1.0820-1.0920.",
+        "contradiction_output": "Momentum bullish vs DXY yang masih kokoh — risiko "
+            "koreksi bila DXY rebound.",
+        "scenarios_output": "Bull: 1.0920 (prob 45%), Bear: 1.0780 (25%), Base: 1.0850 (30%).",
+        "confidence_output": "Skor 0.70/1 — keyakinan sedang; data lengkap tapi ada "
+            "kontradiksi DXY.",
+        "risk_output": "Risiko: rilis CPI AS malam ini; stop-loss di bawah 1.0800.",
+    },
+    "XAU/USD": {
+        "research_output": "Gold (XAU/USD) diperdagangkan 2412.50, uptrend. DXY 104.2 "
+            "melemah mendukung emas. Data makro: CPI AS 3.0% vs forecast 3.1%, "
+            "yield 10Y AS 4.2%.",
+        "signal_output": "RSI 58 (bullish moderat), EMA 20 di atas EMA 50, MACD positif, "
+            "harga di atas support 2385.",
+        "indicators_output": "RSI 58, EMA20 2401, EMA50 2388, Bollinger atas 2430 "
+            "bawah 2385.",
+        "thesis_output": "Bias naik menuju resistance 2430; base case konsolidasi "
+            "2390-2430.",
+        "contradiction_output": "Tidak ada kontradiksi signifikan; yield naik tipis bisa "
+            "menahan kenaikan emas.",
+        "scenarios_output": "Bull: 2430 (prob 50%), Bear: 2390 (25%), Base: 2412 (25%).",
+        "confidence_output": "Skor 0.75/1 — keyakinan sedang-tinggi; tren & makro sejalan.",
+        "risk_output": "Risiko: data NFP lebih kuat dari ekspektasi; stop-loss di bawah 2385.",
+    },
+}
+
+
+def _pick_synth(symbol: str) -> dict:
+    q = (symbol or "").lower()
+    if "xau" in q or "gold" in q:
+        return _SYNTH_DATA["XAU/USD"]
+    return _SYNTH_DATA["EUR/USD"]
+
+
 def call_api(prompt: str, options: dict, context: dict) -> dict:
     """
     Evaluasi sintesis akhir: prompt = pertanyaan user (hasil render template).
 
-    Memakai pipeline nyata: build_analysis_prompt (template final_synthesis)
-    + DIRECTOR_SYSTEM → AIFallbackEngine.generate (tanpa cache agar tiap eval
-    benar-benar menguji model).
+    Memakai pipeline nyata: build_analysis_prompt (template final_synthesis
+    + data agent per simbol) + DIRECTOR_SYSTEM → AIFallbackEngine.generate
+    (tanpa cache agar tiap eval benar-benar menguji model).
     """
     question = (prompt or "").strip()
     if not question:
         return {"output": "", "error": "prompt kosong"}
     started = time.time()
     try:
-        user_prompt = build_analysis_prompt(question, context_data="")
+        data = _pick_synth(question)
+        user_prompt = build_analysis_prompt(question, **data)
         raw = _get_engine().generate(
             user_prompt,
             system_override=DIRECTOR_SYSTEM,
