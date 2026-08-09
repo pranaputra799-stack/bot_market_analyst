@@ -15,15 +15,15 @@
 # config/settings.py mendeteksi IS_RENDER → main.py memilih mode webhook.
 # Tidak perlu menyetel WEBHOOK_URL / PORT manual.
 #
-# PENTING #1: `healthCheckPath` sengaja TIDAK di-set. Server webhook
-# python-telegram-bot (tornado) hanya melayani path token — /health akan
-# 404 → Render menandai container unhealthy → restart-loop.
-#   (Endpoint /health asli tetap jalan di 127.0.0.1:8090 untuk Docker
-#    healthcheck & diagnosis lokal — bukan untuk probe publik Render.)
+# Webhook dijalankan server aiohttp MILIK KITA (main.build_webhook_app):
+# POST /<token> → update Telegram, GET /health → 200 JSON. Karena itu
+# `healthCheckPath: /health` aman dipakai (Render health check mendapat 200)
+# dan UptimeRobot bisa keep-alive lewat URL /health.
 #
-# PENTING #2: free tier Render tidur setelah ~15 menit tanpa traffic masuk.
-# Buat monitor UptimeRobot (gratis) → HTTP(S) → https://<app>.onrender.com/
-# interval 5 menit agar bot selalu bangun (lihat README bagian Render).
+# PENTING: free tier Render tidur setelah ~15 menit tanpa traffic masuk.
+# Buat monitor UptimeRobot (gratis) → HTTP(S) →
+# https://<app>.onrender.com/health → interval 5 menit agar bot selalu
+# bangun (lihat README bagian Render).
 # ============================================================
 services:
   - type: web
@@ -33,7 +33,8 @@ services:
     dockerfilePath: ./Dockerfile
     numInstances: 1
     autoDeploy: true
-    # healthCheckPath: JANGAN di-set (lihat catatan #1 di atas)
+    # /health publik disediakan server webhook aiohttp kita (GET → 200 JSON).
+    healthCheckPath: /health
     envVars:
       # --- Wajib (isi manual di dashboard; sync: false = secret) ---
       - key: TELEGRAM_BOT_TOKEN

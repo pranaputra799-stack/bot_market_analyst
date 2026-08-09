@@ -10,11 +10,13 @@ Usage:
 Environment variables diatur di file .env
 """
 import asyncio
+import json
 import logging
 import sys
 import os
 import time as _time  # alias: nama `time` dipakai datetime.time (scheduler)
 from datetime import datetime, time, timedelta
+from typing import Optional
 
 try:
     from zoneinfo import ZoneInfo  # Python 3.9+
@@ -528,26 +530,112 @@ def resolve_run_mode(bot_run_mode: str, is_cloud: bool, webhook_url: str) -> str
     return "polling"
 
 
+def _log_update_error(task: asyncio.Task) -> None:
+    """Log error tak terduga dari task proses update webhook (anti silent-fail)."""
+    exc = task.exception()
+    if exc is not None:
+        logger.error(f"Gagal memproses update webhook: {exc}")
+
+
+def build_webhook_app(application, url_path: str, secret: Optional[str]):
+    """Buat aiohttp app: GET /health (200) + POST /<url_path> (webhook Telegram).
+
+    Menggantikan server tornado bawaan PTB. Kenapa perlu diganti:
+    - Server tornado PTB hanya menerima POST (SUPPORTED_METHODS=("POST",)) →
+      GET /health dari UptimeRobot / Render health check selalu 405/404, jadi
+      keep-alive tidak pernah mendapat 200 (monitor dianggap DOWN).
+    - Server kita melayani GET /health → 200 JSON (keep-alive & healthCheckPath
+      Render) DAN POST /<token> → Update.de_json + application.process_update
+      (API publik PTB, perilaku webhook identik dengan bawaan).
+
+    Dipisah (murni) agar mudah di-test tanpa Application sungguhan.
+    """
+    from aiohttp import web
+    from telegram import Update
+    from utils.health_server import build_health_payload
+
+    async def health_handler(request):
+        return web.json_response(build_health_payload(), status=200)
+
+    async def webhook_handler(request):
+        if secret and request.headers.get("X-Telegram-Bot-Api-Secret-Token") != secret:
+            return web.Response(status=403)
+        try:
+            data = json.loads(await request.text())
+        except Exception:
+            return web.Response(status=400)
+        update = Update.de_json(data, application.bot)
+        if update is not None:
+            # Fire-and-forget: balas 200 SEGERA. Pipeline AI bisa >20 dtk — kalau
+            # di-await, Telegram timeout ~20 dtk lalu RETRY webhook → update
+            # diproses dobel (jawaban ganda). process_update sudah mengatur
+            # semaphore (concurrent_updates) & mengarahkan error handler ke
+            # process_error, jadi aman dijalankan di background.
+            task = asyncio.create_task(application.process_update(update))
+            task.add_done_callback(_log_update_error)
+        return web.Response(status=200)
+
+    app = web.Application()
+    app.router.add_get("/health", health_handler)
+    app.router.add_post(f"/{url_path}", webhook_handler)
+    return app
+
+
 def run_webhook():
     """Jalankan bot dengan webhook (untuk production/deploy).
 
     Di Railway/Render: PORT & WEBHOOK_URL diisi otomatis oleh platform.
     Di JustRunMy: set manual di panel — PORT=8080 (sesuai mapping port HTTPS
     yang dibuat) + WEBHOOK_URL=https://<app>.justrunmy.app + BOT_RUN_MODE=webhook.
+
+    Server webhook memakai aiohttp (build_webhook_app) — selain POST webhook
+    Telegram, endpoint GET /health publik (200) tersedia untuk UptimeRobot
+    keep-alive & Render healthCheckPath.
     """
+    from aiohttp import web
+
     logger.info(f"Starting bot in webhook mode on port {PORT}...")
     logger.info(f"Webhook URL: {WEBHOOK_URL}/{TELEGRAM_TOKEN[:8]}...")
 
     application = build_application()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    runner = None
+    try:
+        # Urutan orkestrasi sama seperti Application.run_webhook:
+        # initialize (→ post_init) → start → daftar webhook → serve → idle.
+        loop.run_until_complete(application.initialize())
+        loop.run_until_complete(application.start())
+        loop.run_until_complete(
+            application.bot.set_webhook(
+                url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}",
+                secret_token=WEBHOOK_SECRET,
+            )
+        )
 
-    # Setup webhook
-    application.run_webhook(
-        listen=WEBHOOK_LISTEN,
-        port=PORT,
-        url_path=TELEGRAM_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}",
-        secret_token=WEBHOOK_SECRET,  # Security: validasi webhook request
-    )
+        app = build_webhook_app(application, TELEGRAM_TOKEN, WEBHOOK_SECRET)
+        runner = web.AppRunner(app, access_log=None)
+        loop.run_until_complete(runner.setup())
+        site = web.TCPSite(runner, WEBHOOK_LISTEN, PORT)
+        loop.run_until_complete(site.start())
+        logger.info(
+            f"Webhook aiohttp aktif: POST /<token> + GET /health di "
+            f"http://{WEBHOOK_LISTEN}:{PORT}"
+        )
+
+        loop.run_until_complete(application.idle())
+    finally:
+        if runner is not None:
+            try:
+                loop.run_until_complete(runner.cleanup())
+            except Exception:
+                pass
+        for cleanup in (application.stop, application.shutdown):
+            try:
+                loop.run_until_complete(cleanup())
+            except Exception:
+                pass
+        loop.close()
 
 
 async def _token_valid_async(token: str) -> bool:

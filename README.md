@@ -268,14 +268,16 @@ Render meng-inject `RENDER_EXTERNAL_URL` & `PORT` otomatis → `IS_RENDER` terde
 
 4. **Keep-alive (penting):** free tier Render tidur setelah ~15 menit tanpa
    traffic masuk. Buat monitor **UptimeRobot** (gratis) → tipe HTTP(S) → URL
-   `https://<app>.onrender.com/` → interval **5 menit**. Pinging ini mencegah
-   bot tidur (Telegram webhook + pinger = selalu bangun). Tanpa ini, bot
+   **`https://<app>.onrender.com/health`** → interval **5 menit**. Endpoint
+   `/health` publik (disajikan server webhook aiohttp kita) mengembalikan
+   **200** → monitor UP → Render tidak pernah tidur. Tanpa pinger ini, bot
    cold-start ±1 menit saat pesan masuk pertama setelah periode diam.
 
-Catatan penting:
-- `healthCheckPath` di `render.yaml` sengaja TIDAK di-set — server webhook
-  python-telegram-bot (tornado) tidak punya route `/health` (404); health
-  check Render justru memicu restart-loop.
+Catatan:
+- `healthCheckPath: /health` di `render.yaml` **aman dipakai** — server
+  webhook aiohttp kita menyediakan `GET /health` → 200 (server tornado
+  bawaan PTB hanya menerima POST, jadi tidak bisa dipakai untuk health
+  check / keep-alive).
 - Endpoint `/health` internal tetap jalan di `127.0.0.1:8090` (Docker
   healthcheck & diagnosis lokal).
 
