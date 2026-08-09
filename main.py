@@ -106,6 +106,30 @@ if SENTRY_DSN:
         logger.warning(f"Sentry init failed: {e}")
 
 
+async def handle_bot_error(update: object, context) -> None:
+    """Error handler GLOBAL PTB — semua exception handler terekam + user dikabari.
+
+    Tanpa ini, exception di handler hanya tercatat di log: user tidak mendapat
+    umpan balik apa pun (bot tampak "diam"/tidak jalan). Dengan handler ini,
+    exception selalu di-log lengkap dan user yang aktif dikirimi pesan singkat.
+    """
+    logger.error(
+        "Exception saat memproses update: %s",
+        context.error,
+        exc_info=context.error,
+    )
+    # Kabari user yang terkena dampak (jika update punya chat) — anti silent-fail.
+    effective_chat = getattr(update, "effective_chat", None) if update is not None else None
+    if effective_chat is not None:
+        try:
+            await effective_chat.send_message(
+                "⚠️ Terjadi kesalahan internal saat memproses permintaanmu. "
+                "Silakan coba lagi — kalau berulang, cek /status."
+            )
+        except Exception:
+            pass
+
+
 async def post_init(application: Application):
     """Setup setelah bot initialize."""
     # Set commands untuk menu bot
@@ -485,6 +509,10 @@ def build_application():
     bot = MarketBot()
     setup_scheduler(application, bot)
     register_handlers(application, bot)
+
+    # Error handler global: exception handler apa pun di-log + user dikabari
+    # (tanpa ini kegagalan hanya tampak diam di sisi user).
+    application.add_error_handler(handle_bot_error)
 
     # Mulai streaming harga OANDA real-time (daemon thread; no-op bila
     # OANDA_API_KEY belum di-set). Harga live langsung tersedia untuk

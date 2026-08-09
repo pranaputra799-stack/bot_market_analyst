@@ -1689,7 +1689,18 @@ class MarketBot:
             action="typing",
         )
 
-        brief = await self._generate_morning_brief()
+        try:
+            brief = await self._generate_morning_brief()
+        except Exception as e:
+            # JANGAN diam: user harus dapat umpan balik, bukan keheningan.
+            logger.exception(f"Morning brief gagal: {e}")
+            await safe_reply_text(
+                update.message,
+                "⚠️ Morning brief tidak dapat dibuat saat ini. "
+                "Coba lagi beberapa saat — kalau berulang, cek /status.",
+                parse_mode="Markdown",
+            )
+            return
         await safe_reply_text(
             update.message,
             brief,
@@ -1701,21 +1712,48 @@ class MarketBot:
         """
         Generate morning brief dengan data terkini.
         Menggabungkan data pasar, makro, kalender ekonomi, berita, dan AI-generated outlook.
+
+        Defensif penuh: SATU sumber data error TIDAK boleh menggagalkan seluruh
+        brief (tiap bagian punya fallback teks), dan kegagalan AI menghasilkan
+        placeholder ramah — bukan exception yang membuat /morning tidak merespons.
         """
         # Tanggal harus sesuai zona WIB, bukan waktu server (yang bisa UTC)
         today = datetime.now(ZoneInfo(MORNING_BRIEF_TIMEZONE)).strftime("%A, %d %B %Y")
 
-        # Gather data secara parallel
-        market_summary, macro_summary, calendar_events, news_summary, sentiment_text = await asyncio.gather(
+        # Gather data secara parallel — return_exceptions: satu sumber gagal
+        # (jaringan Yahoo/FRED/news) tidak membatalkan bagian lain.
+        results = await asyncio.gather(
             asyncio.to_thread(self.market.get_market_summary),
             asyncio.to_thread(self.macro.get_macro_summary),
             self.macro.get_economic_calendar(),
             self.news.get_news_summary("FOREX"),
             self._get_sentiment_text("FOREX"),
+            return_exceptions=True,
         )
+        market_summary, macro_summary, calendar_events, news_summary, sentiment_text = results
+
+        # Normalisasi exception → fallback teks per-bagian
+        if isinstance(market_summary, Exception):
+            logger.warning(f"Morning brief: market summary gagal: {market_summary}")
+            market_summary = "📊 Data pasar tidak tersedia saat ini."
+        if isinstance(macro_summary, Exception):
+            logger.warning(f"Morning brief: macro summary gagal: {macro_summary}")
+            macro_summary = "🏛️ Data makro tidak tersedia saat ini."
+        if isinstance(calendar_events, Exception):
+            logger.warning(f"Morning brief: kalender ekonomi gagal: {calendar_events}")
+            calendar_events = []
+        if isinstance(news_summary, Exception):
+            logger.warning(f"Morning brief: berita gagal: {news_summary}")
+            news_summary = "📰 Berita tidak tersedia saat ini."
+        if isinstance(sentiment_text, Exception):
+            sentiment_text = ""
 
         # Format kalender ekonomi untuk morning brief (top 3 high impact)
-        calendar_text = self.macro.format_calendar_text(calendar_events, max_events=3)
+        try:
+            calendar_text = self.macro.format_calendar_text(calendar_events, max_events=3)
+        except Exception as e:
+            logger.warning(f"Morning brief: format kalender gagal: {e}")
+            calendar_text = "📅 Tidak ada event terjadwal yang tersedia."
 
         # AI-powered outlook & catalysts using multi-agent analysis
         if self.analysis_director:
@@ -1729,21 +1767,7 @@ class MarketBot:
 
                 # Extract from analysis result (bersihkan prefix [via ...] + simbol *)
                 ai_content = strip_markdown_asterisks(_strip_provider_prefix(result.final_response or ""))
-
-                # Parse sections TANPA memotong konten (jangan hard-truncate 400/700 char)
-                if "KATALIS UTAMA" in ai_content:
-                    sections = ai_content.split("KATALIS UTAMA:")
-                    outlook_part = sections[0].replace("OUTLOOK:", "").replace("OUTLOOK", "").strip()
-                    catalysts_part = sections[1].strip() if len(sections) > 1 else ""
-                else:
-                    # Tidak ada marker: gunakan seluruh konten sebagai outlook
-                    outlook_part = ai_content.strip()
-                    catalysts_part = ""
-
-                if not outlook_part:
-                    outlook_part = "Belum ada data analisis untuk hari ini."
-                if not catalysts_part:
-                    catalysts_part = "Belum ada katalis utama yang teridentifikasi hari ini."
+                outlook_part, catalysts_part = self._split_outlook_catalysts(ai_content)
 
                 return MORNING_BRIEF_TEMPLATE.format(
                     date=today,
@@ -1758,20 +1782,22 @@ class MarketBot:
             except Exception as e:
                 logger.warning(f"Multi-agent morning brief failed: {e}, falling back to legacy")
 
-        # Fallback: legacy single-prompt method
-        outlook_prompt = self._build_morning_brief_prompt(
-            today, market_summary, macro_summary, calendar_text, news_summary, sentiment_text
-        )
-
-        ai_response = self.ai.generate(outlook_prompt, use_cache=True, max_tokens=4096)
-
-        # Parse AI response (bersihkan prefix [via ...] + simbol *)
-        ai_content = strip_markdown_asterisks(_strip_provider_prefix(ai_response))
-
-        # Split into outlook and catalysts
-        sections = ai_content.split("KATALIS UTAMA:")
-        outlook = sections[0].replace("OUTLOOK:", "").strip() if sections else "Data belum tersedia"
-        catalysts = sections[1].strip() if len(sections) > 1 else "Belum ada katalis utama yang teridentifikasi hari ini."
+        # Fallback: legacy single-prompt method — pakai generate_async agar tidak
+        # memblokir event loop (generate sync bisa berjalan 60s+ saat provider
+        # down). Kegagalan AI → placeholder ramah, bukan exception.
+        try:
+            outlook_prompt = self._build_morning_brief_prompt(
+                today, market_summary, macro_summary, calendar_text, news_summary, sentiment_text
+            )
+            ai_response = await self.ai.generate_async(
+                outlook_prompt, use_cache=True, max_tokens=4096
+            )
+            ai_content = strip_markdown_asterisks(_strip_provider_prefix(ai_response))
+            outlook, catalysts = self._split_outlook_catalysts(ai_content)
+        except Exception as e:
+            logger.warning(f"Legacy morning brief AI failed: {e}")
+            outlook = "Analisis AI tidak tersedia saat ini — data pasar tetap disajikan di atas."
+            catalysts = "Coba lagi dalam beberapa menit."
 
         return MORNING_BRIEF_TEMPLATE.format(
             date=today,
@@ -1783,6 +1809,27 @@ class MarketBot:
             outlook=outlook,
             catalysts=catalysts,
         )
+
+    @staticmethod
+    def _split_outlook_catalysts(ai_content: str) -> Tuple[str, str]:
+        """Pisah konten AI → (outlook, catalysts) TANPA memotong konten.
+
+        Marker `KATALIS UTAMA:` memisahkan dua bagian. Bila marker tidak ada,
+        seluruh konten dianggap outlook (catalysts → placeholder).
+        """
+        ai_content = (ai_content or "").strip()
+        if "KATALIS UTAMA" in ai_content:
+            sections = ai_content.split("KATALIS UTAMA:")
+            outlook = sections[0].replace("OUTLOOK:", "").replace("OUTLOOK", "").strip()
+            catalysts = sections[1].strip() if len(sections) > 1 else ""
+        else:
+            outlook = ai_content
+            catalysts = ""
+        if not outlook:
+            outlook = "Belum ada data analisis untuk hari ini."
+        if not catalysts:
+            catalysts = "Belum ada katalis utama yang teridentifikasi hari ini."
+        return outlook, catalysts
 
     def _build_morning_brief_prompt(
         self,
@@ -2376,7 +2423,11 @@ class MarketBot:
                 chat_id=update.effective_chat.id,
                 action="typing",
             )
-            brief = await self._generate_morning_brief()
+            try:
+                brief = await self._generate_morning_brief()
+            except Exception as e:
+                logger.exception(f"Morning brief (callback) gagal: {e}")
+                brief = "⚠️ Morning brief tidak dapat dibuat saat ini. Coba lagi beberapa saat."
             await safe_edit_message_text(
                 query,
                 brief,
