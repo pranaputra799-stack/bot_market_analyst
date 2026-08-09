@@ -12,6 +12,7 @@ Environment variables diatur di file .env
 import asyncio
 import json
 import logging
+import signal
 import sys
 import os
 import time as _time  # alias: nama `time` dipakai datetime.time (scheduler)
@@ -623,7 +624,21 @@ def run_webhook():
             f"http://{WEBHOOK_LISTEN}:{PORT}"
         )
 
-        loop.run_until_complete(application.idle())
+        # Blok sampai sinyal stop. PTB 20.7 TIDAK punya Application.idle()
+        # (method dihapus; run_polling/run_webhook bawaan memakai loop.run_forever
+        # di __run, dan stop_running() memanggil loop.stop()). Kita replikasi:
+        # run_forever() + handler sinyal (SIGTERM/SIGINT → loop.stop()) agar
+        # shutdown platform / Ctrl+C menghentikan loop secara graceful, lalu
+        # blok finally membersihkan aiohttp runner + application.
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGABRT):
+            try:
+                loop.add_signal_handler(sig, loop.stop)
+            except (NotImplementedError, RuntimeError, ValueError):
+                pass  # Windows / loop non-main-thread tanpa add_signal_handler
+        try:
+            loop.run_forever()
+        except KeyboardInterrupt:
+            logger.debug("Webhook server dihentikan via KeyboardInterrupt.")
     finally:
         if runner is not None:
             try:
