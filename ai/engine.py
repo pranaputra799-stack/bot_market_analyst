@@ -53,8 +53,21 @@ class AIFallbackEngine:
     # di-skip selama TTL ini — mencegah request berulang ke model mati yang
     # hanya menghasilkan spam log + latensi (tanpa memperbaiki hasil).
     # Setelah TTL lewat, model dicoba lagi (berguna bila katalog/privacy berubah
-    # tanpa restart bot).
-    _DEAD_MODEL_TTL = 600  # 10 menit
+    # tanpa restart bot). 1800s (30 menit) — data policy yang memblokir banyak
+    # model free membuat re-discovery tiap 10 menit mahal (ratusan 404 beruntun).
+    _DEAD_MODEL_TTL = 1800  # 30 menit
+
+    # Circuit breaker total-failure (detik): setelah SEMUA provider gagal dalam
+    # satu generate(), request berikutnya (termasuk agent lain di pipeline yang
+    # sama) gagal CEPAT tanpa mengulang retry penuh. Mencegah kaskade
+    # 8 agent × budget 60s = menit-menit saat provider sedang down.
+    _TOTAL_FAILURE_COOLDOWN = 20.0
+
+    # Spacing antar model attempt yang GAGAL CEPAT (404/error) — detik.
+    # Throttle utama kini 1× per panggilan (bukan per model); spacing kecil ini
+    # mencegah satu generate() melempar ~20 request beruntun ke free tier
+    # (RPM ketat) yang bisa self-inflict 429. 20 × 0.3s = 6s maksimal.
+    _MODEL_ATTEMPT_SPACING = 0.3
 
     # TTL cache untuk PESAN ERROR total (detik). Saat semua provider gagal,
     # pesan error di-cache sebentar agar request identik yang berbarengan
@@ -97,6 +110,9 @@ class AIFallbackEngine:
         # - _rate_limit_hints:   provider → durasi tunggu (detik) yang diminta server.
         self._provider_cooldown: Dict[str, float] = {}
         self._rate_limit_hints: Dict[str, float] = {}
+        # Circuit breaker: hingga waktu ini, semua generate() gagal cepat (lihat
+        # _TOTAL_FAILURE_COOLDOWN). 0 = normal. Di-reset oleh sukses pertama.
+        self._total_failure_until: float = 0.0
         # Blacklist model mati: model → timestamp 404 terakhir (lihat _DEAD_MODEL_TTL).
         self._dead_models: Dict[str, float] = {}
         # Throttle per-provider: jeda minimum antar request ke provider yang sama.
@@ -189,6 +205,16 @@ class AIFallbackEngine:
         deadline = time.time() + effective_budget
 
         try:
+            # Circuit breaker (anti-cascade): bila SEMUA provider baru saja gagal
+            # total (dalam _TOTAL_FAILURE_COOLDOWN), jangan ulangi pipeline retry
+            # penuh. Pipeline multi-agent memanggil generate() BERUNTUN (research →
+            # thesis → contradiction → scenarios → confidence → risk → synthesis);
+            # tanpa ini tiap agent membakar budget sendiri (AI_MAX_TOTAL_WAIT_SECONDS)
+            # sehingga satu jawaban bisa memakan MENIT-AN saat provider sedang down.
+            if time.time() < self._total_failure_until:
+                self.stats["failed"] += 1
+                return self._total_failure_message()
+
             # Coba provider satu per satu. system & max_tokens dikirim per-request
             # sehingga request paralel dari thread berbeda tidak saling menimpa.
             # Urutan provider bersifat dinamis: provider yang baru kena rate-limit
@@ -224,6 +250,8 @@ class AIFallbackEngine:
 
                             self.stats["successful"] += 1
                             self.stats["provider_usage"][provider] += 1
+                            # Sukses → matikan circuit breaker (provider sudah pulih)
+                            self._total_failure_until = 0.0
 
                             # Only wrap with via tag if NOT using system_override (internal agent call)
                             if system_override:
@@ -275,15 +303,11 @@ class AIFallbackEngine:
                 if time.time() >= deadline:
                     break
 
+            # Nyalakan circuit breaker singkat: request berikutnya (termasuk agent
+            # lain di pipeline yang sama) gagal cepat tanpa mengulang retry penuh.
+            self._total_failure_until = time.time() + self._TOTAL_FAILURE_COOLDOWN
             self.stats["failed"] += 1
-            error_msg = (
-                "Maaf, semua AI provider sedang tidak tersedia saat ini. "
-                "Silakan coba lagi nanti.\n\n"
-                "Tips:\n"
-                "• Coba beberapa menit lagi (rate limit mungkin sudah reset)\n"
-                "• Gunakan perintah /status untuk melihat status sistem\n"
-                "• Pastikan API keys sudah diisi di file .env"
-            )
+            error_msg = self._total_failure_message()
             # Cache pesan error singkat agar request identik yang berbarengan
             # tidak ikut me-retry pipeline yang sedang down (lihat
             # _FAILURE_CACHE_TTL). Sukses berikutnya menimpa cache ini.
@@ -340,6 +364,17 @@ class AIFallbackEngine:
         return sorted(
             self.fallback_order,
             key=lambda p: (self._provider_cooldown.get(p, 0.0) > now, self._order_index.get(p, 0)),
+        )
+
+    def _total_failure_message(self) -> str:
+        """Pesan error standar saat semua provider gagal (dipakai beberapa jalur)."""
+        return (
+            "Maaf, semua AI provider sedang tidak tersedia saat ini. "
+            "Silakan coba lagi nanti.\n\n"
+            "Tips:\n"
+            "• Coba beberapa menit lagi (rate limit mungkin sudah reset)\n"
+            "• Gunakan perintah /status untuk melihat status sistem\n"
+            "• Pastikan API keys sudah diisi di file .env"
         )
 
     def _backoff_wait(self, provider: str, attempt: int, deadline: float) -> float:
@@ -518,10 +553,14 @@ class AIFallbackEngine:
             "max_tokens": max_tokens,
         }
 
+        # Jeda minimum antar REQUEST ke provider yang sama (paralel-safe) — dipanggil
+        # SEKALI per panggilan, BUKAN per model attempt. Sebelumnya di dalam loop
+        # model: satu generate() yang mencoba 20+ model (404 data policy) bisa tidur
+        # min_interval × 20 (OpenRouter 3s → 60s) HANYA untuk throttle.
+        self._throttle(provider)
+
         for model in models:
             payload["model"] = model
-            # Jeda minimum antar request ke provider yang sama (paralel-safe)
-            self._throttle(provider)
             try:
                 resp = requests.post(
                     config["url"],
@@ -548,6 +587,8 @@ class AIFallbackEngine:
                         # request berikutnya langsung skip model ini.
                         self._dead_models[model] = time.time()
                     logger.warning(f"{config['name']} error {resp.status_code} with {model}: {resp.text[:200]}")
+                    # Spacing kecil antar attempt gagal (anti self-429 burst)
+                    time.sleep(self._MODEL_ATTEMPT_SPACING)
                     continue
 
                 data = resp.json()
@@ -563,6 +604,7 @@ class AIFallbackEngine:
 
                 if "error" in data:
                     logger.warning(f"{config['name']} API error with {model}: {data['error']}")
+                    time.sleep(self._MODEL_ATTEMPT_SPACING)
                     continue
 
             except requests.exceptions.Timeout:
@@ -574,6 +616,7 @@ class AIFallbackEngine:
                 return None
             except Exception as e:
                 logger.warning(f"{config['name']} unexpected error with {model}: {e}")
+                time.sleep(self._MODEL_ATTEMPT_SPACING)
                 continue
 
         return None

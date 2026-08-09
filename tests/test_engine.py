@@ -246,6 +246,50 @@ class TestDeadModelBlacklist(unittest.TestCase):
 class TestThrottleAnd429Skip(unittest.TestCase):
     """Perketat beban rate limit: throttle antar request + 429 tidak di-retry."""
 
+    def test_total_failure_circuit_breaker_skips_retry(self):
+        """Setelah SEMUA provider gagal, generate() berikutnya (prompt berbeda,
+        mis. agent lain di pipeline yang sama) gagal CEPAT tanpa mengulang
+        retry penuh — mencegah kaskade 8 agent × budget 60s."""
+        eng = _make_engine()
+        calls = {"n": 0}
+
+        def fake_call(provider, prompt, system, max_tokens):
+            calls["n"] += 1
+            return None  # gagal total
+
+        eng._call_provider = fake_call
+        out1 = eng.generate("cb-1", use_cache=False, max_retries=1, max_total_wait=5)
+        self.assertIn("semua AI provider sedang tidak tersedia", out1)
+        self.assertGreaterEqual(calls["n"], 1)
+        first = calls["n"]
+
+        # Prompt BERBEDA — circuit breaker aktif → tidak ada panggilan provider baru
+        out2 = eng.generate("cb-2", use_cache=False, max_retries=1, max_total_wait=5)
+        self.assertIn("semua AI provider sedang tidak tersedia", out2)
+        self.assertEqual(calls["n"], first)
+
+    def test_circuit_breaker_resets_on_success(self):
+        """Cooldown total-failure hanya berlaku sementara — sukses menormalkannya."""
+        eng = _make_engine()
+        calls = {"n": 0}
+
+        def fake_call(provider, prompt, system, max_tokens):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None  # gagal pertama → nyalakan cooldown
+            return f"RESP[{system}][{max_tokens}]:{prompt}"
+
+        eng._call_provider = fake_call
+        out1 = eng.generate("cb-r-1", use_cache=False, max_retries=1, max_total_wait=5)
+        self.assertIn("semua AI provider", out1)
+        self.assertGreater(eng._total_failure_until, 0)  # cooldown aktif
+
+        # Simulasi cooldown lewat → request berikutnya mencoba lagi & sukses
+        eng._total_failure_until = 0.0
+        out2 = eng.generate("cb-r-2", use_cache=False, max_retries=1, max_total_wait=5)
+        self.assertIn("RESP", out2)
+        self.assertEqual(eng._total_failure_until, 0.0)  # sukses mematikan breaker
+
     def test_429_skips_provider_retries(self):
         """Setelah 429 (kuota akun habis), jangan retry provider yang sama —
         langsung pindah provider (1 request, bukan 3)."""

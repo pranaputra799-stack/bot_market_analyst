@@ -2,8 +2,16 @@
 Message templates untuk bot Telegram.
 Semua format balasan bot ada di sini untuk konsistensi.
 """
+import time
 from datetime import datetime
 from typing import Dict, Optional
+
+
+# Cache TTL hasil get_data_sources_status (detik): status data source melibatkan
+# panggilan jaringan (Yahoo/OANDA) yang bisa lambat — /status berulang tidak
+# boleh membayar network tiap kali. 120s = cukup segar untuk monitoring.
+_DATA_STATUS_CACHE: Dict[str, object] = {"ts": 0.0, "value": ""}
+_DATA_STATUS_TTL = 120.0
 
 
 # ===================== WELCOME & HELP =====================
@@ -198,7 +206,10 @@ def get_analysis_engine_status() -> str:
 
 
 def get_data_sources_status(market_data, macro_data, news_fetcher) -> str:
-    """Format status data sources."""
+    """Format status data sources (di-cache 120s — lihat _DATA_STATUS_CACHE)."""
+    now = time.time()
+    if now - float(_DATA_STATUS_CACHE["ts"]) < _DATA_STATUS_TTL:
+        return str(_DATA_STATUS_CACHE["value"])
     lines = []
 
     # OANDA (real-time forex & gold) — get_yahoo_data otomatis memakai OANDA
@@ -246,7 +257,10 @@ def get_data_sources_status(market_data, macro_data, news_fetcher) -> str:
     else:
         lines.append("  ⬜ FRED (belum dikonfigurasi)")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    _DATA_STATUS_CACHE["ts"] = now
+    _DATA_STATUS_CACHE["value"] = result
+    return result
 
 
 # ===================== ERROR MESSAGES =====================
