@@ -634,7 +634,12 @@ def run_webhook():
             try:
                 loop.add_signal_handler(sig, loop.stop)
             except (NotImplementedError, RuntimeError, ValueError):
-                pass  # Windows / loop non-main-thread tanpa add_signal_handler
+                # Windows / loop non-main-thread tanpa add_signal_handler.
+                # Shutdown hanya via Ctrl+C / kill paksa platform — sama seperti
+                # fallback PTB, tapi catat supaya tidak membingungkan saat debug.
+                logger.warning(
+                    f"Signal handler SIG {sig} tidak terpasang — shutdown graceful nonaktif."
+                )
         try:
             loop.run_forever()
         except KeyboardInterrupt:
