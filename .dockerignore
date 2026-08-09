@@ -25,7 +25,11 @@ bot.log
 *.log
 *.pkl
 data/*.db
-/data
+# CATATAN PENTING: JANGAN tambahkan baris `/data` di sini — pola itu
+# mengecualikan PAKET PYTHON `data/` (market_data, cache, database, dll)
+# dari image → bot crash saat start (ModuleNotFoundError: No module named
+# 'data'). Direktori runtime /data dibuat Dockerfile (RUN mkdir -p /data)
+# dan bukan bagian dari build context, jadi tidak perlu di-ignore.
 
 # Virtual env
 .venv
