@@ -33,6 +33,8 @@ class FakeApplication:
     def __init__(self):
         self.bot = telegram.Bot(token="123456789:AAFAKE")
         self.processed = []
+        # Meniru Application.running (property PTB 20.x) — true = siap proses
+        self.running = True
 
     async def process_update(self, update):
         self.processed.append(update)
@@ -165,6 +167,40 @@ class TestWebhookAiohttp(unittest.TestCase):
                 await runner.cleanup()
 
         self.assertEqual(asyncio.run(main()), 200)
+
+    def test_webhook_returns_503_until_application_ready(self):
+        """Regresi: server bind duluan (port terbuka) tapi application belum
+        siap → POST webhook 503 (Telegram retry), update TIDAK diproses.
+        """
+
+        async def main():
+            fake = FakeApplication()
+            fake.running = False  # masih initialize/start
+            app = main_mod.build_webhook_app(fake, self.token, self.secret)
+            runner = await self._serve(app)
+            base = f"http://127.0.0.1:{self.port}"
+            try:
+                async with aiohttp.ClientSession() as s:
+                    async with s.post(
+                        f"{base}/{self.token}",
+                        data=self._valid_payload(),
+                        headers={"Content-Type": "application/json",
+                                 "X-Telegram-Bot-Api-Secret-Token": self.secret},
+                        timeout=5,
+                    ) as r:
+                        status = r.status
+                # health TETAP 200 walau application belum siap
+                async with aiohttp.ClientSession() as s:
+                    async with s.get(f"{base}/health", timeout=5) as r:
+                        health = r.status
+                return status, health, len(fake.processed)
+            finally:
+                await runner.cleanup()
+
+        status, health, processed = asyncio.run(main())
+        self.assertEqual(status, 503, "Belum siap → Telegram harus retry (503)")
+        self.assertEqual(health, 200, "/health tetap 200 untuk port-scan Render")
+        self.assertEqual(processed, 0, "Update tidak boleh diproses sebelum siap")
 
 
 if __name__ == "__main__":

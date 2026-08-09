@@ -32,6 +32,7 @@ class _FakeApplication:
 
     def __init__(self):
         self.bot = _FakeBot()
+        self.running = True
         self.started = False
         self.stopped = False
         self.shutdown_called = False

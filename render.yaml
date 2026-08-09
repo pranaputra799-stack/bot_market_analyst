@@ -49,8 +49,11 @@ services:
       - key: OANDA_API_KEY
         sync: false
       # --- Tetap (nilai default aman; bisa di-override di dashboard) ---
+      # Webhook DIPAKSA: Render wajib mendeteksi port 0.0.0.0:PORT untuk
+      # deploy sukses (tanpa webhook server tidak bind port publik). URL
+      # otomatis dari RENDER_EXTERNAL_URL (config/settings.py).
       - key: BOT_RUN_MODE
-        value: auto
+        value: webhook
       - key: HEALTH_ENDPOINT_ENABLED
         value: "true"
       - key: LOG_TO_FILE

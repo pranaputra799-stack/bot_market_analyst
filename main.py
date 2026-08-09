@@ -565,6 +565,11 @@ def build_webhook_app(application, url_path: str, secret: Optional[str]):
             data = json.loads(await request.text())
         except Exception:
             return web.Response(status=400)
+        if not getattr(application, "running", True):
+            # Server sudah bind (port terbuka) tapi application belum siap
+            # (masih initialize/start) — minta Telegram retry nanti supaya
+            # update tidak hilang.
+            return web.Response(status=503)
         update = Update.de_json(data, application.bot)
         if update is not None:
             # Fire-and-forget: balas 200 SEGERA. Pipeline AI bisa >20 dtk — kalau
@@ -596,6 +601,21 @@ def run_webhook():
     from aiohttp import web
 
     logger.info(f"Starting bot in webhook mode on port {PORT}...")
+
+    # Validasi WEBHOOK_URL SEBELUM bind — di Render diisi otomatis
+    # (RENDER_EXTERNAL_URL), di JustRunMy manual. Kosong di mode webhook =
+    # salah konfigurasi: gagal dengan pesan jelas (main() akan idle, bukan
+    # crash-loop), bukan set_webhook(url="/<token>") yang menyesatkan.
+    if not WEBHOOK_URL:
+        logger.error("=" * 60)
+        logger.error("WEBHOOK_URL KOSONG tapi mode webhook terpilih!")
+        logger.error("Render: cek RENDER_EXTERNAL_URL terbaca (IS_RENDER).")
+        logger.error(
+            "JustRunMy: set WEBHOOK_URL=https://<app>.justrunmy.app "
+            "+ PORT sesuai mapping HTTPS di panel + BOT_RUN_MODE=webhook."
+        )
+        logger.error("=" * 60)
+        raise RuntimeError("WEBHOOK_URL kosong di mode webhook")
     logger.info(f"Webhook URL: {WEBHOOK_URL}/{TELEGRAM_TOKEN[:8]}...")
 
     application = build_application()
@@ -603,17 +623,11 @@ def run_webhook():
     asyncio.set_event_loop(loop)
     runner = None
     try:
-        # Urutan orkestrasi sama seperti Application.run_webhook:
-        # initialize (→ post_init) → start → daftar webhook → serve → idle.
-        loop.run_until_complete(application.initialize())
-        loop.run_until_complete(application.start())
-        loop.run_until_complete(
-            application.bot.set_webhook(
-                url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}",
-                secret_token=WEBHOOK_SECRET,
-            )
-        )
-
+        # 1) BIND SERVER PALING DULU — port langsung terbuka di 0.0.0.0:PORT
+        #    agar port-scan Render & health check /health sukses TANPA menunggu
+        #    initialize/set_webhook (butuh network round-trip, bisa 3-10 dtk).
+        #    Sampai application siap, POST webhook dibalas 503 (Telegram retry
+        #    otomatis, update tidak hilang) dan GET /health tetap 200.
         app = build_webhook_app(application, TELEGRAM_TOKEN, WEBHOOK_SECRET)
         runner = web.AppRunner(app, access_log=None)
         loop.run_until_complete(runner.setup())
@@ -622,6 +636,19 @@ def run_webhook():
         logger.info(
             f"Webhook aiohttp aktif: POST /<token> + GET /health di "
             f"http://{WEBHOOK_LISTEN}:{PORT}"
+        )
+
+        # 2) initialize (→ post_init) → start → daftar webhook ke Telegram.
+        loop.run_until_complete(application.initialize())
+        loop.run_until_complete(application.start())
+        loop.run_until_complete(
+            application.bot.set_webhook(
+                url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}",
+                secret_token=WEBHOOK_SECRET,
+            )
+        )
+        logger.info(
+            f"Webhook terdaftar di Telegram: {WEBHOOK_URL}/{TELEGRAM_TOKEN[:8]}..."
         )
 
         # Blok sampai sinyal stop. PTB 20.7 TIDAK punya Application.idle()
