@@ -245,11 +245,46 @@ fallback ke cek proses `main.py` masih hidup — jadi container tidak pernah
 salah ditandai unhealthy karena konfigurasi itu. Platform yang mendukung
 (auto-restart saat unhealthy) akan me-restart container yang crash.
 
-### Railway / Render / Koyeb
+### Render (direkomendasikan — free 512MB, always-on dengan keep-alive)
+
+Render meng-inject `RENDER_EXTERNAL_URL` & `PORT` otomatis → `IS_RENDER` terdeteksi
+→ bot otomatis jalan mode **webhook** (tidak perlu set `WEBHOOK_URL` manual).
+
+**Blueprint `render.yaml` sudah disiapkan di root repo:**
+
+1. Push repo ke GitHub:
+
+   ```bash
+   git remote add origin https://github.com/<user>/<repo>.git
+   git push -u origin master
+   ```
+
+2. Render Dashboard → **New → Blueprint** → pilih repo → **Apply**
+   (Render membaca `render.yaml`, build Dockerfile, buat service free).
+
+3. Isi secret env di dashboard Render → Environment:
+   - `TELEGRAM_BOT_TOKEN` (wajib) + `OPENROUTER_API_KEY` (disarankan)
+   - `SUPABASE_URL` / `SUPABASE_KEY` (opsional), `OANDA_API_KEY` (opsional)
+
+4. **Keep-alive (penting):** free tier Render tidur setelah ~15 menit tanpa
+   traffic masuk. Buat monitor **UptimeRobot** (gratis) → tipe HTTP(S) → URL
+   `https://<app>.onrender.com/` → interval **5 menit**. Pinging ini mencegah
+   bot tidur (Telegram webhook + pinger = selalu bangun). Tanpa ini, bot
+   cold-start ±1 menit saat pesan masuk pertama setelah periode diam.
+
+Catatan penting:
+- `healthCheckPath` di `render.yaml` sengaja TIDAK di-set — server webhook
+  python-telegram-bot (tornado) tidak punya route `/health` (404); health
+  check Render justru memicu restart-loop.
+- Endpoint `/health` internal tetap jalan di `127.0.0.1:8090` (Docker
+  healthcheck & diagnosis lokal).
+
+### Railway / Koyeb
 
 - `IS_CLOUD` terdeteksi otomatis dari env var platform → bot jalan mode **webhook**
-- `PORT` & `WEBHOOK_URL` diisi otomatis oleh platform (tanpa set manual)
-- Docker: `git push origin deploy` atau push ke registry lalu deploy
+- `PORT` & `WEBHOOK_URL` diisi otomatis oleh platform
+- Koyeb free: tidur setelah ±1 jam tanpa traffic masuk — pakai webhook +
+  pinger keep-alive (sama seperti Render). Railway: tidak ada free tier permanen.
 
 ## 🧪 Testing
 

@@ -1,0 +1,56 @@
+# ============================================================
+# render.yaml — Render Blueprint (deploy otomatis dari GitHub)
+# ============================================================
+# Cara pakai:
+#   1. Push repo ini ke GitHub:
+#        git remote add origin https://github.com/<user>/<repo>.git
+#        git push -u origin master
+#   2. Render Dashboard → New → Blueprint → pilih repo → Apply.
+#      Render membaca file ini, build Dockerfile, dan buat service free.
+#   3. Isi env secret (TELEGRAM_BOT_TOKEN dll) di dashboard Render →
+#      Environment. Variabel bertanda `sync: false` TIDAK boleh kosong:
+#      tanpa TELEGRAM_BOT_TOKEN bot hanya idle (tidak crash-loop).
+#
+# Mode: WEBHOOK OTOMATIS. Render meng-inject RENDER_EXTERNAL_URL & PORT →
+# config/settings.py mendeteksi IS_RENDER → main.py memilih mode webhook.
+# Tidak perlu menyetel WEBHOOK_URL / PORT manual.
+#
+# PENTING #1: `healthCheckPath` sengaja TIDAK di-set. Server webhook
+# python-telegram-bot (tornado) hanya melayani path token — /health akan
+# 404 → Render menandai container unhealthy → restart-loop.
+#   (Endpoint /health asli tetap jalan di 127.0.0.1:8090 untuk Docker
+#    healthcheck & diagnosis lokal — bukan untuk probe publik Render.)
+#
+# PENTING #2: free tier Render tidur setelah ~15 menit tanpa traffic masuk.
+# Buat monitor UptimeRobot (gratis) → HTTP(S) → https://<app>.onrender.com/
+# interval 5 menit agar bot selalu bangun (lihat README bagian Render).
+# ============================================================
+services:
+  - type: web
+    name: marketai-bot
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    numInstances: 1
+    autoDeploy: true
+    # healthCheckPath: JANGAN di-set (lihat catatan #1 di atas)
+    envVars:
+      # --- Wajib (isi manual di dashboard; sync: false = secret) ---
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      # --- Opsional ---
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: OANDA_API_KEY
+        sync: false
+      # --- Tetap (nilai default aman; bisa di-override di dashboard) ---
+      - key: BOT_RUN_MODE
+        value: auto
+      - key: HEALTH_ENDPOINT_ENABLED
+        value: "true"
+      - key: LOG_TO_FILE
+        value: "0"
