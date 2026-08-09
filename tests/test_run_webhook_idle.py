@@ -57,6 +57,45 @@ class _FakeApplication:
 
 
 class TestRunWebhookIdle(unittest.TestCase):
+    def test_setup_failure_idles_instead_of_crashing(self):
+        """Regresi: set_webhook gagal (mis. Telegram API down) TIDAK boleh
+        crash-loop. Server sudah bind — biarkan hidup (idle) untuk diagnosa,
+        bukan melempar exception ke main() yang memicu restart berulang.
+        """
+
+        class FailingBot(_FakeBot):
+            async def set_webhook(self, url=None, secret_token=None):
+                raise RuntimeError("Telegram API down")
+
+        class FailingApp(_FakeApplication):
+            def __init__(self):
+                super().__init__()
+                self.bot = FailingBot()
+
+        app = FailingApp()
+        result = {}
+
+        def _run():
+            try:
+                with mock.patch.object(main_mod, "build_application", return_value=app), \
+                        mock.patch.object(main_mod, "WEBHOOK_URL", "http://example.com"), \
+                        mock.patch.object(main_mod, "WEBHOOK_LISTEN", "127.0.0.1"), \
+                        mock.patch.object(main_mod, "PORT", 0), \
+                        mock.patch.object(main_mod, "WEBHOOK_SECRET", "sec-123456"), \
+                        mock.patch.object(main_mod, "TELEGRAM_TOKEN", "123456789:AAFAKE"):
+                    main_mod.run_webhook()
+                result["ok"] = True
+            except Exception as e:  # pragma: no cover - detail error
+                result["error"] = repr(e)
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout=8)
+
+        self.assertFalse(t.is_alive(), "set_webhook gagal harus idle (block), bukan crash")
+        self.assertNotIn("error", result, result.get("error", ""))
+        self.assertTrue(result.get("ok"), "run_webhook tidak boleh melempar ke main()")
+
     def test_run_webhook_blocks_and_cleans_up_without_idle(self):
         app = _FakeApplication()
         result = {}

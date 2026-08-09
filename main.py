@@ -639,17 +639,30 @@ def run_webhook():
         )
 
         # 2) initialize (→ post_init) → start → daftar webhook ke Telegram.
-        loop.run_until_complete(application.initialize())
-        loop.run_until_complete(application.start())
-        loop.run_until_complete(
-            application.bot.set_webhook(
-                url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}",
-                secret_token=WEBHOOK_SECRET,
+        # Kegagalan SETUP (bukan runtime) TIDAK boleh crash-loop: server sudah
+        # bind, biarkan hidup (idle) agar port Render tetap terbuka & /health
+        # 200 untuk diagnosa — Telegram belum punya webhook (update tak masuk)
+        # sampai env diperbaiki + redeploy.
+        try:
+            loop.run_until_complete(application.initialize())
+            loop.run_until_complete(application.start())
+            loop.run_until_complete(
+                application.bot.set_webhook(
+                    url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}",
+                    secret_token=WEBHOOK_SECRET,
+                )
             )
-        )
-        logger.info(
-            f"Webhook terdaftar di Telegram: {WEBHOOK_URL}/{TELEGRAM_TOKEN[:8]}..."
-        )
+        except Exception:
+            global BOT_STARTED
+            BOT_STARTED = False
+            logger.exception(
+                "Setup webhook gagal (initialize/start/set_webhook) — server "
+                "dibiarkan hidup untuk diagnosa; perbaiki env lalu redeploy."
+            )
+        else:
+            logger.info(
+                f"Webhook terdaftar di Telegram: {WEBHOOK_URL}/{TELEGRAM_TOKEN[:8]}..."
+            )
 
         # Blok sampai sinyal stop. PTB 20.7 TIDAK punya Application.idle()
         # (method dihapus; run_polling/run_webhook bawaan memakai loop.run_forever
@@ -699,8 +712,11 @@ async def _token_valid_async(token: str) -> bool:
     from telegram.error import InvalidToken, TelegramError
     try:
         # PTB 20.x: timeout dioper per-method (bukan di Bot.__init__).
+        # Timeout DIKECILKAN (5s): token yang ditolak gagal cepat (HTTP 401),
+        # jadi timeout panjang hanya berguna untuk jaringan hang — dan justru
+        # menunda bind port webhook melewati jendela port-scan Render.
         bot = Bot(token=token)
-        me = await bot.get_me(read_timeout=15, connect_timeout=15)
+        me = await bot.get_me(read_timeout=5, connect_timeout=5)
         logger.info(f"Token valid — bot @{me.username} (id {me.id})")
         return True
     except InvalidToken:
