@@ -238,8 +238,28 @@ else:
 
 WEBHOOK_LISTEN = os.getenv("WEBHOOK_LISTEN", "0.0.0.0")
 
-# Secret token untuk validasi webhook
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", TELEGRAM_TOKEN[:64] if TELEGRAM_TOKEN else "")
+# Secret token untuk validasi webhook.
+# Telegram hanya mengizinkan karakter A-Z, a-z, 0-9, _ dan - pada secret
+# (lihat setWebhook docs). Default LAMA = TELEGRAM_TOKEN[:64] — token berisi
+# titik dua ':' → Telegram menolak dengan "Secret token contains unallowed
+# characters". Sekarang: (1) env WEBHOOK_SECRET di-sanitasi (karakter tak
+# valid dibuang), (2) bila kosong, diturunkan deterministik dari sha256 token
+# (hex = 0-9a-f, dijamin valid, 64 karakter). Konsisten dengan validasi header
+# X-Telegram-Bot-Api-Secret-Token di build_webhook_app (sama-sama baca konstan ini).
+import hashlib
+import re
+
+
+def _safe_webhook_secret(raw: str) -> str:
+    """Sisakan hanya karakter yang diizinkan Telegram pada secret token."""
+    return re.sub(r"[^A-Za-z0-9_-]", "", raw)[:256]
+
+
+_env_secret = _safe_webhook_secret(os.getenv("WEBHOOK_SECRET", ""))
+WEBHOOK_SECRET = (
+    _env_secret
+    or hashlib.sha256(TELEGRAM_TOKEN.encode("utf-8")).hexdigest()[:64]
+)
 
 # ===================== LOGGING =====================
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
