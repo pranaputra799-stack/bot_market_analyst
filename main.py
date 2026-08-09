@@ -650,9 +650,9 @@ async def _token_valid_async(token: str) -> bool:
     """
     from telegram import Bot
     from telegram.error import InvalidToken, TelegramError
-    bot = Bot(token=token)
     try:
         # PTB 20.x: timeout dioper per-method (bukan di Bot.__init__).
+        bot = Bot(token=token)
         me = await bot.get_me(read_timeout=15, connect_timeout=15)
         logger.info(f"Token valid — bot @{me.username} (id {me.id})")
         return True
