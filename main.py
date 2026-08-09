@@ -13,6 +13,7 @@ import asyncio
 import logging
 import sys
 import os
+import time as _time  # alias: nama `time` dipakai datetime.time (scheduler)
 from datetime import datetime, time, timedelta
 
 try:
@@ -78,6 +79,11 @@ logging.basicConfig(
     handlers=log_handlers,
 )
 logger = logging.getLogger(__name__)
+
+# True setelah post_init selesai (bot siap menerima update). Dipakai untuk
+# membedakan kegagalan STARTUP (idle, hindari crash-loop) vs kegagalan RUNTIME
+# (biarkan platform me-restart — health tidak boleh tampak sehat saat bot mati).
+BOT_STARTED = False
 
 # ===================== ERROR TRACKING (Sentry) =====================
 # Aktif hanya jika SENTRY_DSN diisi di .env / dashboard deploy.
@@ -156,6 +162,9 @@ async def post_init(application: Application):
         )
     except Exception as e:
         logger.warning(f"Gagal memuat state persisten dari database: {e}")
+
+    global BOT_STARTED
+    BOT_STARTED = True
 
 
 async def morning_brief_callback(context):
@@ -541,24 +550,69 @@ def run_webhook():
     )
 
 
+async def _token_valid_async(token: str) -> bool:
+    """Cek token Telegram valid via getMe (tanpa crash). Hanya Unauthorized
+    yang dianggap fatal; error jaringan/sementara → lanjut (bot tetap mencoba
+    jalan dan error nyata tampil di log)."""
+    from telegram import Bot
+    from telegram.error import Unauthorized
+    bot = Bot(token=token, read_timeout=15, connect_timeout=15)
+    try:
+        me = await bot.get_me()
+        logger.info(f"Token valid — bot @{me.username} (id {me.id})")
+        return True
+    except Unauthorized:
+        logger.error("Token Telegram DITOLAK (Unauthorized) — cek token di @BotFather.")
+        return False
+    except Exception as e:
+        logger.warning(f"Gagal memvalidasi token (jaringan/sementara): {e}")
+        return True
+    finally:
+        try:
+            await bot.close()
+        except Exception:
+            pass
+
+
+def _idle_forever() -> None:
+    """Jaga proses tetap hidup (health server daemon tetap melayani /health).
+
+    Dipakai saat konfigurasi kritis (token) bermasalah — mencegah crash-loop
+    restart di platform (JustRunMy dkk). Diagnosis lewat log & /health tetap
+    tersedia; perbaiki environment lalu redeploy.
+    """
+    logger.error(
+        "Bot TIDAK berjalan (lihat error di atas). Proses dijaga hidup agar "
+        "container tidak restart-loop. Perbaiki environment lalu redeploy."
+    )
+    try:
+        while True:
+            _time.sleep(3600)
+    except KeyboardInterrupt:
+        pass
+
+
 def main():
     """Entry point utama."""
-    # Validate token
-    if not TELEGRAM_TOKEN:
-        logger.error(
-            "TELEGRAM_BOT_TOKEN tidak ditemukan!\n"
-            "Buat file .env dengan isi:\n"
-            "TELEGRAM_BOT_TOKEN=your_token_here"
-        )
-        sys.exit(1)
-
-    # Health endpoint (aiohttp daemon thread, port terpisah HEALTH_PORT) untuk
-    # uptime monitoring / Docker healthcheck. Opsional — nonaktifkan via
-    # HEALTH_ENDPOINT_ENABLED=false. Gagal start tidak menghentikan bot.
+    # Health endpoint DULU (daemon thread) — selalu hidup supaya platform tidak
+    # men-restart berulang saat konfigurasi salah (endpoint /health tetap OK).
     try:
         start_health_server()
     except Exception as e:
         logger.warning(f"Health endpoint gagal diinisialisasi: {e}")
+
+    # Validasi token: kosong ATAU ditolak Telegram → JANGAN sys.exit (itu yang
+    # memicu crash-loop restart). Log error jelas + proses tetap hidup.
+    if not TELEGRAM_TOKEN:
+        logger.error("=" * 60)
+        logger.error("TELEGRAM_BOT_TOKEN TIDAK DITEMUKAN di environment!")
+        logger.error("Isi env TELEGRAM_BOT_TOKEN di panel JustRunMy lalu redeploy.")
+        logger.error("=" * 60)
+        _idle_forever()
+        return
+    if not asyncio.run(_token_valid_async(TELEGRAM_TOKEN)):
+        _idle_forever()
+        return
 
     # Pilih mode: BOT_RUN_MODE eksplisit > auto-detect (cloud / WEBHOOK_URL) >
     # polling. Flag --webhook tetap didukung sebagai override cepat.
@@ -571,14 +625,32 @@ def main():
             f"Webhook mode terpilih (BOT_RUN_MODE={BOT_RUN_MODE!r}, "
             f"IS_CLOUD={IS_CLOUD}, WEBHOOK_URL={'set' if WEBHOOK_URL else 'kosong'})"
         )
-        run_webhook()
+        try:
+            run_webhook()
+        except Exception:
+            if BOT_STARTED:
+                # Kegagalan runtime setelah bot berjalan — biarkan platform
+                # me-restart (health tidak boleh tampak sehat saat bot mati).
+                logger.exception("Bot crash saat berjalan — platform akan me-restart")
+                raise
+            logger.exception("Webhook mode gagal start — bot tidak jalan")
+            _idle_forever()
     else:
         logger.info(
             f"Polling mode terpilih (BOT_RUN_MODE={BOT_RUN_MODE!r}, "
             f"WEBHOOK_URL={'set' if WEBHOOK_URL else 'kosong'}) — "
             "long polling jalan tanpa perlu port publik/URL."
         )
-        run_polling()
+        try:
+            run_polling()
+        except Exception:
+            if BOT_STARTED:
+                # Kegagalan runtime setelah bot berjalan — biarkan platform
+                # me-restart (health tidak boleh tampak sehat saat bot mati).
+                logger.exception("Bot crash saat berjalan — platform akan me-restart")
+                raise
+            logger.exception("Polling mode gagal start — bot tidak jalan")
+            _idle_forever()
 
 
 if __name__ == "__main__":

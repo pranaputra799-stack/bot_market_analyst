@@ -259,10 +259,10 @@ HEALTH_PORT = int(os.getenv("HEALTH_PORT", "8090"))
 # pada port ini.
 HEALTH_BIND = os.getenv("HEALTH_BIND", "127.0.0.1")
 
-# Nonaktifkan file logging di cloud (container temporary)
+# File logging default NONAKTIF — log cukup ke stdout (ditangkap panel
+# platform: JustRunMy/Railway/Render). Menghindari bot.log tumbuh tak
+# terkendali di filesystem container (JustRunMy tidak terdeteksi IS_CLOUD,
+# jadi default lama True justru menulis file di tiap start).
+# Aktifkan eksplisit bila mau file lokal: LOG_TO_FILE=1.
 # Catatan: bool("0") bernilai True, jadi parsing manual diperlukan.
-LOG_TO_FILE = (
-    os.getenv("LOG_TO_FILE", "0").lower() in ("1", "true", "yes")
-    if IS_CLOUD
-    else True
-)
+LOG_TO_FILE = os.getenv("LOG_TO_FILE", "0").lower() in ("1", "true", "yes")

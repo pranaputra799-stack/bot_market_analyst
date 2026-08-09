@@ -12,10 +12,14 @@ FROM python:3.11-slim
 WORKDIR /app/bot-telegram
 
 # Environment variables
+# Batasi glibc malloc arena — hemat RSS 10-30MB untuk proses Python
+# multithread (menghindari OOM-restart di container memory kecil).
+# Catatan: komentar TIDAK boleh berada di dalam instruksi ENV multi-line.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONHASHSEED=random \
-    PYTHONPATH=/app/bot-telegram
+    PYTHONPATH=/app/bot-telegram \
+    MALLOC_ARENA_MAX=2
 
 # Copy requirements first (Docker layer caching)
 COPY requirements.txt .
@@ -37,7 +41,7 @@ EXPOSE 8080
 # dinonaktifkan (HEALTH_ENDPOINT_ENABLED=false), fallback ke cek proses
 # utama (main.py) masih hidup. Exit 0 = sehat, 1 = tidak sehat → platform
 # (JustRunMy/Railway) bisa otomatis restart container yang crash.
-HEALTHCHECK --interval=60s --timeout=10s --start-period=40s --retries=3 \
+HEALTHCHECK --interval=60s --timeout=10s --start-period=90s --retries=4 \
   CMD ["python", "utils/healthcheck.py"]
 
 # Jalankan bot dari WORKDIR.

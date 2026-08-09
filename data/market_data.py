@@ -12,11 +12,11 @@ OANDA tidak terkonfigurasi? Semua instrumen otomatis kembali ke Yahoo Finance
 """
 import asyncio
 import logging
+import threading
 import time
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
-import yfinance as yf
 import requests
 
 from data.http_session import get_aiohttp_session
@@ -35,20 +35,58 @@ from data.ccxt_client import get_crypto_ticker, get_crypto_ohlcv, CRYPTO_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
-# Session HTTP dengan User-Agent browser. Hanya dipakai untuk yfinance 0.x
-# (berbasis requests polos yang mudah diblokir Yahoo). yfinance 1.x SUDAH
-# memakai curl_cffi session yang meng-impersonasi Chrome secara default —
-# menggantinya dengan requests.Session justru menurunkan proteksi anti-429.
-_YF_MAJOR_VERSION = int(yf.__version__.split(".")[0])
-_YF_SESSION = requests.Session()
-_YF_SESSION.headers.update({
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-    ),
-    "Accept": "*/*",
-    "Accept-Language": "en-US,en;q=0.9",
-})
+# yfinance di-load LAZY (~100MB pandas ikut terbawa) — hanya saat data Yahoo
+# benar-benar diminta. Startup bot jadi jauh lebih ringan (krusial di container
+# memory kecil seperti free tier JustRunMy/Railway yang OOM-restart bila RSS
+# melewati limit).
+_yf = None
+_yf_lock = threading.Lock()
+_yf_session = None
+
+
+def _get_yf():
+    """Muat modul yfinance sekali (lazy, thread-safe). None bila tidak terpasang."""
+    global _yf
+    if _yf is None:
+        with _yf_lock:
+            if _yf is None:
+                try:
+                    import yfinance as _yf_mod  # type: ignore
+                    _yf = _yf_mod
+                except ImportError:  # pragma: no cover - yfinance dependency keras
+                    _yf = None
+    return _yf
+
+
+def _get_yf_context():
+    """Siapkan (yf_module, session) untuk Ticker — versi-aware, di-cache.
+
+    Session HTTP dengan User-Agent browser hanya dipakai untuk yfinance 0.x
+    (berbasis requests polos yang mudah diblokir Yahoo). yfinance 1.x SUDAH
+    memakai curl_cffi session yang meng-impersonasi Chrome secara default —
+    menggantinya dengan requests.Session justru menurunkan proteksi anti-429.
+    """
+    global _yf_session
+    yf_mod = _get_yf()
+    if yf_mod is None:
+        return None, None
+    major = int(yf_mod.__version__.split(".")[0])
+    if major == 0:
+        if _yf_session is None:
+            with _yf_lock:
+                if _yf_session is None:
+                    _yf_session = requests.Session()
+                    _yf_session.headers.update({
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/126.0.0.0 Safari/537.36"
+                        ),
+                        "Accept": "*/*",
+                        "Accept-Language": "en-US,en;q=0.9",
+                    })
+        return yf_mod, _yf_session
+    return yf_mod, None
 
 
 class MarketDataAggregator:
@@ -226,14 +264,17 @@ class MarketDataAggregator:
             return cached_data
 
         try:
-            if _YF_MAJOR_VERSION == 0:
+            yf_mod, yf_session = _get_yf_context()
+            if yf_mod is None:
+                return {"source": "Yahoo", "symbol": symbol, "error": "yfinance not installed"}
+            if yf_session is not None:
                 # yfinance 0.x: pakai session dengan User-Agent browser
                 # (param session tersedia sejak 0.2.41).
-                ticker = yf.Ticker(symbol, session=_YF_SESSION)
+                ticker = yf_mod.Ticker(symbol, session=yf_session)
             else:
                 # yfinance 1.x: session default sudah curl_cffi (impersonasi
                 # Chrome) — biarkan apa adanya agar anti-429 tetap aktif.
-                ticker = yf.Ticker(symbol)
+                ticker = yf_mod.Ticker(symbol)
             hist = ticker.history(period=period, interval=interval)
 
             # Ambil data teknikal dari history

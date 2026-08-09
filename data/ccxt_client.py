@@ -25,10 +25,25 @@ import threading
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
-try:
-    import ccxt  # type: ignore
-except ImportError:  # pragma: no cover - jalur fallback bila ccxt belum terpasang
-    ccxt = None
+# ccxt di-load LAZY (hanya saat harga/OHLCV crypto diminta) — library ini
+# ~40MB RAM + ~1 detik import. Tidak perlu membebani startup bot di container
+# kecil (free tier yang OOM-restart bila RSS melewati limit memori).
+_ccxt = None
+_ccxt_lock = threading.Lock()
+
+
+def _get_ccxt():
+    """Muat modul ccxt sekali (lazy, thread-safe). None bila tidak terpasang."""
+    global _ccxt
+    if _ccxt is None:
+        with _ccxt_lock:
+            if _ccxt is None:
+                try:
+                    import ccxt as _ccxt_mod  # type: ignore
+                    _ccxt = _ccxt_mod
+                except ImportError:  # pragma: no cover - jalur fallback
+                    _ccxt = None
+    return _ccxt
 
 from data.cache import cache
 
@@ -78,6 +93,9 @@ _exchanges_lock = threading.Lock()
 
 def _get_exchange(exchange_id: str) -> object:
     """Dapatkan instance exchange (lazy init + cache, thread-safe)."""
+    ccxt = _get_ccxt()
+    if ccxt is None:
+        return None
     with _exchanges_lock:
         if exchange_id not in _exchanges:
             exchange_cls = getattr(ccxt, exchange_id)
@@ -138,7 +156,7 @@ def get_crypto_ticker(yahoo_symbol: str) -> Optional[Dict]:
         atau None bila ccxt tidak terpasang / semua exchange gagal (caller
         fallback ke Yahoo).
     """
-    if ccxt is None:
+    if _get_ccxt() is None:
         return None
     info = CRYPTO_SYMBOLS.get(yahoo_symbol)
     if not info:
@@ -227,7 +245,7 @@ def get_crypto_ohlcv(yahoo_symbol: str, interval: str = "1d", limit: int = 60) -
         List {date, open, high, low, close, volume} (kronologis naik), atau []
         bila ccxt tidak terpasang / semua exchange gagal (caller fallback Yahoo).
     """
-    if ccxt is None:
+    if _get_ccxt() is None:
         return []
     info = CRYPTO_SYMBOLS.get(yahoo_symbol)
     if not info:
