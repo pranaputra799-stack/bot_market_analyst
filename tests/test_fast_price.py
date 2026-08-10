@@ -70,8 +70,8 @@ class TestDetectFastPriceQuery(unittest.TestCase):
         self.assertIsNone(detect_fast_price_query(""))
         self.assertIsNone(detect_fast_price_query(None))
 
-    def test_chart_command_dilewati(self):
-        # /chart ditangani command handler, bukan fast path pesan
+    def test_teks_chart_dilewati(self):
+        # Teks "chart ..." bukan pertanyaan harga sederhana — bukan fast path
         self.assertIsNone(detect_fast_price_query("chart eurusd"))
 
 

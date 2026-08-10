@@ -11,13 +11,12 @@ Each scenario includes probability, catalysts, and impact assessment.
 """
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from analysis.prompts import SCENARIOS_SYSTEM, SCENARIOS_TEMPLATE
-from data.cache import clean_json_response
+from data.cache import parse_json_payload, extract_list_items
 
 logger = logging.getLogger(__name__)
 
@@ -101,25 +100,23 @@ class ScenariosAgent:
         """Parse LLM response into Scenario list."""
         scenarios = []
 
-        try:
-            text = clean_json_response(response)
-            data = json.loads(text)
-            # `or default` — LLM boleh mengembalikan null eksplisit (sesuai
-            # aturan anti-halusinasi "isi null jika tidak ada").
-            items = data.get("scenarios") or data.get("results") or []
+        # json.loads yang TIDAK pernah raise — model kadang mengembalikan JSON
+        # array langsung (bukan {"scenarios": [...]}); extract_list_items
+        # menormalisasi kedua bentuk, dan payload invalid cukup menghasilkan []
+        # (default 3 skenario dipakai, pipeline tidak pernah crash).
+        data = parse_json_payload(response)
+        items = extract_list_items(data, "scenarios", "results")
 
-            for item in items:
-                if isinstance(item, dict):
-                    scenarios.append(Scenario(
-                        name=item.get("name") or "Scenario",
-                        description=item.get("description") or "",
-                        # is not None — jangan ubah 0 (probabilitas 0% yang sah)
-                        probability=min(100, max(0, int(item.get("probability") if item.get("probability") is not None else 33))),
-                        key_catalysts=item.get("key_catalysts") or [],
-                        impact_level=item.get("impact_level") or "medium",
-                    ))
-        except (json.JSONDecodeError, IndexError, ValueError) as e:
-            logger.warning(f"Failed to parse scenarios: {e}")
+        for item in items:
+            if isinstance(item, dict):
+                scenarios.append(Scenario(
+                    name=item.get("name") or "Scenario",
+                    description=item.get("description") or "",
+                    # is not None — jangan ubah 0 (probabilitas 0% yang sah)
+                    probability=min(100, max(0, int(item.get("probability") if item.get("probability") is not None else 33))),
+                    key_catalysts=item.get("key_catalysts") or [],
+                    impact_level=item.get("impact_level") or "medium",
+                ))
 
         # Ensure we have exactly 3 scenarios
         if not scenarios:

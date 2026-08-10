@@ -14,13 +14,12 @@ Identifies:
 """
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from analysis.prompts import RISK_SYSTEM, RISK_TEMPLATE
-from data.cache import clean_json_response
+from data.cache import parse_json_payload
 
 logger = logging.getLogger(__name__)
 
@@ -181,17 +180,16 @@ class RiskGates:
 
     def _parse_response(self, response: str) -> Optional[Dict]:
         """Parse LLM response into risk assessment dict."""
-        try:
-            text = clean_json_response(response)
-            data = json.loads(text)
-            # `or default` — LLM boleh mengembalikan null eksplisit (sesuai
-            # aturan anti-halusinasi "isi null jika tidak ada").
-            return {
-                "overall_risk_level": data.get("overall_risk_level") or "moderate",
-                "risk_factors": data.get("risk_factors") or [],
-                "catalyst_calendar": data.get("catalyst_calendar") or [],
-                "summary": data.get("summary") or "",
-            }
-        except (json.JSONDecodeError, IndexError) as e:
-            logger.warning(f"Failed to parse risk assessment: {e}")
+        # json.loads yang TIDAK pernah raise; payload list/non-dict → None
+        # (pemanggil memakai penilaian algoritmik — pipeline tidak crash).
+        data = parse_json_payload(response)
+        if not isinstance(data, dict):
             return None
+        # `or default` — LLM boleh mengembalikan null eksplisit (sesuai
+        # aturan anti-halusinasi "isi null jika tidak ada").
+        return {
+            "overall_risk_level": data.get("overall_risk_level") or "moderate",
+            "risk_factors": data.get("risk_factors") or [],
+            "catalyst_calendar": data.get("catalyst_calendar") or [],
+            "summary": data.get("summary") or "",
+        }

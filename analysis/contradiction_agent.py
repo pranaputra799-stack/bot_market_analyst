@@ -10,13 +10,12 @@ Cross-checks:
 """
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from analysis.prompts import CONTRADICTION_SYSTEM, CONTRADICTION_TEMPLATE
-from data.cache import clean_json_response
+from data.cache import parse_json_payload, extract_list_items
 
 logger = logging.getLogger(__name__)
 
@@ -101,23 +100,21 @@ class ContradictionAgent:
         """Parse LLM response into Contradiction list."""
         contradictions = []
 
-        try:
-            text = clean_json_response(response)
-            data = json.loads(text)
-            # `or default` — LLM boleh mengembalikan null eksplisit (sesuai
-            # aturan anti-halusinasi "isi null jika tidak ada").
-            items = data.get("contradictions") or []
+        # json.loads yang TIDAK pernah raise — model kadang mengembalikan JSON
+        # array langsung (bukan {"contradictions": [...]}); extract_list_items
+        # menormalisasi kedua bentuk, dan payload invalid cukup menghasilkan []
+        # (tidak pernah mematikan pipeline).
+        data = parse_json_payload(response)
+        items = extract_list_items(data, "contradictions", "results")
 
-            for item in items:
-                if isinstance(item, dict):
-                    contradictions.append(Contradiction(
-                        description=item.get("description") or item.get("contradiction") or "",
-                        severity=item.get("severity") or "low",
-                        sources=item.get("sources") or ["llm_analysis"],
-                        impact=item.get("impact") or "",
-                    ))
-        except (json.JSONDecodeError, IndexError) as e:
-            logger.warning(f"Failed to parse contradictions: {e}")
+        for item in items:
+            if isinstance(item, dict):
+                contradictions.append(Contradiction(
+                    description=item.get("description") or item.get("contradiction") or "",
+                    severity=item.get("severity") or "low",
+                    sources=item.get("sources") or ["llm_analysis"],
+                    impact=item.get("impact") or "",
+                ))
 
         return contradictions
 

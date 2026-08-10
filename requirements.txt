@@ -26,13 +26,6 @@ tiktoken>=0.7.0
 # longgar. Bila gagal, data layer otomatis fallback ke Yahoo.
 ccxt>=4.0,<5.0
 
-# Candlestick chart profesional (dark theme, volume, MA overlay) — pengganti
-# penggambaran Rectangle manual di utils/chart_generator.py. MIT license.
-mplfinance>=0.12.10b0,<1.0
-
-# Chart LOKAL (candlestick/line) — pengganti QuickChart eksternal
-matplotlib>=3.8,<4.0
-
 # Timezone & JobQueue support
 pytz>=2023.3
 backports.zoneinfo; python_version < "3.9"

@@ -13,15 +13,12 @@ Dibuat untuk trader retail Indonesia — semua jawaban dalam Bahasa Indonesia, b
 - **Instrumen OANDA Diperluas** 🌐 — selain major pair & Gold/Silver: cross pair (EUR/GBP, GBP/JPY, AUD/JPY, ...), indeks (S&P 500, Dow, Nasdaq, Nikkei), minyak (WTI, Brent), dan crypto (BTC, ETH) — semua real-time bila tersedia di akun
 - **Spread Bid/Ask** 💱 — Jawaban harga menampilkan Bid/Ask + spread (dari OANDA real-time)
 - **Sentimen Retail** 🧠 — `/sentimen` menampilkan rasio posisi Long/Short trader ritel (OANDA Position Book) + cluster pending order (Order Book) — data unik yang tidak ada di sumber lain
-- **Watchlist & Riwayat Harga** 👀 — `/watch` menyimpan instrumen favorit per user (persisten di Supabase); bot merekam snapshot harga tiap 30 menit → `/riwayat` menampilkan tren harga tersimpan
 - **Data Makroekonomi** 🏛️ — FRED (resmi & gratis): CPI, NFP, Fed Rate, GDP, dll
 - **Kalender Ekonomi** 📅 — Jadwal rilis BLS/Fed real-time via FRED, dikonversi ke WIB, lengkap dengan Forecast/Previous/Actual
 - **Morning Brief** 🌅 — Ringkasan pasar otomatis setiap pagi (bisa dilanggan per-user)
 - **Alert Event Ekonomi** 🔔 — Digest harian + reminder sebelum event high-impact (NFP, CPI, FOMC)
 - **Aftermath Event Analysis** 📰 — Notifikasi otomatis SETELAH event high-impact rilis: angka Actual vs Forecast/Previous, interpretasi arah DXY (US Dollar Index), analisis AI dampak ke Gold & FX, dan penjelasan berita — dedup persisten agar tidak dobel
-- **Alert Harga** 🎯 — Pasang target harga per instrumen (`/pa eurusd 1.0900`), bot mengirim notifikasi saat tersentuh
 - **Sentimen Pasar** 🧠 — Skor sentimen berbasis berita (Finnhub + lexicon + LLM)
-- **Grafik Harga Lokal** 📈 — Candlestick chart profesional (mplfinance): dark theme, panel volume, overlay MA 5/10/20 — fallback otomatis ke penggambaran manual bila mplfinance tidak ada
 - **Harga Crypto Real-time** 🪙 — BTC/ETH dari exchange publik (Binance, Coinbase, Kraken, OKX, Bybit, KuCoin) via ccxt **tanpa API key** — harga spot DAN candle OHLCV (chart & analisis teknikal BTC/ETH ikut real-time), Yahoo untuk crypto delayed 15-20 menit
 - **Health Endpoint** 💚 — `GET /health` (aiohttp, port `HEALTH_PORT`) untuk uptime monitoring & Docker healthcheck
 - **Prompt Evaluation** 🧪 — Scaffolding promptfoo (`promptfoo/`) untuk menguji kualitas prompt & validitas JSON agent lintas provider (dev-time)
@@ -57,14 +54,14 @@ data/
   macro_data.py          → Data makro & kalender ekonomi (FRED, Finnhub, jadwal resmi)
   news_data.py           → Berita & sentimen (Finnhub, Marketaux, RSS)
   cache.py               → In-memory cache dengan TTL
-  database.py            → Supabase REST (opsional): user, subscriber, watchlist & riwayat harga
+  database.py            → Supabase REST (opsional): user, subscriber, event alert & news predictions
 config/
   settings.py            → Semua konfigurasi dari environment variables
 prompts/
   loader.py              → Loader template prompt (single source of truth)
   *.txt                  → Template prompt analisis — edit di sini tanpa ubah kode
 utils/
-  chart_generator.py     → Chart lokal (mplfinance dark theme + fallback matplotlib)
+  chart_generator.py     → Resolusi simbol dari teks user (get_chart_symbol_from_text)
   health_server.py       → Endpoint /health (aiohttp daemon thread)
   token_budget.py        → Token counting & truncation presisi (tiktoken opsional)
 promptfoo/               → Scaffolding evaluasi prompt (promptfoo, dev-time)
@@ -187,10 +184,9 @@ Bot memakai cache **dua lapis (hybrid)**:
   lintas restart dan tidak menambah beban RAM.
 
 **Setup sekali saja** — jalankan `migrations/supabase.sql` di Supabase SQL Editor
-(membuat tabel `app_cache`, `users`, `subscribers`, `watchlist`, `price_history`
-+ index + kebijakan RLS). Tabel `watchlist` & `price_history` dipakai fitur
-`/watch` & `/riwayat` (snapshot harga tiap 30 menit, otomatis dibersihkan
-setelah 30 hari).
+(membuat tabel `app_cache`, `users`, `subscribers`, `event_reports`,
+`event_alert_subscribers`, `event_alert_notified`, `news_predictions`
++ index + kebijakan RLS).
 Jika Supabase belum dikonfigurasi / tabel belum dibuat, bot otomatis jatuh ke
 mode memory-only tanpa error.
 
@@ -297,7 +293,7 @@ python -m unittest discover -s tests -v
 # pytest tests/ -v
 ```
 
-Test mencakup logika murni (tanpa network): sentiment analyzer, signal engine, split pesan panjang, kalender ekonomi, AI fallback engine (provider di-stub), chart mplfinance smoke, client ccxt (exchange di-mock), dan payload health endpoint.
+Test mencakup logika murni (tanpa network): sentiment analyzer, signal engine, split pesan panjang, kalender ekonomi, AI fallback engine (provider di-stub), client ccxt (exchange di-mock), dan payload health endpoint.
 
 ### Evaluasi kualitas prompt (promptfoo)
 
@@ -326,13 +322,9 @@ curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
 | `/unsubscribe` | Berhenti langganan Morning Brief |
 | `/sentiment` | Sentimen pasar berbasis berita (contoh: `/sentiment eurusd`) |
 | `/sentimen` | Sentimen retail trader OANDA — Position/Order Book, hanya pair forex (contoh: `/sentimen eurusd`) |
-| `/watch` | Watchlist instrumen persisten (`/watch add eurusd`, `/watch list`, `/watch del eurusd`) |
-| `/riwayat` | Riwayat harga tersimpan tiap 30 menit (contoh: `/riwayat eurusd`) |
 | `/calendar` | Kalender ekonomi high-impact bulan ini |
 | `/alert on\|off` | Notifikasi event ekonomi otomatis — digest harian, reminder sebelum rilis, **+ analisis aftermath (dampak ke DXY) + prediksi arah emas** |
 | `/prediksi` | 🎯 Win rate prediksi news (XAU/USD) — total, benar/salah/flat, 10 prediksi terakhir (`/prediksi history` untuk 25) |
-| `/pa <simbol> <harga>` | 🎯 Alert harga — notifikasi saat harga menyentuh target (contoh: `/pa eurusd 1.0900`; kelola: `/pa list`, `/pa del <id>`) |
-| `/chart <simbol>` | Grafik harga (contoh: `/chart gold`, `/chart eurusd`) |
 | `/overview` | Ringkasan instan semua instrumen utama (tanpa AI) |
 | `/status` | Status sistem, AI provider, dan data source |
 | `/about` | Informasi bot |

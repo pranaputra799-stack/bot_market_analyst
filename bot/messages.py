@@ -26,13 +26,11 @@ Asisten pasar *real-time* untuk trader Indonesia 🇮🇩 — harga Forex & Gold
 • 📈 Analisis penuh — "analisis teknikal EUR/USD"
 • 🏛️ Data makro — CPI, NFP, Fed Rate
 • 🧠 Sentimen retail trader — /sentimen
-• 👀 Watchlist + riwayat harga — /watch, /riwayat
 • 📅 Kalender ekonomi high-impact — /calendar
 
 🔔 *Notifikasi otomatis:*
 • 🌅 Morning Brief setiap pagi — /subscribe
 • 📰 Analisis dampak event ke DXY — /alert on
-• 🎯 Alert harga target — /pa eurusd 1.0900
 
 👇 *Ketuk tombol di bawah* untuk mulai — atau langsung kirim pertanyaan apa pun.
 
@@ -67,14 +65,10 @@ HELP_MESSAGE = """
 /morning - 🌅 Morning Brief harian
 /sentiment - 🧠 Sentimen pasar (contoh: /sentiment eurusd)
 /sentimen - 🧠 Sentimen retail OANDA — Position/Order Book
-/watch - 👀 Watchlist instrumen persisten
-/riwayat - 📜 Riwayat harga tersimpan tiap 30 mnt
 /calendar - 📅 Kalender ekonomi high-impact
 /aftermath - 🎯 Analisis dampak event (contoh: /aftermath nfp)
 /overview - 🌍 Overview semua instrumen (instan)
 /alert - 🔔 Notifikasi event + analisis aftermath DXY
-/pa - 🎯 Alert harga (contoh: /pa eurusd 1.0900)
-/chart - 📈 Grafik harga (contoh: /chart gold)
 /subscribe - 🔔 Langganan Morning Brief
 /unsubscribe - 🔕 Berhenti langganan
 /status - ✅ Status sistem & API
@@ -342,27 +336,6 @@ Kamu tidak akan menerima notifikasi event lagi.
 Kirim `/alert on` untuk mengaktifkan kembali.
 """
 
-
-# ===================== CHART HELP =====================
-
-CHART_HELP_TEXT = """
-📈 *GRAFIK HARGA*
-
-Gunakan perintah berikut untuk melihat grafik harga:
-
-`/chart eurusd` - EUR/USD
-`/chart gbpusd` - GBP/USD
-`/chart gold` - XAU/USD (Gold)
-`/chart silver` - XAG/USD (Silver)
-`/chart btc` - Bitcoin
-`/chart eth` - Ethereum
-`/chart dxy` - Dollar Index
-`/chart sp500` - S&P 500
-`/chart usdidr` - USD/IDR
-`/chart vix` - VIX
-
-Atau cukup klik tombol *📈 Chart* di menu utama!
-"""
 
 # ===================== DISCLAIMER =====================
 

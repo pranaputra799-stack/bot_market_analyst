@@ -110,7 +110,11 @@ SUPABASE_KEY = _get_key("SUPABASE_KEY", "")
 SUPABASE_CACHE_ENABLED = os.getenv("SUPABASE_CACHE_ENABLED", "true").lower() in ("1", "true", "yes")
 
 # ===================== CACHE SETTINGS =====================
-CACHE_TTL_SECONDS = 300  # 5 menit untuk data harga
+CACHE_TTL_SECONDS = 600  # 10 menit untuk data harga (per-simbol)
+# Dulu 300s (5 menit). Dinaikkan agar cache per-simbol Yahoo/OANDA lebih jarang
+# expire → miss cache lebih sedikit → beban yfinance turun. Data "overview"
+# tetap dianggap segar: get_market_summary punya TTL terpisah (30 menit) dan
+# tombol 🔁 Refresh tetap bisa memaksa ambil ulang.
 CACHE_MACRO_TTL = 3600   # 1 jam untuk data makro
 CACHE_NEWS_TTL = 600     # 10 menit untuk berita
 CACHE_AI_TTL = 600       # 10 menit untuk response AI (pertanyaan identik)
@@ -184,10 +188,6 @@ NEWS_PREDICTION_MIN_MOVE_PCT = float(os.getenv("NEWS_PREDICTION_MIN_MOVE_PCT", "
 NEWS_PREDICTION_MAX_PER_RUN = int(os.getenv("NEWS_PREDICTION_MAX_PER_RUN", "2"))
 
 # ===================== PRICE ALERTS =====================
-# Alert harga per-user (/pa): interval pengecekan harga target (menit).
-# Lebih kecil = notifikasi lebih cepat, tapi lebih banyak request data.
-PRICE_ALERT_CHECK_MINUTES = int(os.getenv("PRICE_ALERT_CHECK_MINUTES", "3"))
-
 # ===================== BOT SETTINGS =====================
 BOT_USERNAME = os.getenv("BOT_USERNAME", "marketai_analyst_bot")
 BOT_NAME = os.getenv("BOT_NAME", "MarketAI Analyst")

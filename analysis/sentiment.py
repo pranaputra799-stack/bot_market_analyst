@@ -11,14 +11,13 @@ Hasil di-cache 10 menit per simbol agar tidak membanjiri API berita.
 """
 
 import asyncio
-import json
 import logging
 import math
 import statistics
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from data.cache import cache, clean_json_response
+from data.cache import cache, parse_json_payload
 
 logger = logging.getLogger(__name__)
 
@@ -305,8 +304,17 @@ class SentimentAnalyzer:
                 max_tokens=600,
             )
 
-            text = clean_json_response(response)
-            data = json.loads(text)
+            data = parse_json_payload(response)
+            if not isinstance(data, dict):
+                # Model mengembalikan JSON array / non-dict — fallback skor data
+                # (sudah di-clamp di pemanggil; tidak pernah crash).
+                return {
+                    "score": data_score,
+                    "confidence": 0.0,
+                    "bull_drivers": [],
+                    "bear_drivers": [],
+                    "assessment": "",
+                }
 
             return {
                 "score": self._safe_float(data.get("score"), data_score),

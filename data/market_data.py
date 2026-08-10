@@ -10,12 +10,12 @@ Sumber data:
 OANDA tidak terkonfigurasi? Semua instrumen otomatis kembali ke Yahoo Finance
 (perilaku lama, zero perubahan).
 """
-import asyncio
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 
 import requests
 
@@ -28,12 +28,18 @@ from config.settings import (
     OANDA_PRICE_TTL,
 )
 from config.providers import YAHOO_SYMBOLS, OANDA_SYMBOLS
-from data.cache import cache, cached, CACHE_TTL_SECONDS
+from data.cache import cache, CACHE_TTL_SECONDS
 from data.oanda_client import OandaClient
 from data.oanda_stream import oanda_stream
 from data.ccxt_client import get_crypto_ticker, get_crypto_ohlcv, CRYPTO_SYMBOLS
 
 logger = logging.getLogger(__name__)
+
+# Ringkasan pasar (get_market_summary) di-cache 30 menit — bukan 10. Setiap
+# miss memicu 7 simbol beruntun ke sumber data, jadi TTL lebih panjang = jauh
+# lebih sedikit burst ke Yahoo/OANDA. Tombol '🔁 Refresh' di /overview tetap
+# bisa memaksa ambil ulang (refresh=True) kapan pun user mau.
+MARKET_SUMMARY_TTL = 1800
 
 # yfinance di-load LAZY (~100MB pandas ikut terbawa) — hanya saat data Yahoo
 # benar-benar diminta. Startup bot jadi jauh lebih ringan (krusial di container
@@ -70,7 +76,12 @@ def _get_yf_context():
     yf_mod = _get_yf()
     if yf_mod is None:
         return None, None
-    major = int(yf_mod.__version__.split(".")[0])
+    try:
+        major = int(str(yf_mod.__version__).split(".")[0])
+    except (AttributeError, ValueError):
+        # Versi tidak terbaca (mis. __version__ hilang) — asumsi 1.x yang
+        # sudah memakai curl_cffi (session default, anti-429 tetap aktif).
+        major = 1
     if major == 0:
         if _yf_session is None:
             with _yf_lock:
@@ -275,7 +286,30 @@ class MarketDataAggregator:
                 # yfinance 1.x: session default sudah curl_cffi (impersonasi
                 # Chrome) — biarkan apa adanya agar anti-429 tetap aktif.
                 ticker = yf_mod.Ticker(symbol)
-            hist = ticker.history(period=period, interval=interval)
+
+            # Retry 1× untuk error TRANSIEN (jaringan/flaky Yahoo). Error 429 /
+            # rate-limit TIDAK di-retry — negative cache panjang (lihat except
+            # di bawah) yang menanganinya; retry hanya memperparah 429.
+            hist = None
+            for attempt in range(2):
+                try:
+                    hist = ticker.history(period=period, interval=interval)
+                    break
+                except Exception as retry_err:
+                    retry_lower = str(retry_err).lower()
+                    if (
+                        "429" in retry_lower
+                        or "rate limit" in retry_lower
+                        or "too many requests" in retry_lower
+                    ):
+                        raise  # rate limit — jangan retry
+                    if attempt == 0:
+                        logger.info(
+                            f"Yahoo history transient error for {symbol}, retrying: {retry_err}"
+                        )
+                        time.sleep(1.5)
+                        continue
+                    raise
 
             # Ambil data teknikal dari history
             ohlcv_data = []
@@ -352,11 +386,21 @@ class MarketDataAggregator:
                 "error": str(e),
                 "timestamp": datetime.now().isoformat(),
             }
-            # Negative cache: saat Yahoo rate-limited (429), get_market_summary /
-            # get_top_movers memanggil banyak simbol beruntun. Menyimpan error
-            # mencegah request tambahan yang hanya memperparah 429.
+            # Negative cache: saat Yahoo rate-limited (429), get_market_summary
+            # memanggil banyak simbol beruntun. Menyimpan error mencegah request
+            # tambahan yang hanya memperparah 429. Error 429 di-cache LEBIH LAMA
+            # (15 menit) agar saat Yahoo sedang memblokir akun, bot tidak mencoba
+            # ulang tiap 5 menit (spam log + tetap 429).
+            err_lower = str(e).lower()
+            is_rate_limit = (
+                "429" in err_lower
+                or "rate limit" in err_lower
+                or "rate-limit" in err_lower
+                or "too many requests" in err_lower
+            )
+            negative_ttl = 900 if is_rate_limit else CACHE_TTL_SECONDS
             try:
-                cache.set(cache_key, error_result, CACHE_TTL_SECONDS)
+                cache.set(cache_key, error_result, negative_ttl)
             except Exception:
                 pass
             return error_result
@@ -572,92 +616,25 @@ class MarketDataAggregator:
 
     # ===================== AGGREGATOR =====================
 
-    async def get_all_quotes(self, symbol: str) -> Dict:
-        """
-        Ambil data dari semua source sekaligus (parallel).
-        Mengembalikan data agregat dengan cross-validation.
-        """
-        # Yahoo Finance (synchronous, jalan di thread pool)
-        yahoo = await asyncio.to_thread(self.get_yahoo_data, symbol)
-
-        # Alpha Vantage & Finnhub (async parallel)
-        alpha, finnhub = await asyncio.gather(
-            self.get_alpha_vantage_quote(symbol),
-            self.get_finnhub_quote(symbol),
-            return_exceptions=True,
-        )
-
-        sources = [yahoo]
-        if not isinstance(alpha, Exception) and "error" not in alpha:
-            sources.append(alpha)
-        if not isinstance(finnhub, Exception) and "error" not in finnhub:
-            sources.append(finnhub)
-
-        # Hitung average price dari multiple sources untuk cross-validation
-        prices = [
-            s.get("current_price")
-            for s in sources
-            if s.get("current_price") and isinstance(s.get("current_price"), (int, float))
-        ]
-        avg_price = round(sum(prices) / len(prices), 5) if prices else None
-
-        return {
-            "symbol": symbol,
-            "average_price": avg_price,
-            "sources_available": len(sources),
-            "sources": sources,
-            "timestamp": datetime.now().isoformat(),
-        }
-
-    async def get_multiple_pairs(self, symbols: List[str]) -> Dict[str, Dict]:
-        """Ambil data untuk beberapa pair sekaligus."""
-        results = {}
-        for symbol in symbols:
-            results[symbol] = await self.get_all_quotes(symbol)
-        return results
-
-    @cached(ttl=CACHE_TTL_SECONDS)
-    def get_top_movers(self, limit: int = 5) -> Dict:
-        """
-        Mendapatkan top movers dari major forex pairs.
-        Karena kita tidak punya akses real-time ke semua pair,
-        kita ambil data dari pair-pair utama.
-        """
-        major_pairs = [
-            "EURUSD=X", "GBPUSD=X", "USDJPY=X", "USDCHF=X",
-            "AUDUSD=X", "USDCAD=X", "NZDUSD=X",
-        ]
-        movers = []
-        for i, pair in enumerate(major_pairs):
-            if i > 0:
-                # Jeda kecil antar request agar tidak burst
-                time.sleep(0.4)
-            data = self.get_yahoo_data(pair, period="2d")
-            if data.get("current_price") and data.get("change_pct") is not None:
-                movers.append({
-                    "symbol": pair,
-                    "price": data["current_price"],
-                    "change_pct": data["change_pct"],
-                    "abs_change": abs(data["change_pct"]),
-                })
-
-        movers.sort(key=lambda x: x["abs_change"], reverse=True)
-        return {
-            "top_gainers": [m for m in movers if m["change_pct"] > 0][:limit],
-            "top_losers": [m for m in movers if m["change_pct"] < 0][:limit],
-        }
-
     def get_market_summary(self, refresh: bool = False) -> str:
         """
         Mendapatkan ringkasan pasar untuk morning brief.
 
-        Hasil di-cache 10 menit: tanpa cache, setiap pertanyaan user yang butuh
-        data pasar memicu 7 request Yahoo beruntun dan memperparah rate limit.
-        Kalau SEMUA simbol gagal, hasil TIDAK di-cache agar pemulihan Yahoo tidak
-        tertutup — per-symbol negative cache (5 menit) tetap mencegah request ulang.
+        Hasil di-cache 30 menit (MARKET_SUMMARY_TTL): tanpa cache, setiap
+        pertanyaan user yang butuh data pasar memicu 7 request beruntun dan
+        memperparah rate limit. Kalau SEMUA simbol gagal, hasil TIDAK di-cache
+        agar pemulihan sumber data tidak tertutup — per-symbol negative cache
+        (5 menit, 429 → 15 menit) tetap mencegah request ulang.
+
+        Fetch 7 simbol dilakukan PARALEL (ThreadPoolExecutor, maks 3 worker):
+        total request ke sumber data SAMA persis dengan versi serial, tapi waktu
+        tunggu turun drastis (dulu ~7×(request + 0.4s sleep) ≈ 10-17 detik, kini
+        ~3-6 detik). Worker dibatasi agar tidak burst besar sekaligus — Yahoo
+        rate limit dihitung per jam, burst kecil 3 request aman dan per-symbol
+        negative cache menyerap error 429 tanpa retry.
 
         Args:
-            refresh: Jika True, LEWATI cache dan ambil harga terbaru dari Yahoo
+            refresh: Jika True, LEWATI cache dan ambil harga terbaru
                 (dipakai tombol '🔁 Refresh' di /overview).
         """
         cache_key = "market_summary"
@@ -676,13 +653,18 @@ class MarketDataAggregator:
             "S&P 500": "^GSPC",
         }
 
+        # Fetch semua simbol PARALEL — get_yahoo_data punya per-symbol cache
+        # sendiri, jadi simbol yang masih hangat tidak keluar ke network sama
+        # sekali. Worker dibatasi 3 agar burst tetap modest (bukan 7 sekaligus).
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            fetched = list(pool.map(
+                lambda symbol: self.get_yahoo_data(symbol, period="2d"),
+                pairs.values(),
+            ))
+
         lines = ["📊 *RINGKASAN PASAR*\n"]
         found = 0
-        for i, (name, symbol) in enumerate(pairs.items()):
-            if i > 0:
-                # Jeda kecil antar request agar tidak burst (memperparah 429)
-                time.sleep(0.4)
-            data = self.get_yahoo_data(symbol, period="2d")
+        for (name, _symbol), data in zip(pairs.items(), fetched):
             price = data.get("current_price")
             change = data.get("change_pct")
 
@@ -697,7 +679,7 @@ class MarketDataAggregator:
         result = "\n".join(lines)
         if found > 0:
             try:
-                cache.set(cache_key, result, 600)
+                cache.set(cache_key, result, MARKET_SUMMARY_TTL)
             except Exception:
                 pass
         return result

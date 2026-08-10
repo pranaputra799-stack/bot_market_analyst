@@ -11,7 +11,6 @@ Takes research context and technical signals, then produces:
 """
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -19,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from analysis.prompts import THESIS_SYSTEM, THESIS_FORMULATION_TEMPLATE
 from analysis.signals import AggregatedSignal
-from data.cache import cache, safe_hash, clean_json_response
+from data.cache import cache, safe_hash, parse_json_payload
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +93,12 @@ class ThesisAgent:
         cache_key = f"thesis:{safe_hash(question + research_output[:300] + signal_output[:100])}"
         cached = cache.get(cache_key)
         if cached:
-            try:
-                data = json.loads(cached) if isinstance(cached, str) else cached
+            # parse_json_payload: json.loads yang TIDAK pernah raise untuk nilai
+            # string (cache lama/rusak — dulu try/except di sini, kini aman).
+            data = parse_json_payload(cached) if isinstance(cached, str) else cached
+            # Guard tipe: data bisa list bila pernah ter-cache hasil parsing model
+            # liar (JSON array) — hanya dict yang dipakai.
+            if isinstance(data, dict):
                 # `or default` — LLM boleh mengembalikan null eksplisit (sesuai
                 # aturan anti-halusinasi "isi null jika tidak ada").
                 return Thesis(
@@ -107,8 +110,6 @@ class ThesisAgent:
                     time_horizon=data.get("time_horizon") or "short_term",
                     risk_factors=data.get("risk_factors") or [],
                 )
-            except (json.JSONDecodeError, TypeError):
-                pass
 
         prompt = THESIS_FORMULATION_TEMPLATE.format(
             question=question,
@@ -148,21 +149,20 @@ class ThesisAgent:
 
     def _parse_response(self, response: str) -> Optional[Thesis]:
         """Parse LLM response into Thesis dataclass."""
-        try:
-            text = clean_json_response(response)
-            data = json.loads(text)
-            return Thesis(
-                direction=data.get("direction") or "neutral",
-                # is not None — jangan ubah 0.0 (confidence rendah yang sah)
-                confidence=min(
-                    1.0,
-                    max(0.0, float(data.get("confidence") if data.get("confidence") is not None else 0.5)),
-                ),
-                summary=data.get("thesis_summary") or "",
-                key_evidence=data.get("key_evidence") or [],
-                time_horizon=data.get("time_horizon") or "short_term",
-                risk_factors=data.get("risk_factors") or [],
-            )
-        except (json.JSONDecodeError, IndexError, ValueError) as e:
-            logger.warning(f"Failed to parse thesis response: {e}")
+        # json.loads yang TIDAK pernah raise; payload list/non-dict → None
+        # (pemanggil memakai fallback Thesis netral — pipeline tidak crash).
+        data = parse_json_payload(response)
+        if not isinstance(data, dict):
             return None
+        return Thesis(
+            direction=data.get("direction") or "neutral",
+            # is not None — jangan ubah 0.0 (confidence rendah yang sah)
+            confidence=min(
+                1.0,
+                max(0.0, float(data.get("confidence") if data.get("confidence") is not None else 0.5)),
+            ),
+            summary=data.get("thesis_summary") or "",
+            key_evidence=data.get("key_evidence") or [],
+            time_horizon=data.get("time_horizon") or "short_term",
+            risk_factors=data.get("risk_factors") or [],
+        )

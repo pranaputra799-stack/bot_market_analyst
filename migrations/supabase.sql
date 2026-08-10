@@ -40,41 +40,7 @@ CREATE TABLE IF NOT EXISTS public.subscribers (
 );
 
 -- ------------------------------------------------------------
--- 4) watchlist — instrumen favorit per user (fitur /watch)
---    Satu user boleh punya banyak simbol; satu simbol sekali per
---    user (unique constraint dipakai PostgREST merge-duplicates).
--- ------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS public.watchlist (
-    chat_id    BIGINT NOT NULL,
-    symbol     TEXT NOT NULL,
-    label      TEXT DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (chat_id, symbol)
-);
-
-CREATE INDEX IF NOT EXISTS idx_watchlist_symbol
-    ON public.watchlist (symbol);
-
--- ------------------------------------------------------------
--- 5) price_history — snapshot harga berkala (fitur /riwayat)
---    Job recorder bot menyimpan harga tiap interval; riwayat
---    otomatis dibersihkan setelah >30 hari (job harian).
--- ------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS public.price_history (
-    id         BIGSERIAL PRIMARY KEY,
-    symbol     TEXT NOT NULL,
-    price      DOUBLE PRECISION NOT NULL,
-    bid        DOUBLE PRECISION,
-    ask        DOUBLE PRECISION,
-    change_pct DOUBLE PRECISION,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_price_history_symbol_created
-    ON public.price_history (symbol, created_at DESC);
-
--- ------------------------------------------------------------
--- 6) event_reports — dedup persisten notifikasi aftermath event
+-- 4) event_reports — dedup persisten notifikasi aftermath event
 --    Menyimpan kunci event high-impact yang SUDAH dilaporkan agar
 --    tidak terkirim dobel, termasuk setelah restart/deploy.
 -- ------------------------------------------------------------
@@ -84,30 +50,7 @@ CREATE TABLE IF NOT EXISTS public.event_reports (
 );
 
 -- ------------------------------------------------------------
--- 7) price_alerts — alert harga per-user (/pa)
---    SEBELUMNYA hanya tersimpan di RAM (bot_data) sehingga hilang
---    saat bot restart/deploy. Sekarang persisten: handler menulis
---    setiap perubahan, bot memuat ulang saat startup.
--- ------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS public.price_alerts (
-    id           BIGINT PRIMARY KEY,
-    chat_id      BIGINT NOT NULL,
-    user_id      BIGINT NOT NULL,
-    symbol       TEXT NOT NULL,
-    display_name TEXT DEFAULT '',
-    target       DOUBLE PRECISION NOT NULL,
-    direction    TEXT NOT NULL DEFAULT 'above'
-                 CHECK (direction IN ('above', 'below')),
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_price_alerts_user
-    ON public.price_alerts (user_id);
-CREATE INDEX IF NOT EXISTS idx_price_alerts_symbol
-    ON public.price_alerts (symbol);
-
--- ------------------------------------------------------------
--- 8) event_alert_subscribers — chat yang subscribe notifikasi event
+-- 5) event_alert_subscribers — chat yang subscribe notifikasi event
 --    (/alert on / tombol menu). Sebelumnya RAM-only (bot_data),
 --    sekarang persisten agar tidak hilang saat restart.
 -- ------------------------------------------------------------
@@ -117,7 +60,7 @@ CREATE TABLE IF NOT EXISTS public.event_alert_subscribers (
 );
 
 -- ------------------------------------------------------------
--- 9) event_alert_notified — dedup persisten REMINDER event ekonomi
+-- 6) event_alert_notified — dedup persisten REMINDER event ekonomi
 --    Kunci event yang sudah dapat reminder dalam jendela lead agar
 --    tidak terkirim dobel, termasuk setelah restart/deploy.
 --    (Aftermath punya dedup sendiri di tabel event_reports.)
@@ -144,28 +87,10 @@ DROP POLICY IF EXISTS "app_cache_all_anon" ON public.app_cache;
 CREATE POLICY "app_cache_all_anon" ON public.app_cache
     FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
--- watchlist
-ALTER TABLE public.watchlist ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "watchlist_all_anon" ON public.watchlist;
-CREATE POLICY "watchlist_all_anon" ON public.watchlist
-    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
--- price_history
-ALTER TABLE public.price_history ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "price_history_all_anon" ON public.price_history;
-CREATE POLICY "price_history_all_anon" ON public.price_history
-    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
 -- event_reports
 ALTER TABLE public.event_reports ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "event_reports_all_anon" ON public.event_reports;
 CREATE POLICY "event_reports_all_anon" ON public.event_reports
-    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
--- price_alerts
-ALTER TABLE public.price_alerts ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "price_alerts_all_anon" ON public.price_alerts;
-CREATE POLICY "price_alerts_all_anon" ON public.price_alerts
     FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
 -- event_alert_subscribers
@@ -232,10 +157,7 @@ CREATE INDEX IF NOT EXISTS idx_news_predictions_status
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.app_cache TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.users    TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.subscribers TO anon, authenticated, service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.watchlist TO anon, authenticated, service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.price_history TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_reports TO anon, authenticated, service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.price_alerts TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_alert_subscribers TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_alert_notified TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.news_predictions TO anon, authenticated, service_role;
@@ -245,11 +167,10 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.news_predictions TO anon, a
 --
 --   select table_name from information_schema.tables
 --   where table_schema = 'public'
---   and table_name in ('app_cache', 'users', 'subscribers', 'watchlist',
---                      'price_history', 'event_reports', 'price_alerts',
+--   and table_name in ('app_cache', 'users', 'subscribers', 'event_reports',
 --                      'event_alert_subscribers', 'event_alert_notified',
 --                      'news_predictions');
 --
--- Harus mengembalikan 10 baris. Jika sudah pernah punya tabel
+-- Harus mengembalikan 7 baris. Jika sudah pernah punya tabel
 -- users/subscribers sebelumnya, baris lama tetap aman (IF NOT EXISTS).
 -- ============================================================

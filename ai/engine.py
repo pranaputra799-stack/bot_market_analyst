@@ -220,7 +220,27 @@ class AIFallbackEngine:
             # Urutan provider bersifat dinamis: provider yang baru kena rate-limit
             # (429) dipindah ke belakang antrean agar request berikutnya langsung
             # mencoba provider yang sehat.
-            for provider in self._ordered_providers():
+            providers = self._ordered_providers()
+            # Provider yang masih dalam cooldown (baru saja kena 429, dari
+            # request ini ATAU thread paralel lain) di-SKIP tanpa request —
+            # mencoba lagi sekarang hanya menghasilkan 429 kedua yang
+            # memperparah rate limit & memperlama jawaban user.
+            # KECUALI bila SEMUA provider yang BISA dipakai (punya API key)
+            # sedang cooldown: tidak ada yang sehat untuk dicoba, jadi coba
+            # yang pertama saja — cooldown pendek mungkin sudah lewat sejak
+            # dicatat (gagal lagi → break & lanjut seperti perilaku lama).
+            usable = [p for p in providers if self.api_keys.get(p)]
+            in_cooldown = {
+                p for p in providers
+                if self._provider_cooldown.get(p, 0.0) > time.time()
+            }
+            skip_cooldown = any(p not in in_cooldown for p in usable)
+            for provider in providers:
+                if skip_cooldown and provider in in_cooldown:
+                    logger.info(
+                        f"{provider} masih dalam cooldown rate-limit — skip tanpa request"
+                    )
+                    continue
                 for attempt in range(max_retries):
                     # Cek deadline sebelum tiap attempt
                     if time.time() >= deadline:
@@ -244,7 +264,11 @@ class AIFallbackEngine:
 
                         response = self._call_provider(provider, prompt, system, max_tokens)
                         if response:
-                            # Provider sehat — bersihkan state rate-limit lama (jika ada)
+                            # Provider sehat — bersihkan state rate-limit provider
+                            # INI saja (jika ada). Cooldown provider lain TIDAK
+                            # disentuh: itu bisa cooldown sah dari thread paralel
+                            # yang baru saja kena 429 — menghapusnya justru memicu
+                            # retry (thundering herd) ke provider yang masih limit.
                             self._rate_limit_hints.pop(provider, None)
                             self._provider_cooldown.pop(provider, None)
 

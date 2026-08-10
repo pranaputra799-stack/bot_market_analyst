@@ -12,6 +12,7 @@ Arsitektur dua lapis (hybrid) agar RAM proses bot tidak membengkak:
 """
 
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -36,51 +37,69 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryCache:
-    """Simple in-memory cache with TTL support + batas jumlah entri (FIFO)."""
+    """Simple in-memory cache with TTL support + batas jumlah entri (FIFO).
+
+    Thread-safe: get/set/delete diproteksi lock. get_market_summary() kini
+    mem-fetch banyak simbol PARALEL (ThreadPoolExecutor), jadi beberapa thread
+    bisa menulis cache bersamaan — tanpa lock, eviction FIFO bisa saling
+    menimpa (dua thread evict bersamaan / evict entri yang baru saja di-set).
+    Hasil terburuk tanpa lock hanyalah eviction spurious (bukan korupsi data),
+    tapi lock ini murah dan menghilangkan race sepenuhnya.
+    """
 
     def __init__(self, max_entries: int = CACHE_MAX_ENTRIES):
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._max_entries = max_entries
         self._next_order = 0  # urutan insert monotonik untuk eviction FIFO deterministik
+        # RLock (bukan Lock): set() memegang lock lalu memanggil
+        # _evict_if_needed() → cleanup_expired() yang juga memegang lock yang
+        # sama. Dengan Lock biasa itu deadlock; RLock boleh di-reacquire thread
+        # yang sama.
+        self._lock = threading.RLock()
 
     def get(self, key: str) -> Optional[Any]:
         """Get value from cache if not expired."""
-        if key in self._cache:
-            entry = self._cache[key]
-            if time.time() < entry["expires"]:
-                return entry["value"]
-            else:
-                del self._cache[key]
+        with self._lock:
+            if key in self._cache:
+                entry = self._cache[key]
+                if time.time() < entry["expires"]:
+                    return entry["value"]
+                else:
+                    del self._cache[key]
         return None
 
     def set(self, key: str, value: Any, ttl: int = CACHE_TTL_SECONDS):
         """Set value in cache with TTL. Evict entri terlama jika cache penuh."""
-        if self._max_entries > 0 and key not in self._cache:
-            self._evict_if_needed()
-        entry = self._cache.get(key)
-        if entry is None:
-            entry = {"order": self._next_order}
-            self._next_order += 1
-            self._cache[key] = entry
-        entry["value"] = value
-        entry["expires"] = time.time() + ttl
-        entry["created"] = time.time()
+        with self._lock:
+            if self._max_entries > 0 and key not in self._cache:
+                self._evict_if_needed()
+            entry = self._cache.get(key)
+            if entry is None:
+                entry = {"order": self._next_order}
+                self._next_order += 1
+                self._cache[key] = entry
+            entry["value"] = value
+            entry["expires"] = time.time() + ttl
+            entry["created"] = time.time()
 
     def delete(self, key: str):
         """Delete a key from cache."""
-        self._cache.pop(key, None)
+        with self._lock:
+            self._cache.pop(key, None)
 
     def clear(self):
         """Clear all cache."""
-        self._cache.clear()
+        with self._lock:
+            self._cache.clear()
 
     def cleanup_expired(self):
         """Remove all expired entries (dipanggil berkala oleh job scheduler)."""
-        now = time.time()
-        expired = [k for k, v in self._cache.items() if now >= v["expires"]]
-        for k in expired:
-            del self._cache[k]
-        return len(expired)
+        with self._lock:
+            now = time.time()
+            expired = [k for k, v in self._cache.items() if now >= v["expires"]]
+            for k in expired:
+                del self._cache[k]
+            return len(expired)
 
     def _evict_if_needed(self):
         """Buang entri expired dulu, lalu yang paling lama di-insert (FIFO)."""
@@ -353,6 +372,38 @@ def safe_hash(text: str) -> str:
     return hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()
 
 
+def _extract_balanced_json(text: str, open_ch: str, close_ch: str):
+    """
+    Ekstrak substring dari `open_ch` pertama hingga `close_ch` penutupnya.
+
+    Menghormati string ("...") dan escape (\\") di dalam JSON agar kurung
+    di dalam teks string tidak salah dihitung. None bila tidak ketemu.
+    """
+    start = text.find(open_ch)
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i, ch in enumerate(text[start:], start):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_string = not in_string
+        if not in_string:
+            if ch == open_ch:
+                depth += 1
+            elif ch == close_ch:
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+    return None
+
+
 def clean_json_response(text: str) -> str:
     """
     Ekstrak JSON bersih dari respons LLM yang mungkin mengandung markdown fences
@@ -366,8 +417,12 @@ def clean_json_response(text: str) -> str:
 
     Strategi:
     1. Coba strip markdown code fences terlebih dahulu.
-    2. Jika tidak ada, cari substring mulai dari '{' atau '[' sampai '}' atau ']'.
-    3. Return string kosong jika tidak ada JSON yang valid ditemukan.
+    2. Jika respons DIMULAI dengan '[' (JSON array — model free sering
+       mengembalikan array padahal diminta object), ekstrak array UTUH lebih
+       dulu agar SEMUA item di dalamnya tetap terbaca (sebelumnya hanya
+       object pertama yang terambil, item lain hilang).
+    3. Jika tidak, cari substring mulai dari '{' atau '[' sampai '}' atau ']'.
+    4. Return string kosong jika tidak ada JSON yang valid ditemukan.
 
     Args:
         text: Raw LLM response string
@@ -398,51 +453,87 @@ def clean_json_response(text: str) -> str:
                 if candidate.startswith("{") or candidate.startswith("["):
                     return candidate
 
+    # Prioritas bentuk: respons yang DIMULAI '[' = array JSON → ekstrak array
+    # UTUH lebih dulu (lihat docstring). VALIDASI dulu dengan json.loads: kalau
+    # model mengembalikan prosa yang kebetulan diawali bracket balanced (mis.
+    # "[update] gold naik... {json}"), array hasil ekstraksi bukan JSON valid —
+    # jatuh ke object extraction di bawah agar JSON di dalamnya tetap terbaca
+    # (tanpa validasi, prosa bracket itu mengalahkan object yang valid).
+    if stripped.startswith("["):
+        array_part = _extract_balanced_json(stripped, "[", "]")
+        if array_part:
+            try:
+                if isinstance(json.loads(array_part), list):
+                    return array_part
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass  # bukan array JSON — lanjut cari object
+
     # Cari JSON object ({...}) dengan bracket matching
-    start = stripped.find("{")
-    if start != -1:
-        depth = 0
-        in_string = False
-        escape_next = False
-        for i, ch in enumerate(stripped[start:], start):
-            if escape_next:
-                escape_next = False
-                continue
-            if ch == "\\" and in_string:
-                escape_next = True
-                continue
-            if ch == '"' and not escape_next:
-                in_string = not in_string
-            if not in_string:
-                if ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-                    if depth == 0:
-                        return stripped[start:i + 1]
+    obj_part = _extract_balanced_json(stripped, "{", "}")
+    if obj_part:
+        return obj_part
 
     # Cari JSON array ([...]) dengan bracket matching
-    start = stripped.find("[")
-    if start != -1:
-        depth = 0
-        in_string = False
-        escape_next = False
-        for i, ch in enumerate(stripped[start:], start):
-            if escape_next:
-                escape_next = False
-                continue
-            if ch == "\\" and in_string:
-                escape_next = True
-                continue
-            if ch == '"' and not escape_next:
-                in_string = not in_string
-            if not in_string:
-                if ch == "[":
-                    depth += 1
-                elif ch == "]":
-                    depth -= 1
-                    if depth == 0:
-                        return stripped[start:i + 1]
+    arr_part = _extract_balanced_json(stripped, "[", "]")
+    if arr_part:
+        return arr_part
 
     # Fallback: kembalikan string asli (akan gagal di json.loads, tapi logging akan menangkap)
     return stripped
+
+
+def parse_json_payload(text: str):
+    """
+    Parse teks respons LLM menjadi objek Python (dict ATAU list) dengan aman.
+
+    Bungkus clean_json_response + json.loads dalam satu helper yang TIDAK pernah
+    raise: LLM (terutama model gratis) sering mengembalikan JSON array padahal
+    diminta object, atau teks tanpa JSON sama sekali. Semua kasus itu harus
+    menghasilkan None (atau nilai yang bisa ditangani pemanggil), bukan exception
+    yang merusak pipeline multi-agent.
+
+    Args:
+        text: Raw LLM response string
+
+    Returns:
+        dict/list hasil json.loads, atau None bila tidak valid / kosong.
+    """
+    if not text:
+        return None
+    try:
+        return json.loads(clean_json_response(text))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        # Log penting untuk diagnosa "kenapa pipeline mengembalikan default" —
+        # respons dipotong agar log tidak banjir teks model yang panjang.
+        logger.warning("Gagal parse JSON dari respons LLM (%.0f chars): %s...",
+                       len(text), (text or "")[:200])
+        return None
+
+
+def extract_list_items(payload, *keys) -> list:
+    """
+    Ambil daftar item dari payload JSON agent — toleran bila payload berupa LIST.
+
+    Model free kadang mengabaikan skema dan mengembalikan array langsung (mis.
+    `[{...}, {...}]` padahal diminta `{"contradictions": [...]}`). Helper ini
+    memastikan kedua bentuk dipahami:
+
+    - payload list         → dipakai apa adanya
+    - payload dict         → ambil key pertama yang berisi list (sesuai urutan keys)
+    - bentuk lain          → [] (aman — pemanggil mendapat daftar kosong)
+
+    Args:
+        payload: Hasil json.loads (dict, list, atau bentuk lain)
+        *keys: Nama-nama key yang mungkin memuat list, dicoba berurutan
+
+    Returns:
+        List item (mungkin kosong), atau [] untuk bentuk payload yang tidak dikenal.
+    """
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value
+    return []

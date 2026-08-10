@@ -12,7 +12,6 @@ Then uses LLM to analyze and structure this data into actionable context.
 """
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -23,7 +22,7 @@ from analysis.prompts import (
     RESEARCH_ANALYSIS_TEMPLATE,
     format_context_for_prompt,
 )
-from data.cache import cache, safe_hash, clean_json_response
+from data.cache import cache, safe_hash, parse_json_payload
 
 logger = logging.getLogger(__name__)
 
@@ -204,8 +203,12 @@ class ResearchAgent:
         )
         cached = cache.get(cache_key)
         if cached:
-            try:
-                data = json.loads(cached) if isinstance(cached, str) else cached
+            # parse_json_payload: json.loads yang TIDAK pernah raise untuk nilai
+            # string (cache lama/rusak — dulu try/except di sini, kini aman).
+            data = parse_json_payload(cached) if isinstance(cached, str) else cached
+            # Guard tipe: data bisa list bila pernah ter-cache hasil parsing model
+            # liar (JSON array) — hanya dict yang dipakai.
+            if isinstance(data, dict):
                 # `or default` — LLM boleh mengembalikan null eksplisit (sesuai
                 # aturan anti-halusinasi "isi null jika tidak ada"); jangan biarkan
                 # null mengalir ke bawah dan merusak konsumen field ini.
@@ -214,8 +217,6 @@ class ResearchAgent:
                 context.market_regime = data.get("market_regime") or "unknown"
                 context.llm_analysis = data.get("llm_analysis") or ""
                 return
-            except (json.JSONDecodeError, TypeError):
-                pass
 
         prompt = RESEARCH_ANALYSIS_TEMPLATE.format(
             question=question,
@@ -240,18 +241,17 @@ class ResearchAgent:
         )
 
         # Try to parse JSON from response
-        try:
-            # Extract JSON menggunakan clean_json_response untuk menangani variasi format LLM
-            text = clean_json_response(response)
-
-            data = json.loads(text)
+        # json.loads yang TIDAK pernah raise — payload list/non-dict dianggap
+        # gagal parse (llm_analysis diisi teks mentah; pipeline tidak crash).
+        data = parse_json_payload(response)
+        if isinstance(data, dict):
             # `or default` — LLM boleh mengembalikan null eksplisit (sesuai aturan
             # anti-halusinasi "isi null jika tidak ada"); guard agar tidak None.
             context.key_drivers = data.get("key_drivers") or []
             context.key_levels = data.get("key_levels") or {"support": [], "resistance": []}
             context.market_regime = data.get("market_regime") or "unknown"
             context.llm_analysis = data.get("price_context") or response[:500]
-        except (json.JSONDecodeError, IndexError):
+        else:
             context.llm_analysis = response[:500]
 
         # Cache the analysis

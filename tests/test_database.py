@@ -38,16 +38,6 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
         m1.assert_called_once_with(10)
         m2.assert_called_once_with(10)
 
-    def test_price_alerts_async_delegates(self):
-        rows = [{"id": 1, "chat_id": 777, "user_id": 9999, "symbol": "EURUSD=X",
-                 "display_name": "EUR/USD", "target": 1.1, "direction": "above"}]
-        with mock.patch.object(Database, "get_price_alerts", return_value=rows) as m1, \
-             mock.patch.object(Database, "save_price_alerts", return_value=True) as m2:
-            self.assertEqual(asyncio.run(Database.get_price_alerts_async()), rows)
-            self.assertTrue(asyncio.run(Database.save_price_alerts_async(rows)))
-        m1.assert_called_once()
-        m2.assert_called_once_with(rows)
-
     def test_event_alert_subscribers_async_delegates(self):
         with mock.patch.object(Database, "get_event_alert_subscribers", return_value={1, 2}) as m1, \
              mock.patch.object(Database, "save_event_alert_subscribers", return_value=True) as m2:
@@ -79,47 +69,6 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
         sess.post.assert_called_once()
         payload = sess.post.call_args.kwargs["json"]
         self.assertEqual(payload, [{"key": "a"}, {"key": "b"}])
-
-    def test_get_price_alerts_parses_rows_and_skips_malformed(self):
-        """Parsing baris DB → dict alert; baris rusak dilewati tanpa crash."""
-        fake = mock.Mock()
-        fake.raise_for_status = mock.Mock()
-        fake.json = mock.Mock(return_value=[
-            {"id": "1", "chat_id": 777, "user_id": 9999, "symbol": "EURUSD=X",
-             "display_name": "EUR/USD", "target": "1.1", "direction": "above"},
-            {"id": "bogus", "chat_id": 1, "user_id": 1, "symbol": "X",
-             "target": 1.0, "direction": "above"},
-        ])
-        sess = mock.Mock()
-        sess.get.return_value = fake
-        with mock.patch("data.database._is_configured", return_value=True), \
-             mock.patch("data.database._session", return_value=sess):
-            alerts = Database.get_price_alerts()
-        sess.get.assert_called_once()
-        self.assertEqual(len(alerts), 1)
-        self.assertEqual(alerts[0]["symbol"], "EURUSD=X")
-        self.assertEqual(alerts[0]["target"], 1.1)
-
-    def test_save_price_alerts_replace_all(self):
-        """save_price_alerts menghapus semua lalu insert ulang (bulk)."""
-        sess = mock.Mock()
-        delete_fake = mock.Mock()
-        delete_fake.raise_for_status = mock.Mock()
-        sess.delete.return_value = delete_fake
-        post_fake = mock.Mock()
-        post_fake.raise_for_status = mock.Mock()
-        sess.post.return_value = post_fake
-        with mock.patch("data.database._is_configured", return_value=True), \
-             mock.patch("data.database._session", return_value=sess):
-            ok = Database.save_price_alerts([
-                {"id": 1, "chat_id": 7, "user_id": 9, "symbol": "GC=F",
-                 "display_name": "Gold", "target": 2350.0, "direction": "below"},
-            ])
-        self.assertTrue(ok)
-        sess.delete.assert_called_once()
-        sess.post.assert_called_once()
-        payload = sess.post.call_args.kwargs["json"]
-        self.assertEqual(payload[0]["target"], 2350.0)
 
     def test_save_event_alert_subscribers_replace_all(self):
         sess = mock.Mock()

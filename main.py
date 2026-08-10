@@ -55,7 +55,6 @@ from config.settings import (
     ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES,
     NEWS_PREDICTION_ENABLED,
     NEWS_PREDICTION_CHECK_INTERVAL_MINUTES,
-    PRICE_ALERT_CHECK_MINUTES,
     BOT_USERNAME,
     BOT_NAME,
     PORT,
@@ -140,15 +139,11 @@ async def post_init(application: Application):
         BotCommand("sentiment", "🧠 Sentimen pasar"),
         BotCommand("calendar", "📅 Kalender Ekonomi"),
         BotCommand("alert", "🔔 Notifikasi event ekonomi"),
-        BotCommand("pa", "🎯 Alert harga (target)"),
         BotCommand("status", "✅ Status sistem & API"),
         BotCommand("clear", "🧹 Bersihkan konteks"),
         BotCommand("memory", "🧠 Lihat & hapus riwayat percakapan"),
-        BotCommand("chart", "📈 Grafik harga"),
         BotCommand("overview", "🌍 Overview pasar"),
         BotCommand("sentimen", "🧠 Sentimen retail (OANDA)"),
-        BotCommand("watch", "👀 Watchlist instrumen"),
-        BotCommand("riwayat", "📜 Riwayat harga tersimpan"),
         BotCommand("subscribe", "🔔 Langganan Morning Brief"),
         BotCommand("unsubscribe", "🔕 Berhenti langganan"),
         BotCommand("about", "ℹ️ Tentang bot ini"),
@@ -170,13 +165,10 @@ async def post_init(application: Application):
         f"run_mode={BOT_RUN_MODE} webhook_url={'set' if WEBHOOK_URL else 'kosong'}"
     )
 
-    # Muat state persisten dari Supabase — alert harga (/pa) & subscriber
-    # notifikasi event (/alert). Dulunya RAM-only, jadi hilang saat restart;
-    # sekarang dimuat ulang agar alert lama tetap aktif setelah deploy.
+    # Muat state persisten dari Supabase — subscriber notifikasi event (/alert).
+    # Dulunya RAM-only, jadi hilang saat restart; sekarang dimuat ulang agar
+    # langganan tetap aktif setelah deploy.
     try:
-        alerts = await db.get_price_alerts_async()
-        if alerts:
-            application.bot_data["price_alerts"] = alerts
         subscribers = await db.get_event_alert_subscribers_async()
         if subscribers:
             application.bot_data["event_alert_subscribers"] = subscribers
@@ -184,8 +176,8 @@ async def post_init(application: Application):
         if notified:
             application.bot_data["event_alert_notified"] = notified
         logger.info(
-            f"Loaded persistent state: {len(alerts)} price alerts, "
-            f"{len(subscribers)} event subscribers, {len(notified)} notified keys"
+            f"Loaded persistent state: {len(subscribers)} event subscribers, "
+            f"{len(notified)} notified keys"
         )
     except Exception as e:
         logger.warning(f"Gagal memuat state persisten dari database: {e}")
@@ -262,44 +254,6 @@ async def news_prediction_settle_callback(context):
             await bot_instance.settle_news_predictions(context.application)
         except Exception as e:
             logger.warning(f"News prediction settle failed: {e}")
-
-
-async def price_alert_callback(context):
-    """
-    Callback untuk mengecek alert harga per-user (/pa).
-    Dipanggil berkala setiap PRICE_ALERT_CHECK_MINUTES menit.
-    """
-    bot_instance = context.application.bot_data.get("market_bot")
-    if bot_instance:
-        try:
-            await bot_instance.check_price_alerts(context.application)
-        except Exception as e:
-            logger.warning(f"Price alert check failed: {e}")
-
-
-async def price_history_recorder_callback(context):
-    """
-    Callback untuk merekam snapshot harga watchlist user (fitur /riwayat).
-    Dipanggil berkala setiap 30 menit. Data di-cache data layer (OANDA
-    real-time TTL 30 dtk) sehingga biaya request sangat kecil.
-    """
-    bot_instance = context.application.bot_data.get("market_bot")
-    if bot_instance:
-        try:
-            await bot_instance.record_price_history(context.application)
-        except Exception as e:
-            logger.warning(f"Price history recorder failed: {e}")
-
-
-async def price_history_cleanup_callback(context):
-    """
-    Bersihkan snapshot harga yang lebih tua dari 30 hari (perkecil ukuran tabel).
-    Dipanggil harian.
-    """
-    try:
-        await asyncio.to_thread(db.delete_old_price_history, 30)
-    except Exception as e:
-        logger.warning(f"Price history cleanup failed: {e}")
 
 
 async def cache_cleanup_callback(context):
@@ -422,19 +376,6 @@ def setup_scheduler(application: Application, bot: MarketBot):
                 f"News predictions scheduled every {NEWS_PREDICTION_CHECK_INTERVAL_MINUTES} minutes"
             )
 
-        # ===== Price Alerts =====
-        # Alert harga per-user (/pa) diperiksa berkala; lebih cepat dari interval
-        # event reminder karena harga bergerak terus.
-        application.job_queue.run_repeating(
-            price_alert_callback,
-            interval=timedelta(minutes=PRICE_ALERT_CHECK_MINUTES),
-            first=60,  # Mulai 60 detik setelah start
-            name="price_alerts",
-        )
-        logger.info(
-            f"Price alerts scheduled every {PRICE_ALERT_CHECK_MINUTES} minutes"
-        )
-
         # Bersihkan cache kedaluwarsa (memori + Supabase) setiap 10 menit
         application.job_queue.run_repeating(
             cache_cleanup_callback,
@@ -444,24 +385,6 @@ def setup_scheduler(application: Application, bot: MarketBot):
         )
         logger.info("Cache cleanup scheduled every 10 minutes")
 
-        # ===== Riwayat Harga (fitur /watch & /riwayat) =====
-        # Rekam snapshot harga watchlist user setiap 30 menit; bersihkan data
-        # lebih tua dari 30 hari sekali sehari (04:00).
-        application.job_queue.run_repeating(
-            price_history_recorder_callback,
-            interval=timedelta(minutes=30),
-            first=300,  # Mulai 5 menit setelah start (beri waktu stream terkoneksi)
-            name="price_history_recorder",
-        )
-        logger.info("Price history recorder scheduled every 30 minutes")
-
-        cleanup_time = time(hour=4, minute=0, tzinfo=brief_tz)
-        application.job_queue.run_daily(
-            price_history_cleanup_callback,
-            time=cleanup_time,
-            name="price_history_cleanup",
-        )
-        logger.info("Price history cleanup scheduled daily at 04:00")
     else:
         logger.warning("JobQueue not available, morning brief & event alerts scheduling disabled. Install pytz if needed.")
 
@@ -483,12 +406,8 @@ def register_handlers(application: Application, bot: MarketBot):
     application.add_handler(CommandHandler("aftermath", bot.aftermath_command))
     application.add_handler(CommandHandler("prediksi", bot.prediksi_command))
     application.add_handler(CommandHandler("alert", bot.alert_command))
-    application.add_handler(CommandHandler("pa", bot.price_alert_command))
-    application.add_handler(CommandHandler("chart", bot.chart_command))
     application.add_handler(CommandHandler("overview", bot.overview_command))
     application.add_handler(CommandHandler("sentimen", bot.retail_sentiment_command))
-    application.add_handler(CommandHandler("watch", bot.watch_command))
-    application.add_handler(CommandHandler("riwayat", bot.history_command))
     application.add_handler(CommandHandler("subscribe", bot.subscribe_command))
     application.add_handler(CommandHandler("unsubscribe", bot.unsubscribe_command))
     application.add_handler(CallbackQueryHandler(bot.handle_callback))

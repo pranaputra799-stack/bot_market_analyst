@@ -10,7 +10,6 @@ Scoring factors:
 """
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -18,7 +17,7 @@ from typing import Any, Dict, List, Optional
 from analysis.prompts import CONFIDENCE_SYSTEM, CONFIDENCE_TEMPLATE
 from analysis.signals import AggregatedSignal, SignalType
 from analysis.contradiction_agent import Contradiction
-from data.cache import clean_json_response
+from data.cache import parse_json_payload
 
 logger = logging.getLogger(__name__)
 
@@ -213,20 +212,19 @@ class ConfidenceAgent:
 
     def _parse_response(self, response: str) -> Optional[Dict]:
         """Parse LLM response into confidence dict."""
-        try:
-            text = clean_json_response(response)
-            data = json.loads(text)
-            # is not None — jangan ubah 0.0 (skor rendah yang sah) menjadi default;
-            # guard null eksplisit dari LLM agar tidak None/ValueError.
-            return {
-                "overall": float(data.get("overall_score") if data.get("overall_score") is not None else 0.5),
-                "level": data.get("level") or "moderate",
-                "evidence_quality": float(data.get("evidence_quality") if data.get("evidence_quality") is not None else 0.5),
-                "signal_alignment": float(data.get("signal_alignment") if data.get("signal_alignment") is not None else 0.5),
-                "scenario_clarity": float(data.get("scenario_clarity") if data.get("scenario_clarity") is not None else 0.5),
-                "assessment": data.get("assessment") or "",
-                "limitations": data.get("limitations") or [],
-            }
-        except (json.JSONDecodeError, IndexError, ValueError) as e:
-            logger.warning(f"Failed to parse confidence response: {e}")
+        # json.loads yang TIDAK pernah raise; payload list/non-dict → None
+        # (pemanggil memakai skor algoritmik — pipeline tidak crash).
+        data = parse_json_payload(response)
+        if not isinstance(data, dict):
             return None
+        # is not None — jangan ubah 0.0 (skor rendah yang sah) menjadi default;
+        # guard null eksplisit dari LLM agar tidak None/ValueError.
+        return {
+            "overall": float(data.get("overall_score") if data.get("overall_score") is not None else 0.5),
+            "level": data.get("level") or "moderate",
+            "evidence_quality": float(data.get("evidence_quality") if data.get("evidence_quality") is not None else 0.5),
+            "signal_alignment": float(data.get("signal_alignment") if data.get("signal_alignment") is not None else 0.5),
+            "scenario_clarity": float(data.get("scenario_clarity") if data.get("scenario_clarity") is not None else 0.5),
+            "assessment": data.get("assessment") or "",
+            "limitations": data.get("limitations") or [],
+        }

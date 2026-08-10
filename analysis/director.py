@@ -459,11 +459,18 @@ class AnalysisDirector:
         return "\n".join(parts)
 
     def _generate_fallback_response(self, question: str, error: Exception) -> str:
-        """Generate a fallback response when analysis fails."""
+        """Generate a fallback response when analysis fails.
+
+        Pertanyaan DI-TRUNCATE: untuk /morning, `question` adalah prompt lengkap
+        morning brief (ratusan karakter) — meng-echo penuh akan menampilkan
+        "prompt mentah" ke user. Cukup cuplikan pendek agar user tahu konteksnya.
+        """
+        question_short = " ".join((question or "").split())[:120]
+        truncated = "…" if len((question or "").strip()) > 120 else ""
         return (
             f"🤖 *Market Analysis*\n\n"
             f"Maaf, terjadi kendala saat menganalisis pertanyaan:\n"
-            f"*{question}*\n\n"
+            f"*{question_short}{truncated}*\n\n"
             f"❌ {str(error)[:150]}\n\n"
             f"Silakan coba lagi dengan pertanyaan yang lebih spesifik, "
             f"atau gunakan /status untuk memeriksa kondisi sistem.\n\n"
