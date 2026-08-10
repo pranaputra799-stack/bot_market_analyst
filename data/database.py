@@ -11,6 +11,7 @@ import asyncio
 import logging
 import threading
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import requests
 from config.settings import SUPABASE_URL, SUPABASE_KEY
@@ -42,6 +43,23 @@ def _get_headers():
 def _is_configured():
     return bool(SUPABASE_URL and SUPABASE_KEY)
 
+def _err_detail(e: Exception) -> str:
+    """Format exception untuk log — sertakan body response PostgREST bila ada.
+
+    requests.HTTPError hanya menampilkan status line (mis. '400 Client Error: Bad
+    Request'); detail penyebab asli (kode PGRSTxxx / pesan Postgres) ada di body
+    response dan tersembunyi tanpa helper ini.
+    """
+    resp = getattr(e, "response", None)
+    if resp is not None:
+        try:
+            body = getattr(resp, "text", "") or ""
+        except Exception:
+            body = ""
+        if body:
+            return f"{e} | {body[:500]}"
+    return str(e)
+
 
 class Database:
     @staticmethod
@@ -64,7 +82,7 @@ class Database:
             resp.raise_for_status()
             return True
         except Exception as e:
-            logger.error(f"Error upserting user: {e}")
+            logger.error(f"Error upserting user: {_err_detail(e)}")
             return False
 
     @staticmethod
@@ -77,7 +95,7 @@ class Database:
             resp.raise_for_status()
             return [row["chat_id"] for row in resp.json()]
         except Exception as e:
-            logger.error(f"Error fetching subscribers: {e}")
+            logger.error(f"Error fetching subscribers: {_err_detail(e)}")
             return []
 
     @staticmethod
@@ -90,7 +108,7 @@ class Database:
             resp.raise_for_status()
             return len(resp.json()) > 0
         except Exception as e:
-            logger.error(f"Error checking subscriber: {e}")
+            logger.error(f"Error checking subscriber: {_err_detail(e)}")
             return False
 
     @staticmethod
@@ -104,7 +122,7 @@ class Database:
             resp.raise_for_status()
             return True
         except Exception as e:
-            logger.error(f"Error adding subscriber: {e}")
+            logger.error(f"Error adding subscriber: {_err_detail(e)}")
             return False
 
     @staticmethod
@@ -117,7 +135,7 @@ class Database:
             resp.raise_for_status()
             return True
         except Exception as e:
-            logger.error(f"Error removing subscriber: {e}")
+            logger.error(f"Error removing subscriber: {_err_detail(e)}")
             return False
 
     # ===================== EVENT REPORTS (aftermath dedup) =====================
@@ -134,7 +152,7 @@ class Database:
             resp.raise_for_status()
             return {row["key"] for row in resp.json()}
         except Exception as e:
-            logger.error(f"Error fetching reported events: {e}")
+            logger.error(f"Error fetching reported events: {_err_detail(e)}")
             return set()
 
     @staticmethod
@@ -152,7 +170,7 @@ class Database:
             resp.raise_for_status()
             return True
         except Exception as e:
-            logger.error(f"Error saving reported event: {e}")
+            logger.error(f"Error saving reported event: {_err_detail(e)}")
             return False
 
     # ===================== EVENT ALERT SUBSCRIBERS (persisten) =====================
@@ -170,27 +188,56 @@ class Database:
             resp.raise_for_status()
             return {int(row["chat_id"]) for row in resp.json()}
         except Exception as e:
-            logger.error(f"Error fetching event alert subscribers: {e}")
+            logger.error(f"Error fetching event alert subscribers: {_err_detail(e)}")
             return set()
 
     @staticmethod
     def save_event_alert_subscribers(subscribers) -> bool:
-        """Ganti seluruh daftar subscriber event (delete semua + insert ulang)."""
+        """Ganti seluruh daftar subscriber event (strategi upsert + prune).
+
+        1. UPSERT semua chat_id aktif via POST 'resolution=merge-duplicates'
+           (butuh PK/UNIQUE constraint pada tabel — sudah ada di migration).
+        2. PRUNE: DELETE chat_id yang TIDAK ada di daftar baru lewat filter
+           'chat_id=not.in.(...)' — selalu punya WHERE clause, jadi lolos
+           proteksi Supabase "DELETE requires a WHERE clause" yang menolak
+           DELETE massal tanpa filter dengan 400 (code 21000).
+
+        Keuntungan vs pola lama (DELETE semua lalu insert): tidak ada request
+        DELETE tanpa WHERE, dan bila upsert gagal, daftar lama tidak hilang
+        (crash-safe). created_at dikirim eksplisit agar insert tetap sukses
+        walau kolom di DB ber-NOT NULL tanpa DEFAULT.
+        """
         if not _is_configured():
             return False
         try:
-            headers = _get_headers()
+            # Guard: hanya chat_id bertipe int (bukan bool) — satu nilai aneh
+            # (mis. string) membuat seluruh batch insert ditolak Postgres.
+            ids = sorted(
+                c for c in set(subscribers)
+                if isinstance(c, int) and not isinstance(c, bool)
+            )
             url = f"{SUPABASE_URL}/rest/v1/event_alert_subscribers"
-            _session().delete(url, headers=headers, timeout=10).raise_for_status()
-            rows = [{"chat_id": c} for c in sorted(set(subscribers))]
-            if not rows:
-                return True
-            headers = {**headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
-            resp = _session().post(url, json=rows, headers=headers, timeout=10)
-            resp.raise_for_status()
+            if ids:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                rows = [{"chat_id": c, "created_at": now_iso} for c in ids]
+                headers = {**_get_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"}
+                _session().post(url, json=rows, headers=headers, timeout=10).raise_for_status()
+                # Prune yang tidak lagi subscribe — chunk agar URL tidak kepanjangan.
+                for i in range(0, len(ids), 200):
+                    cond = ",".join(str(c) for c in ids[i:i + 200])
+                    _session().delete(
+                        f"{url}?chat_id=not.in.({cond})",
+                        headers=_get_headers(), timeout=10,
+                    ).raise_for_status()
+            else:
+                # Daftar kosong: kosongkan tabel — DELETE tetap pakai WHERE clause.
+                _session().delete(
+                    f"{url}?chat_id=not.is.null",
+                    headers=_get_headers(), timeout=10,
+                ).raise_for_status()
             return True
         except Exception as e:
-            logger.error(f"Error saving event alert subscribers: {e}")
+            logger.error(f"Error saving event alert subscribers: {_err_detail(e)}")
             return False
 
     # ===================== EVENT ALERT NOTIFIED (dedup reminder) =====================
@@ -208,27 +255,46 @@ class Database:
             resp.raise_for_status()
             return {row["key"] for row in resp.json()}
         except Exception as e:
-            logger.error(f"Error fetching event_alert_notified: {e}")
+            logger.error(f"Error fetching event_alert_notified: {_err_detail(e)}")
             return set()
 
     @staticmethod
     def save_event_alert_notified(keys) -> bool:
-        """Ganti seluruh kunci event yang sudah di-notify (delete + insert)."""
+        """Ganti seluruh kunci event yang sudah di-notify (strategi upsert + prune).
+
+        Sama seperti save_event_alert_subscribers: upsert dulu via
+        'resolution=merge-duplicates', lalu prune kunci yang tidak ada di daftar
+        baru lewat filter 'key=not.in.(...)'. DELETE selalu punya WHERE clause
+        sehingga lolos proteksi Supabase "DELETE requires a WHERE clause" (400
+        code 21000). Nilai kunci di-URL-encode (kunci mengandung karakter seperti
+        '|', ':', '+'). Hanya kunci string non-kosong yang dikirim.
+        """
         if not _is_configured():
             return False
         try:
-            headers = _get_headers()
+            keyset = sorted({k for k in set(keys) if isinstance(k, str) and k})
             url = f"{SUPABASE_URL}/rest/v1/event_alert_notified"
-            _session().delete(url, headers=headers, timeout=10).raise_for_status()
-            rows = [{"key": k} for k in sorted(set(keys))]
-            if not rows:
-                return True
-            headers = {**headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
-            resp = _session().post(url, json=rows, headers=headers, timeout=10)
-            resp.raise_for_status()
+            if keyset:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                rows = [{"key": k, "created_at": now_iso} for k in keyset]
+                headers = {**_get_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"}
+                _session().post(url, json=rows, headers=headers, timeout=10).raise_for_status()
+                # Prune kunci yang tidak lagi berlaku — chunk kecil (key bisa
+                # panjang, mis. 'NFP|2026-08-10T12:30:00+00:00') + URL-encode nilai.
+                for i in range(0, len(keyset), 50):
+                    cond = ",".join(quote(k, safe="") for k in keyset[i:i + 50])
+                    _session().delete(
+                        f"{url}?key=not.in.({cond})",
+                        headers=_get_headers(), timeout=10,
+                    ).raise_for_status()
+            else:
+                _session().delete(
+                    f"{url}?key=not.is.null",
+                    headers=_get_headers(), timeout=10,
+                ).raise_for_status()
             return True
         except Exception as e:
-            logger.error(f"Error saving event_alert_notified: {e}")
+            logger.error(f"Error saving event_alert_notified: {_err_detail(e)}")
             return False
 
     # ===================== NEWS PREDICTIONS (XAU/USD) =====================
@@ -252,7 +318,7 @@ class Database:
             resp.raise_for_status()
             return True
         except Exception as e:
-            logger.error(f"Error saving news prediction: {e}")
+            logger.error(f"Error saving news prediction: {_err_detail(e)}")
             return False
 
     @staticmethod
@@ -269,7 +335,7 @@ class Database:
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
-            logger.error(f"Error fetching news predictions: {e}")
+            logger.error(f"Error fetching news predictions: {_err_detail(e)}")
             return []
 
     # ===================== ASYNC WRAPPERS =====================

@@ -70,6 +70,52 @@ CREATE TABLE IF NOT EXISTS public.event_alert_notified (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Jaga-jaga, idempotent (aman dijalankan ulang):
+--   (1) bila event_alert_subscribers/event_alert_notified SUDAH ada tanpa
+--       PRIMARY KEY (mis. dibuat versi lama / manual via dashboard), tambahkan
+--       sekarang — PostgREST menolak request POST upsert dengan 400 bila tabel
+--       tidak punya PK/UNIQUE constraint.
+--   (2) pastikan semua tabel punya DEFAULT now() pada created_at — bila kolom
+--       ber-NOT NULL tanpa default, insert yang tidak menyertakan created_at
+--       ditolak 400 (23502 null value violates not-null constraint).
+DO $$
+DECLARE
+    t text;
+    tables text[] := ARRAY['event_alert_subscribers', 'event_alert_notified',
+                           'users', 'subscribers', 'event_reports', 'news_predictions'];
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.event_alert_subscribers'::regclass
+          AND contype = 'p'
+    ) THEN
+        -- Buang duplikat chat_id bila pernah terisi tanpa PK, agar ALTER sukses
+        DELETE FROM public.event_alert_subscribers a
+        USING public.event_alert_subscribers b
+        WHERE a.ctid < b.ctid AND a.chat_id = b.chat_id;
+        ALTER TABLE public.event_alert_subscribers ADD PRIMARY KEY (chat_id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.event_alert_notified'::regclass
+          AND contype = 'p'
+    ) THEN
+        DELETE FROM public.event_alert_notified a
+        USING public.event_alert_notified b
+        WHERE a.ctid < b.ctid AND a.key = b.key;
+        ALTER TABLE public.event_alert_notified ADD PRIMARY KEY (key);
+    END IF;
+    FOREACH t IN ARRAY tables LOOP
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = t
+              AND column_name = 'created_at'
+        ) THEN
+            EXECUTE format('ALTER TABLE public.%I ALTER COLUMN created_at SET DEFAULT now()', t);
+        END IF;
+    END LOOP;
+END $$;
+
 -- ============================================================
 -- RLS (Row Level Security) & GRANT
 --
