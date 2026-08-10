@@ -2,9 +2,12 @@
 Message templates untuk bot Telegram.
 Semua format balasan bot ada di sini untuk konsistensi.
 """
+import logging
 import time
 from datetime import datetime
 from typing import Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 
 # Cache TTL hasil get_data_sources_status (detik): status data source melibatkan
@@ -250,6 +253,33 @@ def get_data_sources_status(market_data, macro_data, news_fetcher) -> str:
         lines.append("  ✅ FRED (terkonfigurasi)")
     else:
         lines.append("  ⬜ FRED (belum dikonfigurasi)")
+
+    # Peta sumber data per instrumen utama — validasi beban yfinance.
+    # getattr defensif: MarketDataAggregator lama (tanpa method ini) tidak
+    # boleh membuat /status crash — blok dilewati begitu saja.
+    source_rows = getattr(market_data, "get_instrument_source_status", None)
+    if callable(source_rows):
+        try:
+            rows = source_rows()
+            if rows:
+                lines.append("")
+                lines.append("  📍 *Sumber per Instrumen:*")
+                for r in rows:
+                    plan = r.get("plan") or "?"
+                    actual = r.get("actual")
+                    # Ikone: real-time (OANDA/ccxt) vs Yahoo. Kalau plan real-time
+                    # tapi aktualnya Yahoo → fallback sedang aktif; aktual ERROR →
+                    # fetch terakhir gagal total (dua-duanya patut dicek).
+                    if "Yahoo" in plan:
+                        icon = "🟡"
+                    elif actual and (actual == "ERROR" or "Yahoo" in actual):
+                        icon = "⚠️"
+                    else:
+                        icon = "✅"
+                    actual_part = f"aktual: {actual}" if actual else "belum di-fetch"
+                    lines.append(f"  {icon} {r.get('display', r.get('symbol', '?'))}: {plan} · {actual_part}")
+        except Exception as e:
+            logger.warning(f"Sumber per instrumen gagal ditampilkan: {e}")
 
     result = "\n".join(lines)
     _DATA_STATUS_CACHE["ts"] = now

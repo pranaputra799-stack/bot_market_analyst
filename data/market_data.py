@@ -112,6 +112,11 @@ class MarketDataAggregator:
         self.twelve_key = TWELVEDATA_KEY
         self.exchange_key = EXCHANGE_RATE_KEY
         self.oanda = OandaClient()
+        # Sumber data TERAKHIR yang benar-benar dipakai per simbol (symbol -> source).
+        # Dicatat saat fetch sukses (OANDA/ccxt/Yahoo) — dipakai /status untuk
+        # memvalidasi beban yfinance: terlihat instrumen mana yang benar-benar
+        # menyentuh Yahoo vs real-time OANDA/ccxt.
+        self._last_sources: Dict[str, str] = {}
 
     # ===================== OANDA (Primary — Forex & Gold) =====================
 
@@ -234,12 +239,14 @@ class MarketDataAggregator:
             cached_oanda = cache.get(oanda_key)
             if cached_oanda:
                 if "error" not in cached_oanda:
+                    self._last_sources[symbol] = cached_oanda.get("source") or "OANDA"
                     return cached_oanda
                 # Negative cache (OANDA sedang down) — lewati, pakai Yahoo.
                 cached_oanda = None
             try:
                 result = self._get_oanda_data(symbol, period, interval, ohlcv_limit)
                 if result.get("current_price") is not None:
+                    self._last_sources[symbol] = result["source"]
                     cache.set(oanda_key, result, OANDA_PRICE_TTL)
                     return result
             except Exception as e:
@@ -262,16 +269,19 @@ class MarketDataAggregator:
             if ohlcv_limit <= 5:
                 crypto = get_crypto_ticker(symbol)
                 if crypto and crypto.get("current_price") is not None:
+                    self._last_sources[symbol] = crypto["source"]
                     return crypto
             else:
                 crypto_ohlcv = get_crypto_ohlcv(symbol, interval=interval, limit=ohlcv_limit)
                 if crypto_ohlcv:
+                    self._last_sources[symbol] = "ccxt (OHLCV real-time)"
                     return self._build_crypto_ohlcv_result(symbol, crypto_ohlcv)
             logger.info(f"ccxt tidak tersedia untuk {symbol}, fallback Yahoo")
 
         cache_key = f"yahoo:{symbol}:{period}:{interval}:n{ohlcv_limit}"
         cached_data = cache.get(cache_key)
         if cached_data:
+            self._last_sources[symbol] = cached_data.get("source") or "Yahoo Finance"
             return cached_data
 
         try:
@@ -375,11 +385,16 @@ class MarketDataAggregator:
                 "timestamp": datetime.now().isoformat(),
             }
 
+            self._last_sources[symbol] = result["source"]
             cache.set(cache_key, result, CACHE_TTL_SECONDS)
             return result
 
         except Exception as e:
             logger.warning(f"Yahoo Finance error for {symbol}: {e}")
+            # Tandai sumber terakhir = ERROR agar /status tidak menampilkan
+            # sukses lama yang sudah basi saat fetch terakhir justru gagal
+            # (OANDA down + Yahoo error sekaligus).
+            self._last_sources[symbol] = "ERROR"
             error_result = {
                 "source": "Yahoo Finance",
                 "symbol": symbol,
@@ -683,6 +698,48 @@ class MarketDataAggregator:
             except Exception:
                 pass
         return result
+
+    def get_instrument_source_status(self) -> List[Dict]:
+        """
+        Peta sumber data per instrumen utama — TANPA network (murni konfigurasi).
+
+        Dipakai /status untuk memvalidasi beban yfinance:
+        - `plan`: sumber yang AKAN dipakai berdasarkan konfigurasi saat ini
+          (OANDA bila terkonfigurasi & didukung, ccxt untuk crypto, Yahoo sisanya).
+        - `actual`: sumber yang TERAKHIR benar-benar dipakai saat fetch (dari
+          _last_sources) — None bila simbol belum pernah di-fetch proses ini.
+          Ini yang menunjukkan beban yfinance NYATA: kalau plan = OANDA tapi
+          actual = Yahoo, berarti OANDA sedang fallback (perlu dicek).
+
+        Returns:
+            List of dict: {symbol, display, plan, actual}
+        """
+        instruments = [
+            ("EURUSD=X", "EUR/USD"),
+            ("GBPUSD=X", "GBP/USD"),
+            ("USDJPY=X", "USD/JPY"),
+            ("GC=F", "XAU/USD (Gold)"),
+            ("USDIDR=X", "USD/IDR"),
+            ("DX-Y.NYB", "DXY"),
+            ("^GSPC", "S&P 500"),
+            ("BTC-USD", "BTC/USD"),
+            ("ETH-USD", "ETH/USD"),
+        ]
+        rows = []
+        for symbol, display in instruments:
+            if self.oanda.is_configured and symbol in OANDA_SYMBOLS:
+                plan = f"OANDA ({self.oanda.env_name})"
+            elif symbol in CRYPTO_SYMBOLS:
+                plan = "ccxt (real-time)"
+            else:
+                plan = "Yahoo Finance"
+            rows.append({
+                "symbol": symbol,
+                "display": display,
+                "plan": plan,
+                "actual": self._last_sources.get(symbol),
+            })
+        return rows
 
     def _format_price(self, price: float) -> str:
         """Format harga sesuai dengan instrumen."""
