@@ -139,6 +139,8 @@ async def post_init(application: Application):
         BotCommand("morning", "🌅 Morning Brief harian"),
         BotCommand("sentiment", "🧠 Sentimen pasar"),
         BotCommand("calendar", "📅 Kalender Ekonomi"),
+        BotCommand("aftermath", "🎯 Analisis dampak event (contoh: /aftermath nfp)"),
+        BotCommand("prediksi", "🎯 Win rate prediksi news (XAU/USD)"),
         BotCommand("alert", "🔔 Notifikasi event ekonomi"),
         BotCommand("status", "✅ Status sistem & API"),
         BotCommand("clear", "🧹 Bersihkan konteks"),

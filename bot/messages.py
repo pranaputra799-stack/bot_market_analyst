@@ -63,6 +63,7 @@ HELP_MESSAGE = """
 /sentimen - 🧠 Sentimen retail OANDA — Position/Order Book
 /calendar - 📅 Kalender ekonomi high-impact
 /aftermath - 🎯 Analisis dampak event (contoh: /aftermath nfp)
+/prediksi - 🎯 Win rate prediksi news XAU/USD (contoh: /prediksi history)
 /overview - 🌍 Overview semua instrumen (instan)
 /alert - 🔔 Notifikasi event + analisis aftermath DXY
 /subscribe - 🔔 Langganan Morning Brief
@@ -71,6 +72,10 @@ HELP_MESSAGE = """
 /clear - 🧹 Bersihkan konteks percakapan
 /memory - 🧠 Lihat & hapus riwayat percakapan (24 jam)
 /about - ℹ️ Tentang bot
+
+🔒 *Khusus Admin:*
+/stats - 📊 Statistik sistem lengkap (token AI, user aktif, subscriber)
+/broadcast - 📣 Kirim pengumuman ke semua subscriber
 
 ⚠️ Analisis edukasi, *bukan* sinyal trading atau rekomendasi investasi. Keputusan trading sepenuhnya tanggung jawab Anda.
 """

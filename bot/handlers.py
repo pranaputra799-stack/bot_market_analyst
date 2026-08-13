@@ -466,9 +466,10 @@ class MarketBot:
             ],
             [
                 InlineKeyboardButton("🌅 Morning Brief", callback_data="morning"),
-                InlineKeyboardButton("🔔 Alert Event", callback_data="alert_on"),
+                InlineKeyboardButton("🎯 Prediksi News", callback_data="prediksi"),
             ],
             [
+                InlineKeyboardButton("🔔 Alert Event", callback_data="alert_on"),
                 InlineKeyboardButton("❓ Bantuan", callback_data="help"),
             ],
         ]
@@ -1912,6 +1913,27 @@ class MarketBot:
                 disable_web_page_preview=True,
             )
 
+        elif data == "prediksi":
+            # Tombol menu '🎯 Prediksi News' — win rate prediksi XAU/USD
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id,
+                action="typing",
+            )
+            try:
+                message = await self._build_prediksi_message(limit=10)
+            except Exception as e:
+                logger.warning(f"Prediksi (menu) gagal: {e}")
+                message = (
+                    "🎯 *PREDIKSI NEWS — XAU/USD*\n\n"
+                    "❌ Statistik prediksi tidak tersedia saat ini. Coba lagi beberapa saat."
+                )
+            await safe_edit_message_text(
+                query,
+                message,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+
         elif data == "overview":
             await context.bot.send_chat_action(
                 chat_id=update.effective_chat.id,
@@ -3208,34 +3230,28 @@ class MarketBot:
             reasoning=reasoning,
         )
 
-    async def prediksi_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handler /prediksi — win rate & riwayat prediksi news (XAU/USD)."""
-        text = update.message.text or ""
-        arg = text.replace("/prediksi", "").strip().lower()
+    async def _build_prediksi_message(self, limit: int = 10) -> str:
+        """
+        Bangun pesan win rate & riwayat prediksi news (XAU/USD).
 
-        if arg in ("help", "bantuan"):
-            await safe_reply_text(update.message, self.PREDICTION_USAGE, parse_mode="Markdown")
-            return
-
+        Dipakai /prediksi command DAN tombol menu '🎯 Prediksi News' agar
+        keduanya konsisten (satu sumber logika).
+        """
         try:
             await asyncio.to_thread(self.news_preds.ensure_loaded)
         except Exception as e:
             logger.warning(f"News predictions load gagal: {e}")
 
         stats = self.news_preds.get_stats()
-        limit = 25 if arg in ("history", "riwayat") else 10
         recent = self.news_preds.get_recent(limit)
 
         if stats["total"] == 0:
-            await safe_reply_text(
-                update.message,
+            return (
                 "🎯 *PREDIKSI NEWS — XAU/USD*\n\n"
                 "Belum ada prediksi tercatat. Prediksi otomatis dibuat 5 menit "
                 "sebelum event ekonomi high-impact rilis dan dikirim ke subscriber "
-                "`/alert`.\n\nAktifkan notifikasi: `/alert`\nBantuan: `/prediksi help`",
-                parse_mode="Markdown",
+                "`/alert`.\n\nAktifkan notifikasi: `/alert`\nBantuan: `/prediksi help`"
             )
-            return
 
         wr = stats["win_rate"]
         wr_str = f"{wr:.1f}%" if wr is not None else "— (belum ada hasil)"
@@ -3259,7 +3275,20 @@ class MarketBot:
                 )
             lines.append("\n`/prediksi history` — riwayat lebih panjang")
 
-        await safe_reply_text(update.message, "\n".join(lines), parse_mode="Markdown")
+        return "\n".join(lines)
+
+    async def prediksi_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler /prediksi — win rate & riwayat prediksi news (XAU/USD)."""
+        text = update.message.text or ""
+        arg = text.replace("/prediksi", "").strip().lower()
+
+        if arg in ("help", "bantuan"):
+            await safe_reply_text(update.message, self.PREDICTION_USAGE, parse_mode="Markdown")
+            return
+
+        limit = 25 if arg in ("history", "riwayat") else 10
+        message = await self._build_prediksi_message(limit)
+        await safe_reply_text(update.message, message, parse_mode="Markdown")
 
     # ===================== /AFTERMATH (MANUAL EVENT ANALYSIS) =====================
 

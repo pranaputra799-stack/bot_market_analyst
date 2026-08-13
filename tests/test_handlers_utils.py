@@ -128,7 +128,7 @@ class TestStartMenuKeyboard(unittest.TestCase):
     SUPPORTED = {
         "morning", "overview", "gold_price", "eurusd", "macro",
         "calendar", "sentiment", "sentimen_retail", "alert_on",
-        "subscribe", "unsubscribe", "help",
+        "prediksi", "subscribe", "unsubscribe", "help",
     }
 
     def _run_start(self):
@@ -172,6 +172,8 @@ class TestStartMenuKeyboard(unittest.TestCase):
         ]
         # Fitur notifikasi event harus ada di menu
         self.assertIn("alert_on", callbacks)
+        # Fitur baru prediksi news (XAU/USD) harus terlihat di menu
+        self.assertIn("prediksi", callbacks)
         # Menu TIDAK boleh menyisakan tombol fitur yang sudah dihapus (chart)
         self.assertFalse(
             any(cb.startswith("chart") for cb in callbacks),
