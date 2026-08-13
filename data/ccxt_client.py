@@ -215,14 +215,14 @@ def _convert_ohlcv(raw: list) -> list:
     for bar in raw or []:
         if not bar or len(bar) < 6:
             continue
-        ts, o, h, l, c, v = bar[:6]
+        ts, o, h, low, c, v = bar[:6]
         try:
             rows.append({
                 # UTC (deterministik, format sama dengan yfinance intraday)
                 "date": datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
                 "open": round(float(o), 5),
                 "high": round(float(h), 5),
-                "low": round(float(l), 5),
+                "low": round(float(low), 5),
                 "close": round(float(c), 5),
                 "volume": int(float(v)),
             })

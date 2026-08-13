@@ -11,8 +11,7 @@ Tracks:
 
 import time
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -133,7 +132,7 @@ class MetricsTracker:
         """Get a formatted summary for /status command."""
         report = self.get_report()
         lines = [
-            f"📊 *ANALYSIS ENGINE*",
+            "📊 *ANALYSIS ENGINE*",
             f"• Total analisis: {report['total_analyses']}",
             f"• Rata-rata durasi: {report['avg_duration_ms']:.0f}ms",
             f"• Cache hits: {report['total_cache_hits']}",

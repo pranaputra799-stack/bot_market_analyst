@@ -13,7 +13,6 @@ Endpoint yang dipakai:
 Dokumentasi resmi: https://developer.oanda.com/rest-live-v20/
 """
 import logging
-import time
 from typing import Dict, List, Optional
 
 import requests

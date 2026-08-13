@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from analysis.prompts import CONFIDENCE_SYSTEM, CONFIDENCE_TEMPLATE
-from analysis.signals import AggregatedSignal, SignalType
+from analysis.signals import AggregatedSignal
 from analysis.contradiction_agent import Contradiction
 from data.cache import parse_json_payload
 
@@ -98,13 +98,6 @@ class ConfidenceAgent:
             0.25 * signal_alignment +
             0.25 * (1.0 - contradiction_impact)
         )
-        base_level = (
-            "high" if raw_score > 0.75
-            else "moderate" if raw_score > 0.50
-            else "low" if raw_score > 0.25
-            else "very_low"
-        )
-
         # LLM refinement for nuance
         try:
             prompt = CONFIDENCE_TEMPLATE.format(

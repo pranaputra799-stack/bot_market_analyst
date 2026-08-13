@@ -36,6 +36,7 @@ analysis/
   director.py            → Orchestrator pipeline multi-agent
   research_agent.py      → Kumpulkan konteks pasar/makro/berita/kalender
   signals.py             → Agregasi sinyal teknikal (trend, momentum, volatilitas, volume)
+  indicators.py          → Hitung indikator teknikal lokal dari OHLCV (RSI, MACD, pivot, fib, EMA)
   thesis_agent.py        → Tesis pasar dengan directional bias
   contradiction_agent.py → Deteksi sinyal konflik
   scenarios_agent.py     → Skenario bull/bear/base dengan probabilitas
@@ -43,6 +44,9 @@ analysis/
   risk_gates.py          → Asesmen risiko edukasi
   sentiment.py           → Skor sentimen pasar dari berita
   intent_classifier.py   → Klasifikasi intent (price, teknikal, makro, dll)
+  fact_check.py          → Verifikasi deterministik angka jawaban vs data terhitung (anti-halusinasi)
+  monitoring.py          → Metrics & statistik pipeline multi-agent
+  prompts.py             → Konstanta prompt agent (dimuat dari prompts/*.txt)
 ai/
   engine.py              → AI fallback engine multi-provider
   openrouter_client.py   → Auto-discovery model gratis OpenRouter
@@ -53,17 +57,24 @@ data/
   oanda_stream.py        → Streaming harga WebSocket real-time (daemon thread)
   macro_data.py          → Data makro & kalender ekonomi (FRED, Finnhub, jadwal resmi)
   news_data.py           → Berita & sentimen (Finnhub, Marketaux, RSS)
-  cache.py               → In-memory cache dengan TTL
+  cache.py               → Cache dua lapis (L1 memori + L2 Supabase) dengan TTL
   database.py            → Supabase REST (opsional): user, subscriber, event alert & news predictions
+  conversation_memory.py → Memori percakapan per-user (konteks follow-up)
+  news_predictions.py    → Store prediksi news XAU/USD (win rate & riwayat)
+  http_session.py        → Session requests/aiohttp bersama (connection pooling per-thread)
 config/
   settings.py            → Semua konfigurasi dari environment variables
+  providers.py           → Daftar provider AI & simbol data (YAHOO_SYMBOLS, OANDA_SYMBOLS, FRED_INDICATORS)
 prompts/
-  loader.py              → Loader template prompt (single source of truth)
+  loader.py              → Loader template prompt (single source of truth, CLI preview)
+  _agent_defaults.py     → Salinan fallback template agent (dijaga sinkron dengan .txt)
   *.txt                  → Template prompt analisis — edit di sini tanpa ubah kode
 utils/
   chart_generator.py     → Resolusi simbol dari teks user (get_chart_symbol_from_text)
   health_server.py       → Endpoint /health (aiohttp daemon thread)
+  healthcheck.py         → Script healthcheck Docker (stdlib-only)
   token_budget.py        → Token counting & truncation presisi (tiktoken opsional)
+  validators.py          → Sanitasi & validasi input user
 promptfoo/               → Scaffolding evaluasi prompt (promptfoo, dev-time)
 tests/                   → Unit tests (unittest / pytest-compatible)
 ```
@@ -87,6 +98,9 @@ prompt agent multi-agent (sebelumnya inline di `analysis/prompts.py`):
 | `scenarios_system.txt` / `scenarios_template.txt` | Agent Scenarios |
 | `confidence_system.txt` / `confidence_template.txt` | Agent Confidence |
 | `risk_system.txt` / `risk_template.txt` | Agent Risk Gates |
+| `event_aftermath.txt` | Analisis dampak event high-impact (aftermath) |
+| `news_prediction.txt` | Prediksi arah emas (XAU/USD) sebelum event rilis |
+| `news_prediction_verdict.txt` | Evaluasi benar/salah/flat prediksi news |
 | `final_synthesis_template.txt` | Sintesis jawaban akhir multi-agent |
 | `engine_system.txt` | System prompt default AI engine |
 
@@ -295,6 +309,31 @@ python -m unittest discover -s tests -v
 
 Test mencakup logika murni (tanpa network): sentiment analyzer, signal engine, split pesan panjang, kalender ekonomi, AI fallback engine (provider di-stub), client ccxt (exchange di-mock), dan payload health endpoint.
 
+### CI (GitHub Actions)
+
+Repo punya workflow CI di `.github/workflows/ci.yml` yang otomatis berjalan di
+setiap push/PR (infrastruktur GitHub — **tidak membebani instance Render**):
+
+- **Test** — compile check + seluruh unit test di Python 3.9 & 3.11 (3.11 =
+  versi production di Dockerfile)
+- **Lint** — `ruff` dengan config di `pyproject.toml` (rules `F`, `E4`, `E7`, `E9`)
+
+### Lint & pre-commit (dev-time, opsional)
+
+```bash
+uvx ruff check .            # lint cepat (jalankan tanpa install)
+# atau
+pip install ruff && ruff check .
+```
+
+Mau lint otomatis tiap commit? Install sekali:
+
+```bash
+pip install pre-commit && pre-commit install
+```
+
+Config ada di `.pre-commit-config.yaml` (ruff dengan auto-fix).
+
 ### Evaluasi kualitas prompt (promptfoo)
 
 ```bash
@@ -328,6 +367,7 @@ curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
 | `/overview` | Ringkasan instan semua instrumen utama (tanpa AI) |
 | `/status` | Status sistem, AI provider, dan data source |
 | `/about` | Informasi bot |
+| `/broadcast <pesan>` | 🔒 **Khusus admin** (`ADMIN_USER_IDS`) — preview jumlah penerima, lalu `/broadcast send <pesan>` untuk mengirim pengumuman ke semua subscriber |
 
 ## ⚠️ Disclaimer
 

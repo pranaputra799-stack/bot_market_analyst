@@ -9,7 +9,6 @@ agar beban yfinance mudah divalidasi:
 Semua test murni (tanpa network) — OANDA/cache di-stub.
 """
 
-import time
 import unittest
 
 import bot.messages as msgs

@@ -13,7 +13,7 @@ import logging
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -223,10 +223,6 @@ class SignalEngine:
         current_price = closes[-1]
         price_above_sma20 = current_price > sma_20
 
-        # SMA crossover detection
-        prev_sma5 = sum(closes[-6:-1]) / 5
-        prev_sma20 = sum(closes[-21:-1]) / 20
-
         # Trend direction
         trend_up = sma_5 > sma_10 > sma_20
         trend_down = sma_5 < sma_10 < sma_20
@@ -393,7 +389,6 @@ class SignalEngine:
 
         # Rate of change
         roc_5 = (closes[-1] - closes[-5]) / closes[-5] if closes[-5] > 0 else 0
-        roc_10 = (closes[-1] - closes[-10]) / closes[-10] if closes[-10] > 0 else 0
 
         # Consecutive candles direction
         up_candles = sum(1 for i in range(-5, 0) if closes[i] > closes[i-1])

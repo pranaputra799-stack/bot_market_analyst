@@ -166,7 +166,7 @@ class TestNewsPredictionStore(unittest.TestCase):
         )
         self.assertEqual(updated["status"], STATUS_SETTLED)
         self.assertEqual(updated["result"], "benar")
-        again = store.settle(
+        store.settle(
             event_key="k1", result="salah", actual_direction="turun",
             price_after=2390.0, move_pct=-0.5, reasoning="diubah",
         )

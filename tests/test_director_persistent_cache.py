@@ -119,7 +119,6 @@ class TestDirectorCacheTwoLayers(unittest.TestCase):
 
     def test_cache_key_differs_by_history(self):
         """Riwayat berbeda → key berbeda (follow-up tidak memakai cache jawaban lain)."""
-        director = self._director()
         q = "support-nya di mana?"
         k1 = self._expected_key(q, "gold")
         k2 = self._expected_key(q, "eurusd")

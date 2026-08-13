@@ -65,7 +65,7 @@ from config.settings import (
     BOT_RUN_MODE,
 )
 from bot.handlers import MarketBot
-from data.cache import cache, cleanup_all
+from data.cache import cleanup_all
 from data.database import db
 from data.oanda_stream import start_stream
 from utils.health_server import start_health_server
@@ -400,6 +400,8 @@ def register_handlers(application: Application, bot: MarketBot):
     application.add_handler(CommandHandler("status", bot.status_command))
     application.add_handler(CommandHandler("clear", bot.clear_command))
     application.add_handler(CommandHandler("memory", bot.memory_command))
+    # Admin-only (ADMIN_USER_IDS) — tidak dipajang di menu command bot
+    application.add_handler(CommandHandler("broadcast", bot.broadcast_command))
     application.add_handler(CommandHandler("morning", bot.morning_brief_command))
     application.add_handler(CommandHandler("sentiment", bot.sentiment_command))
     application.add_handler(CommandHandler("calendar", bot.calendar_command))

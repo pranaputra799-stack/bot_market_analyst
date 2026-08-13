@@ -1,6 +1,5 @@
 """Unit tests untuk SentimentAnalyzer (logika murni, tanpa network)."""
 
-import math
 import time
 import unittest
 

@@ -9,12 +9,11 @@ OpenRouter memakai daftar model free (suffix :free / $0) yang di-discovery
 langsung dari API sehingga biaya AI tetap $0 selama model free tersedia.
 """
 import asyncio
-import json
 import logging
 import random
 import threading
 import time
-from typing import Dict, List, Optional, Callable, Any
+from typing import Dict, List, Optional
 
 import requests
 

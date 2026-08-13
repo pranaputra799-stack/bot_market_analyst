@@ -6,9 +6,8 @@ Data makroekonomi adalah kunci untuk memahami mengapa harga bergerak.
 """
 import asyncio
 import logging
-import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 
 try:
     from zoneinfo import ZoneInfo  # Python 3.9+
@@ -114,7 +113,6 @@ class MacroDataFetcher:
             return data
 
         latest = data.get("latest_value")
-        previous = data.get("previous_value")
 
         # Estimasi interpretasi
         if latest is not None:
@@ -857,7 +855,6 @@ class MacroDataFetcher:
         if not self.fred_key or not events:
             return events
 
-        now = datetime.now(timezone.utc)
         # Pilih event yang sudah rilis, belum punya actual, dan punya mapping series
         to_enrich = []
         series_needed = {}

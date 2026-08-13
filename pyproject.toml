@@ -1,0 +1,27 @@
+# ============================================================
+# Konfigurasi tooling proyek (dev-time only — tidak berpengaruh
+# ke runtime/deploy Render).
+#
+# ruff: lint cepat berbasis pyflakes — mencegah unused imports,
+# unused variables, dan f-string tanpa placeholder masuk kembali
+# (jenis masalah yang pernah menumpuk di repo ini).
+# ============================================================
+
+[tool.ruff]
+# Sama dengan Python di Dockerfile (python:3.11-slim)
+target-version = "py311"
+line-length = 120
+exclude = ["promptfoo"]
+
+[tool.ruff.lint]
+# F  = pyflakes (unused imports/vars, dll) — paling berdampak
+# E4 = pycodestyle level 4 (import, comparison)
+# E7 = pycodestyle level 7 (statement)
+# E9 = pycodestyle level 9 (syntax error) — selalu ikut ditegakkan
+select = ["F", "E4", "E7", "E9"]
+
+[tool.ruff.lint.per-file-ignores]
+# E402 disengaja: sys.path bootstrap + os.chdir sebelum import (entry point)
+"main.py" = ["E402"]
+# E402 disengaja: helper lazy-import ccxt didefinisikan sebelum import lain
+"data/ccxt_client.py" = ["E402"]

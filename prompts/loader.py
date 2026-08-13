@@ -27,6 +27,9 @@ Seluruh template prompt bot tinggal di folder `prompts/` sebagai file .txt:
     confidence_template.txt           → agent Confidence (prompt skor)
     risk_system.txt                   → agent Risk Gates (system prompt)
     risk_template.txt                 → agent Risk Gates (prompt asesmen)
+    event_aftermath.txt               → analisis dampak event high-impact (aftermath)
+    news_prediction.txt               → prediksi arah emas (XAU/USD) sebelum event rilis
+    news_prediction_verdict.txt       → evaluasi benar/salah/flat prediksi news
     final_synthesis_template.txt      → sintesis jawaban akhir multi-agent
     engine_system.txt                 → system prompt default AI engine
 

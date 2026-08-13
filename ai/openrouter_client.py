@@ -3,7 +3,6 @@ OpenRouter API Client - Wrapper untuk OpenRouter API.
 OpenRouter menyediakan akses ke 100+ model dari berbagai provider,
 termasuk banyak model GRATIS (suffix :free atau harga $0).
 """
-import json
 import logging
 import threading
 import time

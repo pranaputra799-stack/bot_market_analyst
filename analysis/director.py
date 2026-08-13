@@ -21,7 +21,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from analysis.prompts import (
-    DIRECTOR_SYSTEM,
     build_analysis_prompt,
     format_context_for_prompt,
 )
@@ -31,8 +30,8 @@ from analysis.contradiction_agent import ContradictionAgent, Contradiction
 from analysis.scenarios_agent import ScenariosAgent, Scenario
 from analysis.confidence_agent import ConfidenceAgent, ConfidenceScore
 from analysis.risk_gates import RiskGates, RiskAssessment
-from analysis.signals import SignalEngine, AggregatedSignal, SignalType
-from analysis.intent_classifier import IntentClassifier, IntentResult
+from analysis.signals import SignalEngine, AggregatedSignal
+from analysis.intent_classifier import IntentClassifier
 from analysis.indicators import compute_indicators, format_indicators_for_prompt
 from analysis.fact_check import build_fact_check_note
 from analysis.monitoring import metrics
@@ -429,7 +428,7 @@ class AnalysisDirector:
         arrow = emoji_map.get(direction, "⚪")
 
         parts = [
-            f"📊 *Analisis Multi-Agent*\n",
+            "📊 *Analisis Multi-Agent*\n",
             f"*Pertanyaan:* {question}\n",
             f"{arrow} Bias: {direction.upper()} (keyakinan: {confidence})\n",
         ]

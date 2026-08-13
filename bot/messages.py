@@ -4,8 +4,7 @@ Semua format balasan bot ada di sini untuk konsistensi.
 """
 import logging
 import time
-from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -22,20 +21,14 @@ _DATA_STATUS_TTL = 120.0
 WELCOME_MESSAGE = """
 🎯 *Selamat datang di MarketAI Analyst!*
 
-Asisten pasar *real-time* untuk trader Indonesia 🇮🇩 — harga Forex & Gold *live* dari OANDA, dianalisis oleh 7-agent AI 🧠.
+Asisten pasar *real-time* untuk trader Indonesia 🇮🇩 — Forex & Gold *live* dari OANDA, dianalisis 7-agent AI 🧠.
 
-📊 *Coba langsung:*
-• 💱 Tanya harga — "harga gold sekarang"
-• 📈 Analisis penuh — "analisis teknikal EUR/USD"
-• 🏛️ Data makro — CPI, NFP, Fed Rate
-• 🧠 Sentimen retail trader — /sentimen
-• 📅 Kalender ekonomi high-impact — /calendar
+💬 *Langsung tanya saja:*
+• "harga gold" — harga & level instan
+• "analisis eurusd" — analisis teknikal lengkap
+• "kenapa gold naik?" — faktor penggerak pasar
 
-🔔 *Notifikasi otomatis:*
-• 🌅 Morning Brief setiap pagi — /subscribe
-• 📰 Analisis dampak event ke DXY — /alert on
-
-👇 *Ketuk tombol di bawah* untuk mulai — atau langsung kirim pertanyaan apa pun.
+👇 *Atau ketuk menu di bawah.*
 
 ⚠️ Analisis edukasi, *bukan* sinyal trading atau rekomendasi investasi. Keputusan trading sepenuhnya tanggung jawab Anda.
 """
@@ -308,14 +301,6 @@ Anda terlalu cepat mengirim pertanyaan. Bot butuh waktu untuk mengumpulkan data 
 
 Silakan tunggu beberapa detik sebelum mengirim pertanyaan berikutnya.
 """
-
-NOT_IMPLEMENTED_MESSAGE = """
-🔧 *Fitur ini sedang dalam pengembangan.*
-
-Fitur yang Anda minta belum tersedia di versi ini.
-Silakan coba pertanyaan lain atau gunakan /help untuk melihat daftar fitur yang tersedia.
-"""
-
 
 # ===================== MORNING BRIEF TEMPLATE =====================
 

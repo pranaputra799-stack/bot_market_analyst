@@ -24,8 +24,9 @@ from data.http_session import get_requests_session as _session
 
 from config.settings import (
     CACHE_TTL_SECONDS,
-    CACHE_MACRO_TTL,
-    CACHE_NEWS_TTL,
+    # Dipakai modul lain via re-export (mis. data/macro_data.py)
+    CACHE_MACRO_TTL,  # noqa: F401
+    CACHE_NEWS_TTL,  # noqa: F401
     CACHE_AI_TTL,
     CACHE_MAX_ENTRIES,
     SUPABASE_URL,

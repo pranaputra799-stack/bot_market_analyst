@@ -12,7 +12,6 @@ idle(), test ini gagal dengan AttributeError.
 
 import asyncio
 import threading
-import time
 import unittest
 from unittest import mock
 

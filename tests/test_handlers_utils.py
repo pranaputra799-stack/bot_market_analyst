@@ -170,16 +170,19 @@ class TestStartMenuKeyboard(unittest.TestCase):
             for row in kb.inline_keyboard
             for btn in row
         ]
-        # Fitur baru OANDA harus ada di menu
-        self.assertIn("sentimen_retail", callbacks)
+        # Fitur notifikasi event harus ada di menu
         self.assertIn("alert_on", callbacks)
+        # Menu TIDAK boleh menyisakan tombol fitur yang sudah dihapus (chart)
+        self.assertFalse(
+            any(cb.startswith("chart") for cb in callbacks),
+            "Menu masih memuat tombol fitur yang sudah dihapus",
+        )
 
 
 class TestMenuCallbacks(unittest.TestCase):
     """Callback tombol menu baru: alert_on menambah subscriber event."""
 
     def _run_callback(self, data):
-        from bot.messages import ALERT_ON_MESSAGE
 
         class _QMsg:
             def __init__(self):
@@ -208,7 +211,6 @@ class TestMenuCallbacks(unittest.TestCase):
         return query, ctx
 
     def test_alert_on_adds_subscriber(self):
-        from bot.messages import ALERT_ON_MESSAGE
 
         query, ctx = self._run_callback("alert_on")
         self.assertTrue(query.answered)

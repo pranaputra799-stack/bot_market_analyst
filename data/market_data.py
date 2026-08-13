@@ -27,7 +27,7 @@ from config.settings import (
     EXCHANGE_RATE_KEY,
     OANDA_PRICE_TTL,
 )
-from config.providers import YAHOO_SYMBOLS, OANDA_SYMBOLS
+from config.providers import OANDA_SYMBOLS
 from data.cache import cache, CACHE_TTL_SECONDS
 from data.oanda_client import OandaClient
 from data.oanda_stream import oanda_stream
@@ -577,7 +577,7 @@ class MarketDataAggregator:
             fh_symbol = "XAUUSD"
 
         try:
-            url = f"https://finnhub.io/api/v1/quote"
+            url = "https://finnhub.io/api/v1/quote"
             params = {"symbol": fh_symbol, "token": self.finnhub_key}
 
             session = get_aiohttp_session()

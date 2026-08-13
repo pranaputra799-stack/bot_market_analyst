@@ -12,7 +12,7 @@ Cross-checks:
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from analysis.prompts import CONTRADICTION_SYSTEM, CONTRADICTION_TEMPLATE
 from data.cache import parse_json_payload, extract_list_items

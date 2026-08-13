@@ -1,0 +1,14 @@
+# ============================================================
+# pre-commit (opsional — dev-time only)
+# Instal sekali:  pip install pre-commit && pre-commit install
+# Lalu setiap commit otomatis di-lint ruff (config di
+# pyproject.toml) sebelum masuk git — mencegah unused imports /
+# dead code menumpuk seperti sebelumnya.
+# ============================================================
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Versi ruff — jaga sinkron dengan versi di CI / pyproject.toml
+    rev: v0.16.2
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]

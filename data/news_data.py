@@ -4,10 +4,9 @@ Sources: Finnhub News (primary), Marketaux, NewsAPI, RSS Feeds.
 
 Berita dan sentimen pasar adalah komponen krusial untuk analisis fundamental.
 """
-import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List
 import xml.etree.ElementTree as ET
 
 try:
@@ -60,7 +59,7 @@ class NewsFetcher:
             }
             fh_symbol = symbol_map.get(symbol, symbol)
 
-            url = f"https://finnhub.io/api/v1/news"
+            url = "https://finnhub.io/api/v1/news"
             params = {
                 "category": fh_symbol,
                 "token": self.finnhub_key,
@@ -224,7 +223,7 @@ class NewsFetcher:
 
         # Finnhub news
         if "articles" in finnhub and finnhub["articles"]:
-            lines.append(f"📰 *BERITA TERKINI*")
+            lines.append("📰 *BERITA TERKINI*")
             lines.append(f"Sentimen Keseluruhan: {finnhub.get('overall_sentiment', 'N/A')}\n")
             for article in finnhub["articles"]:
                 sentiment_str = article.get("sentiment_label", "")

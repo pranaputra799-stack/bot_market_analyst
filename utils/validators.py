@@ -2,7 +2,7 @@
 Utility functions untuk validasi input user.
 """
 import re
-from typing import Optional, Tuple, List
+from typing import Optional, List
 
 
 def is_valid_forex_pair(pair: str) -> bool:

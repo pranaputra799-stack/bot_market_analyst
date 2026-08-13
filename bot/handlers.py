@@ -15,19 +15,13 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 from telegram.ext import (
     Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
     ContextTypes,
-    filters,
 )
 
 from config.settings import (
-    TELEGRAM_TOKEN,
-    MORNING_BRIEF_HOUR,
-    MORNING_BRIEF_MINUTE,
     MORNING_BRIEF_TIMEZONE,
     MORNING_BRIEF_CHAT_IDS,
+    ADMIN_USER_IDS,
     ENABLE_MULTI_AGENT,
     ECONOMIC_ALERT_LEAD_HOURS,
     EVENT_AFTERMATH_ENABLED,
@@ -58,7 +52,6 @@ from analysis.indicators import compute_indicators, format_key_levels, format_in
 from analysis.fact_check import build_fact_check_note, strip_fact_check_note
 from utils.validators import sanitize_text
 from prompts.loader import format_prompt
-from analysis.monitoring import metrics
 from analysis.sentiment import SentimentAnalyzer
 from bot.messages import (
     WELCOME_MESSAGE,
@@ -451,33 +444,28 @@ class MarketBot:
         # Simpan/update user ke database (async — jangan blokir event loop)
         await db.upsert_user_async(user.id, user.username, user.first_name)
 
-        # Keyboard menu — dikelompokkan per tema, 2 kolom agar rapi di layar HP
+        # Keyboard menu — ringkas (8 tombol, 2 kolom), tanpa duplikasi fitur:
+        # harga cepat → overview/kalender → analisis → notifikasi → bantuan.
+        # Fitur lain tetap tersedia via perintah (/sentimen, /subscribe, dll).
         keyboard = [
-            # 📊 Pasar
             [
                 InlineKeyboardButton("🥇 Harga Gold", callback_data="gold_price"),
                 InlineKeyboardButton("💱 EUR/USD", callback_data="eurusd"),
             ],
             [
                 InlineKeyboardButton("🌍 Overview Pasar", callback_data="overview"),
-                InlineKeyboardButton("🧠 Sentimen Retail", callback_data="sentimen_retail"),
-            ],
-            [
-                InlineKeyboardButton("🏛️ Data Makro", callback_data="macro"),
-                InlineKeyboardButton("📰 Sentimen Pasar", callback_data="sentiment"),
-            ],
-            # 🔔 Notifikasi & Jadwal
-            [
-                InlineKeyboardButton("🌅 Morning Brief", callback_data="morning"),
                 InlineKeyboardButton("📅 Kalender", callback_data="calendar"),
             ],
             [
+                InlineKeyboardButton("📰 Sentimen Pasar", callback_data="sentiment"),
+                InlineKeyboardButton("🏛️ Data Makro", callback_data="macro"),
+            ],
+            [
+                InlineKeyboardButton("🌅 Morning Brief", callback_data="morning"),
                 InlineKeyboardButton("🔔 Alert Event", callback_data="alert_on"),
             ],
-            # ⚙️ Lainnya
             [
                 InlineKeyboardButton("❓ Bantuan", callback_data="help"),
-                InlineKeyboardButton("🔔 Langganan Brief", callback_data="subscribe"),
             ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -638,7 +626,104 @@ class MarketBot:
         lines.append("🗑️ Hapus sekarang: `/memory clear`")
         await safe_reply_text(update.message, "\n".join(lines), parse_mode="Markdown")
 
-    # ===================== CHART COMMAND =====================
+    # ===================== ADMIN COMMAND (/broadcast) =====================
+    # Khusus ADMIN_USER_IDS (env .env / dashboard). Kirim pengumuman ke semua
+    # subscriber: morning brief (DB) + notifikasi event (bot_data).
+    # Alur 2 langkah demi keamanan: preview jumlah penerima dulu, lalu
+    # konfirmasi dengan `/broadcast send` agar pesan tidak terkirim tanpa sengaja.
+
+    BROADCAST_USAGE = (
+        "📣 *BROADCAST* (khusus admin)\n\n"
+        "Mengirim pesan ke semua subscriber bot (morning brief + alert event).\n\n"
+        "Cara pakai:\n"
+        "`/broadcast <pesan>` — lihat pratinjau jumlah penerima\n"
+        "`/broadcast send <pesan>` — KIRIM sungguhan\n\n"
+        "Contoh:\n"
+        "`/broadcast send Selamat pagi! Ada update penting dari bot.`"
+    )
+
+    async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler /broadcast — kirim pesan ke semua subscriber (khusus admin)."""
+        user_id = update.effective_user.id
+        if user_id not in ADMIN_USER_IDS:
+            await safe_reply_text(
+                update.message,
+                "🔒 Perintah ini khusus admin bot.",
+                parse_mode="Markdown",
+            )
+            return
+
+        text = update.message.text or ""
+        arg = text.replace("/broadcast", "", 1).strip()
+        if not arg or arg.lower() in ("help", "bantuan"):
+            await safe_reply_text(update.message, self.BROADCAST_USAGE, parse_mode="Markdown")
+            return
+
+        confirm = arg.lower().startswith("send ")
+        message = arg[5:].strip() if confirm else arg
+        if not message:
+            await safe_reply_text(update.message, self.BROADCAST_USAGE, parse_mode="Markdown")
+            return
+
+        # Kumpulkan penerima: subscriber morning brief (DB) + event alert (bot_data)
+        recipients: set = set()
+        try:
+            recipients |= set(await db.get_all_subscribers_async())
+        except Exception as e:
+            logger.warning(f"Broadcast: gagal ambil subscriber DB: {e}")
+        recipients |= set(context.bot_data.get("event_alert_subscribers", set()))
+        # Admin tidak perlu menerima pesannya sendiri
+        recipients.discard(user_id)
+
+        if not recipients:
+            await safe_reply_text(
+                update.message,
+                "📭 Belum ada subscriber untuk menerima broadcast.",
+                parse_mode="Markdown",
+            )
+            return
+
+        if not confirm:
+            await safe_reply_text(
+                update.message,
+                f"📣 *PRATINJAU BROADCAST*\n\n"
+                f"Pesan akan dikirim ke *{len(recipients)}* chat.\n\n"
+                f"\"{message[:200]}\"\n\n"
+                f"Kirim ulang dengan awalan `/broadcast send` untuk KIRIM sungguhan.",
+                parse_mode="Markdown",
+            )
+            return
+
+        # Kirim sungguhan
+        sent = 0
+        failed = 0
+        for chat_id in list(recipients):
+            try:
+                await safe_send_message(
+                    context.bot,
+                    chat_id=chat_id,
+                    text=f"📣 *PENGUMUMAN*\n\n{message}",
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True,
+                )
+                sent += 1
+            except Exception as e:
+                failed += 1
+                logger.warning(f"Broadcast gagal ke {chat_id}: {e}")
+                if "Forbidden" in str(e):
+                    # User block bot / keluar — hapus dari daftar subscriber event
+                    subs = context.bot_data.get("event_alert_subscribers", set())
+                    subs.discard(chat_id)
+                    context.bot_data["event_alert_subscribers"] = subs
+                    await self._persist_alert_subscribers(context)
+
+        await safe_reply_text(
+            update.message,
+            f"✅ *Broadcast selesai* — terkirim: {sent}, gagal: {failed} (dari {len(recipients)}).",
+            parse_mode="Markdown",
+        )
+
+    # ===================== SENTIMENT COMMAND =====================
 
     async def _get_sentiment_text(self, symbol: str = "FOREX") -> str:
         """Ambil sentimen pasar terformat singkat (aman — tidak crash walau gagal)."""
@@ -710,7 +795,6 @@ class MarketBot:
 
         # 3) Direct match OANDA_SYMBOLS: 'eurgbp' → 'EURGBP=X', 'cl' → 'CL=F',
         #    'n225' → '^N225' (display diformat dari simbol bila belum ada).
-        upper = norm.upper()
         for yahoo in OANDA_SYMBOLS:
             base = (
                 yahoo.replace("=X", "").replace("=F", "")
@@ -1953,14 +2037,6 @@ class MarketBot:
                 except Exception:
                     pass
                 text = await self._build_scenario_followup(user_id, symbol, display_label)
-            elif action == "chart":
-                # Tombol chart lama (fitur sudah dihapus) — kabari user dengan jelas
-                await query.message.reply_text(
-                    "📈 Fitur grafik (/chart) sudah dihapus dari bot. "
-                    "Tanyakan saja analisis teknikalnya (mis. \"analisis eurusd\").",
-                    parse_mode="Markdown",
-                )
-                return
             else:
                 text = None
 
@@ -1976,14 +2052,6 @@ class MarketBot:
                     parse_mode="Markdown",
                 )
             return
-
-        elif data.startswith("chart_"):
-            # Tombol menu chart lama (fitur sudah dihapus) — kabari user dengan jelas
-            await query.message.reply_text(
-                "📈 Fitur grafik (/chart) sudah dihapus dari bot. "
-                "Tanyakan saja analisis teknikalnya (mis. \"analisis eurusd\").",
-                parse_mode="Markdown",
-            )
 
         elif data == "help":
             await safe_edit_message_text(
@@ -2030,7 +2098,7 @@ class MarketBot:
                 )
             else:
                 lines = [
-                    f"📅 *EVENT EKONOMI HIGH-IMPACT HARI INI*",
+                    "📅 *EVENT EKONOMI HIGH-IMPACT HARI INI*",
                     f"📆 {today.strftime('%A, %d %B %Y')}\n",
                 ]
                 for e in sorted(high_today, key=lambda x: x.get("_dt_utc") or datetime.min.replace(tzinfo=timezone.utc)):

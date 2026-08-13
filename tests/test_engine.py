@@ -41,8 +41,6 @@ class TestGenerateBasics(unittest.TestCase):
         self.assertEqual(eng.stats["provider_usage"]["groq"], 1)
 
     def test_no_key_returns_error_message(self):
-        import logging
-
         eng = AIFallbackEngine()
         # Hermetic: kosongkan semua key (abaikan .env lokal) → error total
         eng.api_keys = {}
@@ -325,7 +323,6 @@ class TestThrottleAnd429Skip(unittest.TestCase):
         original = engine_mod.requests.post
         try:
             engine_mod.requests.post = lambda *a, **k: FakeResp200()
-            t0 = time.time()
             r1 = eng._call_openai_compatible(
                 "groq", PROVIDER_CONFIGS["groq"], "test-key", "p", "s", 1024
             )
