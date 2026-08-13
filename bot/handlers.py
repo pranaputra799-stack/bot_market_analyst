@@ -420,6 +420,10 @@ class MarketBot:
         self.news_preds = NewsPredictionStore()
         self.start_time = time.time()
         self.total_questions = 0
+        # Aktivitas user dalam memori (user_id → jumlah pertanyaan) — di-flush
+        # batch ke Supabase setiap ~10 menit (numpang job cache cleanup) agar
+        # statistik user bertahan lintas restart tanpa request per pesan.
+        self._user_activity: Dict[int, int] = {}
 
         # Initialize multi-agent analysis system
         if ENABLE_MULTI_AGENT:
@@ -535,6 +539,35 @@ class MarketBot:
             parse_mode="Markdown",
         )
 
+    async def flush_user_activity(self) -> None:
+        """
+        Flush aktivitas user (last_active_at + total_questions) ke Supabase.
+
+        Dipanggil berkala dari job cache cleanup (10 menit) — batch satu request
+        untuk semua user, tanpa menambah beban per pesan. Kegagalan DB aman
+        (hitungan tetap dipertahankan di memori untuk flush berikutnya).
+        """
+        if not self._user_activity:
+            return
+        now_iso = datetime.now(timezone.utc).isoformat()
+        rows = [
+            (uid, now_iso, count)
+            for uid, count in self._user_activity.items()
+        ]
+        self._user_activity.clear()
+        try:
+            ok = await db.update_user_activity_async(rows)
+            if not ok:
+                # Gagal (mis. DB belum dikonfigurasi) — pulihkan hitungan agar
+                # tidak hilang; coba lagi di flush berikutnya.
+                for uid, _last_active, count in rows:
+                    self._user_activity[uid] = self._user_activity.get(uid, 0) + count
+                logger.debug("User activity flush gagal — hitungan dikembalikan ke memori")
+        except Exception as e:
+            logger.warning(f"User activity flush error: {e}")
+            for uid, _last_active, count in rows:
+                self._user_activity[uid] = self._user_activity.get(uid, 0) + count
+
     async def subscribe_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler untuk perintah /subscribe - Berlangganan Morning Brief."""
         chat_id = update.effective_chat.id
@@ -625,6 +658,82 @@ class MarketBot:
         lines.append("\n⏳ Otomatis terhapus setelah 24 jam.")
         lines.append("🗑️ Hapus sekarang: `/memory clear`")
         await safe_reply_text(update.message, "\n".join(lines), parse_mode="Markdown")
+
+    # ===================== ADMIN COMMAND (/stats) =====================
+    # Khusus ADMIN_USER_IDS — ringkasan sistem untuk admin: pemakaian token
+    # AI, data Supabase (user aktif, subscriber, prediksi), cache, uptime.
+    # Data Supabase memanfaatkan kolom aktivitas user (last_active_at /
+    # total_questions) yang di-flush batch tiap 10 menit.
+
+    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler /stats — statistik sistem lengkap (khusus admin)."""
+        user_id = update.effective_user.id
+        if user_id not in ADMIN_USER_IDS:
+            await safe_reply_text(
+                update.message,
+                "🔒 Perintah ini khusus admin bot.",
+                parse_mode="Markdown",
+            )
+            return
+
+        # Semua I/O jaringan di-thread agar tidak memblokir event loop
+        user_stats, counts = await asyncio.gather(
+            asyncio.to_thread(db.get_user_stats),
+            asyncio.to_thread(db.get_counts),
+            return_exceptions=True,
+        )
+        if isinstance(user_stats, Exception):
+            user_stats = {}
+        if isinstance(counts, Exception):
+            counts = {}
+
+        # Pemakaian token dari engine (dari field usage response API)
+        eng_stats = self.ai.get_stats()
+        usage = eng_stats.get("usage", {}) or {}
+        by_provider = usage.get("by_provider", {}) or {}
+        provider_lines = []
+        for provider, tok in sorted(by_provider.items()):
+            total = (tok.get("prompt_tokens") or 0) + (tok.get("completion_tokens") or 0)
+            provider_lines.append(
+                f"  • {provider}: {total:,} token (in {tok.get('prompt_tokens', 0):,} / "
+                f"out {tok.get('completion_tokens', 0):,})"
+            )
+        token_part = "\n".join(provider_lines) if provider_lines else "  • Belum ada pemakaian tercatat"
+
+        # Statistik prediksi news (XAU/USD win rate) dari store in-memory
+        pred_stats = self.news_preds.get_stats()
+        pred_part = (
+            f"  • Total: {pred_stats.get('total', 0)} | Selesai: {pred_stats.get('settled', 0)} | "
+            f"Pending: {pred_stats.get('pending', 0)}\n"
+            f"  • Benar: {pred_stats.get('benar', 0)} | Salah: {pred_stats.get('salah', 0)} | "
+            f"Flat: {pred_stats.get('flat', 0)}\n"
+            f"  • Win rate: {pred_stats.get('win_rate', 0):.1f}%"
+            if pred_stats.get('win_rate') is not None
+            else f"  • Total: {pred_stats.get('total', 0)} | Belum ada prediksi selesai"
+        )
+
+        uptime_seconds = int(time.time() - self.start_time)
+        uptime_str = f"{uptime_seconds // 3600}h {(uptime_seconds % 3600) // 60}m"
+        cache_stats = cache.get_stats()
+        supabase_ready = "✅ Terhubung" if db.is_connected() else "⚠️ Tidak dikonfigurasi"
+
+        msg = (
+            "📊 *STATISTIK SISTEM* (admin)\n\n"
+            f"⏱ *Uptime:* {uptime_str}\n"
+            f"📥 *Pertanyaan (session):* {self.total_questions}\n\n"
+            f"💰 *Token AI:*\n{token_part}\n"
+            f"  **Total:** {usage.get('total_tokens', 0):,} "
+            f"(in {usage.get('prompt_tokens', 0):,} / out {usage.get('completion_tokens', 0):,})\n\n"
+            f"🗄️ *Supabase:* {supabase_ready}\n"
+            f"  • User terdaftar: {user_stats.get('total_users', 0)}\n"
+            f"  • User aktif (24 jam): {user_stats.get('active_24h', 0)}\n"
+            f"  • Pertanyaan (DB): {user_stats.get('total_questions', 0)}\n"
+            f"  • Subscriber morning brief: {counts.get('subscribers', 0)}\n"
+            f"  • Subscriber alert event: {counts.get('event_alert_subscribers', 0)}\n\n"
+            f"📈 *Prediksi News (XAU/USD):*\n{pred_part}\n\n"
+            f"💾 *Cache:* {cache_stats.get('active_entries', 0)} entries aktif"
+        )
+        await safe_reply_text(update.message, msg, parse_mode="Markdown")
 
     # ===================== ADMIN COMMAND (/broadcast) =====================
     # Khusus ADMIN_USER_IDS (env .env / dashboard). Kirim pengumuman ke semua
@@ -1156,7 +1265,7 @@ class MarketBot:
                 today, market_summary, macro_summary, calendar_text, news_summary, sentiment_text
             )
             ai_response = await self.ai.generate_async(
-                outlook_prompt, use_cache=True, max_tokens=4096
+                outlook_prompt, use_cache=True, max_tokens=2048
             )
             ai_content = strip_markdown_asterisks(_strip_provider_prefix(ai_response))
             outlook, catalysts = self._split_outlook_catalysts(ai_content)
@@ -1249,6 +1358,8 @@ class MarketBot:
 
         user_data["last_message_time"] = time.time()
         self.total_questions += 1
+        # Aktivitas per-user (in-memory, di-flush batch ke Supabase berkala)
+        self._user_activity[user_id] = self._user_activity.get(user_id, 0) + 1
 
         # ===== FAST PATH: pertanyaan harga sederhana (tanpa AI) =====
         # Cek harga biasa ("berapa harga eurusd?") dijawab INSTAN dari data

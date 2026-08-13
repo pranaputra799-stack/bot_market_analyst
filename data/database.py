@@ -338,6 +338,88 @@ class Database:
             logger.error(f"Error fetching news predictions: {_err_detail(e)}")
             return []
 
+    # ===================== USER ACTIVITY (batched) =====================
+    # Aktivitas user (last_active_at + total_questions) di-flush dari memori
+    # bot secara batch setiap ~10 menit (numpang job cache cleanup yang sudah
+    # ada — tanpa request tambahan per pesan). Kolom ini ditambahkan lewat
+    # migrations/supabase.sql (idempotent ALTER TABLE bila tabel lama).
+
+    @staticmethod
+    def update_user_activity(rows: list) -> bool:
+        """
+        Upsert batch aktivitas user: [(user_id, last_active_iso, total_questions)].
+
+        Satu request HTTP untuk SEMUA user (hemat quota Supabase vs 1 request
+        per user per pesan). Dipanggil berkala dari job cleanup bot.
+        """
+        if not _is_configured():
+            return False
+        if not rows:
+            return True
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/users"
+            payload = [
+                {
+                    "user_id": uid,
+                    "last_active_at": last_active,
+                    "total_questions": int(count),
+                }
+                for uid, last_active, count in rows
+                if isinstance(uid, int) and not isinstance(uid, bool)
+            ]
+            if not payload:
+                return True
+            headers = {**_get_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"}
+            resp = _session().post(url, json=payload, headers=headers, timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error updating user activity: {_err_detail(e)}")
+            return False
+
+    @staticmethod
+    def get_user_stats() -> dict:
+        """Statistik user untuk admin /stats (best-effort, aman tanpa DB)."""
+        if not _is_configured():
+            return {}
+        stats: dict = {}
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/users?select=user_id,last_active_at,total_questions"
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            rows = resp.json()
+            stats["total_users"] = len(rows)
+            # User aktif: last_active_at dalam 24 jam terakhir
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            stats["active_24h"] = sum(
+                1 for r in rows if r.get("last_active_at") and r["last_active_at"] >= cutoff
+            )
+            stats["total_questions"] = sum(
+                int(r.get("total_questions") or 0) for r in rows
+            )
+        except Exception as e:
+            logger.error(f"Error fetching user stats: {_err_detail(e)}")
+            return {}
+        return stats
+
+    @staticmethod
+    def get_counts() -> dict:
+        """Jumlah baris beberapa tabel penting (admin /stats)."""
+        counts: dict = {}
+        for table in ("subscribers", "event_alert_subscribers"):
+            if not _is_configured():
+                counts[table] = 0
+                continue
+            try:
+                url = f"{SUPABASE_URL}/rest/v1/{table}?select=chat_id"
+                resp = _session().get(url, headers=_get_headers(), timeout=10)
+                resp.raise_for_status()
+                counts[table] = len(resp.json())
+            except Exception as e:
+                logger.error(f"Error counting {table}: {_err_detail(e)}")
+                counts[table] = 0
+        return counts
+
     # ===================== ASYNC WRAPPERS =====================
     # Handler Telegram (python-telegram-bot v20) berjalan di event loop asyncio.
     # Varian *_async memindahkan operasi sinkron ke thread pool sehingga tidak
@@ -346,6 +428,18 @@ class Database:
     @staticmethod
     async def upsert_user_async(user_id: int, username: str, first_name: str) -> bool:
         return await asyncio.to_thread(Database.upsert_user, user_id, username, first_name)
+
+    @staticmethod
+    async def update_user_activity_async(rows: list) -> bool:
+        return await asyncio.to_thread(Database.update_user_activity, rows)
+
+    @staticmethod
+    async def get_user_stats_async() -> dict:
+        return await asyncio.to_thread(Database.get_user_stats)
+
+    @staticmethod
+    async def get_counts_async() -> dict:
+        return await asyncio.to_thread(Database.get_counts)
 
     @staticmethod
     async def get_all_subscribers_async() -> list:

@@ -260,11 +260,21 @@ async def cache_cleanup_callback(context):
     """
     Bersihkan cache kedaluwarsa (memori + Supabase L2) secara berkala
     agar RAM proses bot tidak membengkak seiring waktu.
+
+    Sekaligus men-flush aktivitas user (last_active_at + total_questions)
+    ke Supabase secara batch — numpang job yang sudah ada, tanpa tambahan
+    request per pesan dan tanpa wake-up tambahan di Render free tier.
     """
     try:
         await asyncio.to_thread(cleanup_all)
     except Exception as e:
         logger.warning(f"Cache cleanup failed: {e}")
+    bot_instance = context.application.bot_data.get("market_bot")
+    if bot_instance:
+        try:
+            await bot_instance.flush_user_activity()
+        except Exception as e:
+            logger.warning(f"User activity flush failed: {e}")
 
 
 def setup_scheduler(application: Application, bot: MarketBot):
@@ -402,6 +412,7 @@ def register_handlers(application: Application, bot: MarketBot):
     application.add_handler(CommandHandler("memory", bot.memory_command))
     # Admin-only (ADMIN_USER_IDS) — tidak dipajang di menu command bot
     application.add_handler(CommandHandler("broadcast", bot.broadcast_command))
+    application.add_handler(CommandHandler("stats", bot.stats_command))
     application.add_handler(CommandHandler("morning", bot.morning_brief_command))
     application.add_handler(CommandHandler("sentiment", bot.sentiment_command))
     application.add_handler(CommandHandler("calendar", bot.calendar_command))

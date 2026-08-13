@@ -177,6 +177,64 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
         self.assertEqual(sess.post.call_count, 1)
         self.assertEqual(sess.delete.call_count, 2)
 
+    # ===================== USER ACTIVITY =====================
+
+    def test_update_user_activity_batch_upsert(self):
+        """Satu request POST batch untuk semua user (bukan per-user per pesan)
+        dengan merge-duplicates agar kolom lain tidak tertimpa."""
+        sess = mock.Mock()
+        post_fake = mock.Mock()
+        post_fake.raise_for_status = mock.Mock()
+        sess.post.return_value = post_fake
+        rows = [(1, "2026-08-13T00:00:00+00:00", 5), (2, "2026-08-13T00:01:00+00:00", 2)]
+        with mock.patch("data.database._is_configured", return_value=True), \
+             mock.patch("data.database._session", return_value=sess):
+            self.assertTrue(Database.update_user_activity(rows))
+        sess.post.assert_called_once()
+        payload = sess.post.call_args.kwargs["json"]
+        self.assertEqual(len(payload), 2)
+        self.assertEqual(payload[0]["user_id"], 1)
+        self.assertEqual(payload[0]["total_questions"], 5)
+        self.assertEqual(payload[1]["user_id"], 2)
+        prefer = sess.post.call_args.kwargs["headers"]["Prefer"]
+        self.assertIn("merge-duplicates", prefer)
+
+    def test_update_user_activity_empty_is_noop(self):
+        sess = mock.Mock()
+        with mock.patch("data.database._is_configured", return_value=True), \
+             mock.patch("data.database._session", return_value=sess):
+            self.assertTrue(Database.update_user_activity([]))
+        sess.post.assert_not_called()
+
+    def test_update_user_activity_filters_invalid_ids(self):
+        """user_id non-int tidak boleh ikut dikirim (bool == int di Python)."""
+        sess = mock.Mock()
+        post_fake = mock.Mock()
+        post_fake.raise_for_status = mock.Mock()
+        sess.post.return_value = post_fake
+        rows = [(7, "2026-08-13T00:00:00+00:00", 1), ("abc", "2026-08-13T00:00:00+00:00", 1)]
+        with mock.patch("data.database._is_configured", return_value=True), \
+             mock.patch("data.database._session", return_value=sess):
+            self.assertTrue(Database.update_user_activity(rows))
+        payload = sess.post.call_args.kwargs["json"]
+        self.assertEqual([p["user_id"] for p in payload], [7])
+
+    def test_update_user_activity_async_delegates(self):
+        rows = [(1, "2026-08-13T00:00:00+00:00", 3)]
+        with mock.patch.object(Database, "update_user_activity", return_value=True) as m:
+            self.assertTrue(asyncio.run(Database.update_user_activity_async(rows)))
+        m.assert_called_once_with(rows)
+
+    def test_get_user_stats_async_delegates(self):
+        with mock.patch.object(Database, "get_user_stats", return_value={"total_users": 10}) as m:
+            self.assertEqual(asyncio.run(Database.get_user_stats_async()), {"total_users": 10})
+        m.assert_called_once()
+
+    def test_get_counts_async_delegates(self):
+        with mock.patch.object(Database, "get_counts", return_value={"subscribers": 5}) as m:
+            self.assertEqual(asyncio.run(Database.get_counts_async()), {"subscribers": 5})
+        m.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

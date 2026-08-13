@@ -20,10 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from analysis.prompts import (
-    build_analysis_prompt,
-    format_context_for_prompt,
-)
+from analysis.prompts import build_analysis_prompt
 from analysis.research_agent import ResearchAgent, ResearchContext
 from analysis.thesis_agent import ThesisAgent, Thesis
 from analysis.contradiction_agent import ContradictionAgent, Contradiction
@@ -384,9 +381,9 @@ class AnalysisDirector:
         try:
             synthesis_prompt = build_analysis_prompt(
                 question=result.question,
-                # Budget token (tiktoken) — konteks pasar mentah dipotong presisi
-                # agar sintesis tidak membuang token input berlebihan.
-                context_data=format_context_for_prompt(research_str, max_tokens=750),
+                # Output agent sudah dipotong per-bagian di template synthesis
+                # (research 800, signal 500, dst.) — tidak perlu format_context
+                # terpisah yang ternyata tidak dipakai template (hemat CPU).
                 research_output=research_str[:800] if research_str else "No research data",
                 signal_output=signal_str[:500] if signal_str else "No signal data",
                 indicators_output=result.indicators_summary,

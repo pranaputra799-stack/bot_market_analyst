@@ -23,12 +23,18 @@ CREATE INDEX IF NOT EXISTS idx_app_cache_expires_at
 
 -- ------------------------------------------------------------
 -- 2) users — dipakai data/database.py (upsert_user)
+--    last_active_at & total_questions: aktivitas user terakhir + jumlah
+--    pertanyaan (di-flush batch dari memori bot setiap 10 menit — lihat
+--    Database.update_user_activity). Memungkinkan statistik user aktif /
+--    pengguna bot yang bertahan lintas restart.
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.users (
-    user_id    BIGINT PRIMARY KEY,
-    username   TEXT DEFAULT '',
-    first_name TEXT DEFAULT '',
-    created_at TIMESTAMPTZ DEFAULT now()
+    user_id         BIGINT PRIMARY KEY,
+    username        TEXT DEFAULT '',
+    first_name      TEXT DEFAULT '',
+    last_active_at  TIMESTAMPTZ,
+    total_questions BIGINT NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ DEFAULT now()
 );
 
 -- ------------------------------------------------------------
@@ -114,6 +120,26 @@ BEGIN
             EXECUTE format('ALTER TABLE public.%I ALTER COLUMN created_at SET DEFAULT now()', t);
         END IF;
     END LOOP;
+    -- Kolom aktivitas user (versi lama tabel users mungkin belum punya):
+    -- tambahkan bila belum ada agar bot tetap bisa menulis statistik user.
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'users'
+          AND column_name = 'last_active_at'
+    ) THEN
+        ALTER TABLE public.users ADD COLUMN last_active_at TIMESTAMPTZ;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'users'
+          AND column_name = 'total_questions'
+    ) THEN
+        ALTER TABLE public.users ADD COLUMN total_questions BIGINT NOT NULL DEFAULT 0;
+    END IF;
+    -- Index dibikin DI SINI (bukan di atas) karena kolom last_active_at baru
+    -- ada setelah ALTER TABLE di atas untuk tabel users versi lama.
+    EXECUTE 'CREATE INDEX IF NOT EXISTS idx_users_last_active_at
+             ON public.users (last_active_at)';
 END $$;
 
 -- ============================================================

@@ -210,6 +210,17 @@ mode memory-only tanpa error.
 | Hasil analisis multi-agent | ✅ | — |
 | AI response (besar) | ✅ (TTL 10 mnt) | ✅ (persisten) |
 | Conversation memory | ✅ (TTL 15 mnt) | ✅ (persisten) |
+| Aktivitas user (last_active_at, total_questions) | ✅ (buffer) | ✅ (flush batch tiap 10 mnt) |
+
+## 📊 Statistik & Hemat Token
+
+- **Pemakaian token AI di-track** dari field `usage` response API (per provider)
+  dan ditampilkan di `/status` (semua user) dan `/stats` (admin).
+- **Aktivitas user** (kapan terakhir aktif + jumlah pertanyaan) di-flush
+  **batch** ke tabel `users` tiap 10 menit — numpang job cache cleanup yang
+  sudah ada, tanpa request per pesan dan tanpa wake-up tambahan.
+- **Admin `/stats`**: token total + per provider, user terdaftar / aktif 24 jam,
+  subscriber morning brief & alert event, win rate prediksi news (XAU/USD).
 
 ## 📦 Deploy
 
@@ -368,6 +379,7 @@ curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
 | `/status` | Status sistem, AI provider, dan data source |
 | `/about` | Informasi bot |
 | `/broadcast <pesan>` | 🔒 **Khusus admin** (`ADMIN_USER_IDS`) — preview jumlah penerima, lalu `/broadcast send <pesan>` untuk mengirim pengumuman ke semua subscriber |
+| `/stats` | 🔒 **Khusus admin** (`ADMIN_USER_IDS`) — statistik lengkap: pemakaian token AI (per provider), user aktif 24 jam, subscriber, win rate prediksi news |
 
 ## ⚠️ Disclaimer
 
