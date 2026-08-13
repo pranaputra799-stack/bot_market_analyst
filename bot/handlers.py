@@ -11,7 +11,13 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 from telegram.error import BadRequest
 from telegram.ext import (
     Application,
@@ -340,6 +346,44 @@ def label_to_symbol(label: Optional[str]) -> Optional[str]:
     return None
 
 
+# ===================== REPLY KEYBOARD (menu di keyboard bawah) =====================
+# Label tombol keyboard = label menu inline (konsisten). Saat tombol ditekan,
+# Telegram mengirim label sebagai pesan teks → handle_message mendeteksi label
+# dan menjalankan aksi yang sama dengan callback menu (lihat _run_keyboard_menu_action).
+
+# Label tombol (baris keyboard) → aksi menu (callback_data yang sama)
+MENU_KEYBOARD_LABELS = [
+    ["🥇 Harga Gold", "💱 EUR/USD"],
+    ["🌍 Overview Pasar", "📅 Kalender"],
+    ["📰 Sentimen Pasar", "🏛️ Data Makro"],
+    ["🌅 Morning Brief", "🎯 Prediksi News"],
+    ["🔔 Alert Event", "❓ Bantuan"],
+]
+
+MENU_KEYBOARD_ACTIONS = {
+    "🥇 Harga Gold": "gold_price",
+    "💱 EUR/USD": "eurusd",
+    "🌍 Overview Pasar": "overview",
+    "📅 Kalender": "calendar",
+    "📰 Sentimen Pasar": "sentiment",
+    "🏛️ Data Makro": "macro",
+    "🌅 Morning Brief": "morning",
+    "🎯 Prediksi News": "prediksi",
+    "🔔 Alert Event": "alert_on",
+    "❓ Bantuan": "help",
+}
+
+
+def _menu_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard persistent di bawah kolom input — menu selalu terlihat."""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(label) for label in row] for row in MENU_KEYBOARD_LABELS],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Pilih menu atau tanya pasar...",
+    )
+
+
 def _quick_action_keyboard(symbol: Optional[str] = None):
     """Keyboard aksi cepat — simbol ter-embed di callback agar tombol lama
     tetap bekerja untuk instrumen yang benar walau konteks sudah berubah."""
@@ -482,6 +526,18 @@ class MarketBot:
             reply_markup=reply_markup,
             disable_web_page_preview=True,
         )
+        # Reply keyboard persistent di bawah kolom input — menu selalu terlihat
+        # tanpa harus scroll pesan / ketik perintah. Tombolnya mengirim label
+        # sebagai teks; handle_message mengenalinya dan menjalankan aksi yang
+        # sama dengan tombol menu di atas.
+        try:
+            await update.message.reply_text(
+                "📌 *Menu siap di keyboard bawah* — ketuk tombol kapan saja. 👇",
+                parse_mode="Markdown",
+                reply_markup=_menu_reply_keyboard(),
+            )
+        except Exception as e:
+            logger.debug(f"Reply keyboard setup gagal (bot tetap jalan): {e}")
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler untuk perintah /help."""
@@ -1334,6 +1390,74 @@ class MarketBot:
             sentiment_data=sentiment_section,
         )
 
+    # ===================== REPLY KEYBOARD MENU ACTION =====================
+    # Tombol reply keyboard mengirim LABEL sebagai teks pesan. handle_message
+    # mendeteksi label → method ini menjalankan aksi yang sama dengan tombol
+    # inline menu (callback handle_callback). Aksi yang punya command handler
+    # di-reuse langsung agar tidak ada duplikasi logika.
+
+    async def _run_keyboard_menu_action(self, action: str, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Jalankan aksi tombol reply keyboard (menu di keyboard bawah)."""
+        if action == "gold_price":
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+            gold_data = await asyncio.to_thread(self.market.get_yahoo_data, "GC=F", period="1wk")
+            formatted = self._format_market_data(gold_data)
+            await safe_reply_text(
+                update.message,
+                f"🥇 *HARGA GOLD (XAU/USD)*\n\n{formatted}\n\n{await self.news.get_news_summary('GC=F')}\n{DISCLAIMER}",
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+        elif action == "eurusd":
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+            eur_data = await asyncio.to_thread(self.market.get_yahoo_data, "EURUSD=X", period="1wk")
+            formatted = self._format_market_data(eur_data)
+            await safe_reply_text(
+                update.message,
+                f"💱 *EUR/USD*\n\n{formatted}\n{DISCLAIMER}",
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+        elif action == "macro":
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+            macro_summary = await asyncio.to_thread(self.macro.get_macro_summary)
+            await safe_reply_text(
+                update.message,
+                f"🏛️ *DATA MAKROEKONOMI*\n\n{macro_summary}\n{DISCLAIMER}",
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+        elif action == "sentiment":
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+            result = await self.sentiment.analyze("FOREX", use_llm=True)
+            report = strip_markdown_asterisks(self.sentiment.format_report(result, "Pasar Forex"))
+            await safe_reply_text(
+                update.message,
+                report,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+        elif action == "overview":
+            await self.overview_command(update, context)
+        elif action == "calendar":
+            await self.calendar_command(update, context)
+        elif action == "morning":
+            await self.morning_brief_command(update, context)
+        elif action == "prediksi":
+            await self.prediksi_command(update, context)
+        elif action == "alert_on":
+            # Sama dengan tombol inline alert_on: aktifkan notifikasi event
+            chat_id = update.effective_chat.id
+            subscribers = context.bot_data.setdefault("event_alert_subscribers", set())
+            before = set(subscribers)
+            subscribers.add(chat_id)
+            context.bot_data["event_alert_subscribers"] = subscribers
+            if subscribers != before:
+                await self._persist_alert_subscribers(context)
+            await update.message.reply_text(ALERT_ON_MESSAGE, parse_mode="Markdown")
+        elif action == "help":
+            await self.help_command(update, context)
+
     # ===================== MESSAGE HANDLER =====================
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1361,6 +1485,15 @@ class MarketBot:
         self.total_questions += 1
         # Aktivitas per-user (in-memory, di-flush batch ke Supabase berkala)
         self._user_activity[user_id] = self._user_activity.get(user_id, 0) + 1
+
+        # ===== REPLY KEYBOARD MENU: label tombol dikirim sebagai teks =====
+        # Tombol di keyboard bawah (Reply Keyboard) mengirim label sebagai pesan
+        # teks biasa. Kenali label tersebut dan jalankan aksi menu yang sama
+        # dengan tombol inline (tanpa pipeline AI — instan).
+        menu_action = MENU_KEYBOARD_ACTIONS.get(user_question)
+        if menu_action:
+            await self._run_keyboard_menu_action(menu_action, update, context)
+            return
 
         # ===== FAST PATH: pertanyaan harga sederhana (tanpa AI) =====
         # Cek harga biasa ("berapa harga eurusd?") dijawab INSTAN dari data

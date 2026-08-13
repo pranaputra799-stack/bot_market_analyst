@@ -366,7 +366,7 @@ curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
 
 | Perintah | Fungsi |
 |---|---|
-| `/start` | Menu utama & tombol aksi cepat |
+| `/start` | Menu utama + **tombol menu di keyboard bawah chat** (reply keyboard persistent — ketuk kapan saja tanpa mengetik perintah) |
 | `/help` | Panduan penggunaan |
 | `/morning` | Morning Brief hari ini |
 | `/subscribe` | Langganan Morning Brief otomatis |

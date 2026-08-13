@@ -9,6 +9,9 @@ from bot.handlers import (
     strip_markdown_asterisks,
     label_to_symbol,
     _quick_action_keyboard,
+    _menu_reply_keyboard,
+    MENU_KEYBOARD_ACTIONS,
+    MENU_KEYBOARD_LABELS,
     TG_MAX_MESSAGE_CHARS,
 )
 
@@ -179,6 +182,57 @@ class TestStartMenuKeyboard(unittest.TestCase):
             any(cb.startswith("chart") for cb in callbacks),
             "Menu masih memuat tombol fitur yang sudah dihapus",
         )
+
+
+class TestReplyKeyboardMenu(unittest.TestCase):
+    """Menu di keyboard bawah (Reply Keyboard): tombol harus ada & labelnya
+    terpetakan ke aksi yang sama dengan tombol inline."""
+
+    def test_reply_keyboard_built(self):
+        kb = _menu_reply_keyboard()
+        rows = kb.keyboard
+        # 5 baris × 2 tombol, sama dengan menu inline
+        self.assertEqual(len(rows), 5)
+        for row in rows:
+            self.assertEqual(len(row), 2)
+        # Tombolnya KeyboardButton (bukan inline)
+        self.assertTrue(all(b.text for row in rows for b in row))
+
+    def test_all_labels_map_to_supported_actions(self):
+        # Setiap label tombol keyboard harus terpetakan ke aksi yang punya
+        # handler (gold_price, eurusd, overview, calendar, sentiment, macro,
+        # morning, prediksi, alert_on, help).
+        supported = {
+            "gold_price", "eurusd", "overview", "calendar", "sentiment",
+            "macro", "morning", "prediksi", "alert_on", "help",
+        }
+        for row in MENU_KEYBOARD_LABELS:
+            for label in row:
+                self.assertIn(label, MENU_KEYBOARD_ACTIONS)
+                self.assertIn(MENU_KEYBOARD_ACTIONS[label], supported)
+
+    def test_labels_match_inline_menu(self):
+        # Label keyboard = label inline menu → user melihat menu yang konsisten
+        inline_labels = {
+            "🥇 Harga Gold", "💱 EUR/USD", "🌍 Overview Pasar", "📅 Kalender",
+            "📰 Sentimen Pasar", "🏛️ Data Makro", "🌅 Morning Brief",
+            "🎯 Prediksi News", "🔔 Alert Event", "❓ Bantuan",
+        }
+        keyboard_labels = {label for row in MENU_KEYBOARD_LABELS for label in row}
+        self.assertEqual(keyboard_labels, inline_labels)
+
+    def test_start_sends_reply_keyboard(self):
+        bot = MarketBot.__new__(MarketBot)
+        user = type("U", (), {"id": 9999, "username": "tester", "first_name": "Tester"})()
+        upd = _FakeUpdate("/start", user_id=9999)
+        upd.effective_user = user
+        asyncio.run(bot.start(upd, _FakeContext()))
+        # start() mengirim 2 pesan: welcome (inline) + petunjuk (reply keyboard)
+        self.assertGreaterEqual(len(upd.message.replies), 2)
+        reply_kb = upd.message.replies[1][1].get("reply_markup")
+        self.assertIsNotNone(reply_kb, "Pesan kedua harus memasang reply keyboard")
+        self.assertTrue(hasattr(reply_kb, "keyboard"))
+        self.assertEqual(len(reply_kb.keyboard), 5)
 
 
 class TestMenuCallbacks(unittest.TestCase):
