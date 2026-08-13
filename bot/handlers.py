@@ -724,6 +724,21 @@ class MarketBot:
         ]
         return message, InlineKeyboardMarkup(keyboard)
 
+    async def settings_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler untuk /settings — buka menu Pengaturan (sama dengan tombol ⚙️).
+
+        Menampilkan status semua pengaturan + tombol toggle di keyboard inline,
+        sehingga user bisa mengubah tanpa harus ketik perintah.
+        """
+        message, kb = await self._build_settings_menu(update, context)
+        await safe_reply_text(
+            update.message,
+            message,
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+            reply_markup=kb,
+        )
+
     # ===================== CLEAR COMMAND =====================
 
     async def clear_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):

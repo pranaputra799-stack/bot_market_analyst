@@ -145,6 +145,7 @@ async def post_init(application: Application):
         BotCommand("status", "✅ Status sistem & API"),
         BotCommand("clear", "🧹 Bersihkan konteks"),
         BotCommand("memory", "🧠 Lihat & hapus riwayat percakapan"),
+        BotCommand("settings", "⚙️ Pengaturan bot"),
         BotCommand("overview", "🌍 Overview pasar"),
         BotCommand("sentimen", "🧠 Sentimen retail (OANDA)"),
         BotCommand("subscribe", "🔔 Langganan Morning Brief"),
@@ -415,6 +416,7 @@ def register_handlers(application: Application, bot: MarketBot):
     application.add_handler(CommandHandler("about", bot.about_command))
     application.add_handler(CommandHandler("status", bot.status_command))
     application.add_handler(CommandHandler("clear", bot.clear_command))
+    application.add_handler(CommandHandler("settings", bot.settings_command))
     application.add_handler(CommandHandler("memory", bot.memory_command))
     # Admin-only (ADMIN_USER_IDS) — tidak dipajang di menu command bot
     application.add_handler(CommandHandler("broadcast", bot.broadcast_command))

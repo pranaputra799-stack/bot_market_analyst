@@ -69,6 +69,7 @@ HELP_MESSAGE = """
 /subscribe - 🔔 Langganan Morning Brief
 /unsubscribe - 🔕 Berhenti langganan
 /status - ✅ Status sistem & API
+/settings - ⚙️ Pengaturan bot (alert event, morning brief, konteks)
 /clear - 🧹 Bersihkan konteks percakapan
 /memory - 🧠 Lihat & hapus riwayat percakapan (24 jam)
 /about - ℹ️ Tentang bot

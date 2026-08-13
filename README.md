@@ -378,6 +378,7 @@ curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
 | `⚙️ Pengaturan` (menu) | Satu menu untuk semua yang bisa diatur: toggle notifikasi event, langganan morning brief, & hapus konteks percakapan |
 | `/prediksi` | 🎯 Win rate prediksi news (XAU/USD) — total, benar/salah/flat, 10 prediksi terakhir (`/prediksi history` untuk 25) |
 | `/overview` | Ringkasan instan semua instrumen utama (tanpa AI) |
+| `/settings` | ⚙️ Pengaturan bot — toggle alert event, morning brief, & hapus konteks dalam satu menu |
 | `/status` | Status sistem, AI provider, dan data source |
 | `/about` | Informasi bot |
 | `/broadcast <pesan>` | 🔒 **Khusus admin** (`ADMIN_USER_IDS`) — preview jumlah penerima, lalu `/broadcast send <pesan>` untuk mengirim pengumuman ke semua subscriber |
