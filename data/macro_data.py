@@ -951,7 +951,12 @@ class MacroDataFetcher:
         # Isi nilai Actual/Previous real-time untuk event yang sudah rilis (via FRED)
         events = await self._enrich_fred_values(events)
 
-        cache.set(cache_key, events, 600)  # Cache 10 menit
+        # Cache 30 menit (bukan 10): kalender ekonomi berubah lambat (jadwal
+        # rilis ditentukan jauh hari; nilai actual hanya bertambah setelah rilis
+        # dan aftermath punya jendela lookback 6 jam). Cache lebih lama
+        # memangkas fetch FRED + enrich ±3x/hari — signifikan untuk job
+        # reminder/aftermath yang berjalan berkala di server free tier.
+        cache.set(cache_key, events, 1800)
         return events
 
     def get_month_calendar_range(self) -> tuple:

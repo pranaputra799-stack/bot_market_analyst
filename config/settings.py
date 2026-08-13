@@ -167,8 +167,19 @@ ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES = int(os.getenv("ECONOMIC_ALERT_CHECK_INTE
 # dikirim ke subscriber /alert (dedup persisten di Supabase tabel event_reports).
 EVENT_AFTERMATH_ENABLED = os.getenv("EVENT_AFTERMATH_ENABLED", "true").lower() in ("1", "true", "yes")
 # Jendela jam ke belakang: event yang rilis dalam N jam terakhir akan dilaporkan
-# (setiap job check berjalan sekali per ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES).
+# (setiap job check berjalan sekali per EVENT_AFTERMATH_CHECK_INTERVAL_MINUTES).
 EVENT_AFTERMATH_LOOKBACK_HOURS = int(os.getenv("EVENT_AFTERMATH_LOOKBACK_HOURS", "6"))
+# Interval pengecekan aftermath (menit) — TERPISAH dari interval reminder.
+# Aftermath tidak butuh ketepatan waktu (menganalisis event yang SUDAH rilis
+# dalam jendela lookback 6 jam), jadi bisa lebih jarang dari reminder 15 menit
+# agar tidak membebani server (FRED + AI hanya dipanggil saat ada event baru).
+# Diklem 10..120 menit.
+EVENT_AFTERMATH_CHECK_INTERVAL_MINUTES = int(
+    os.getenv("EVENT_AFTERMATH_CHECK_INTERVAL_MINUTES", "30")
+)
+EVENT_AFTERMATH_CHECK_INTERVAL_MINUTES = max(
+    10, min(EVENT_AFTERMATH_CHECK_INTERVAL_MINUTES, 120)
+)
 
 # ===================== NEWS PREDICTION (XAU/USD) =====================
 # Prediksi arah emas (naik/turun) untuk event ekonomi high-impact, dikirim ke

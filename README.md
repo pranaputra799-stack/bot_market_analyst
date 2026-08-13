@@ -173,6 +173,7 @@ python main.py
 | `ECONOMIC_ALERT_ENABLED` | opsi | Notifikasi event ekonomi (`true`/`false`) |
 | `EVENT_AFTERMATH_ENABLED` | opsi | Analisis aftermath setalah event rilis (`true`/`false`) |
 | `EVENT_AFTERMATH_LOOKBACK_HOURS` | opsi | Jendela jam ke belakang untuk laporan aftermath (default `6`) |
+| `EVENT_AFTERMATH_CHECK_INTERVAL_MINUTES` | opsi | Interval pengecekan aftermath (default `30`, terpisah dari reminder 15 mnt) — lebih jarang = hemat FRED + AI di hari tanpa news |
 | `NEWS_PREDICTION_ENABLED` | opsi | Prediksi arah emas (XAU/USD) sebelum news high-impact (`true`/`false`, default `true`) |
 | `NEWS_PREDICTION_LEAD_MINUTES` | opsi | Menit sebelum rilis saat prediksi dikirim (default `5`) |
 | `NEWS_PREDICTION_SETTLE_MINUTES` | opsi | Menit setelah rilis sebelum hasil dievaluasi (default `15`) |

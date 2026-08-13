@@ -53,6 +53,7 @@ from config.settings import (
     ECONOMIC_ALERT_DIGEST_HOUR,
     ECONOMIC_ALERT_DIGEST_MINUTE,
     ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES,
+    EVENT_AFTERMATH_CHECK_INTERVAL_MINUTES,
     NEWS_PREDICTION_ENABLED,
     NEWS_PREDICTION_CHECK_INTERVAL_MINUTES,
     BOT_USERNAME,
@@ -356,14 +357,17 @@ def setup_scheduler(application: Application, bot: MarketBot):
             # Analisis aftermath (SETELAH rilis) — ikut gating ECONOMIC_ALERT_ENABLED
             # agar satu saklar mematikan seluruh notifikasi event. Dikontrol lebih
             # lanjut oleh EVENT_AFTERMATH_ENABLED di dalam check_event_aftermath.
+            # Interval TERPISAH (default 30 mnt) dari reminder (15 mnt): aftermath
+            # tidak butuh ketepatan waktu (event sudah rilis, jendela lookback 6 jam),
+            # sehingga jarangnya pengecekan menghemat beban FRED + AI di hari tanpa news.
             application.job_queue.run_repeating(
                 event_aftermath_callback,
-                interval=timedelta(minutes=ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES),
+                interval=timedelta(minutes=EVENT_AFTERMATH_CHECK_INTERVAL_MINUTES),
                 first=90,  # Mulai 90 detik setelah start
                 name="event_aftermath",
             )
             logger.info(
-                f"Event aftermath analysis scheduled every {ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES} minutes"
+                f"Event aftermath analysis scheduled every {EVENT_AFTERMATH_CHECK_INTERVAL_MINUTES} minutes"
             )
 
         # ===== News Prediction (XAU/USD) =====
