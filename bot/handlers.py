@@ -357,7 +357,8 @@ MENU_KEYBOARD_LABELS = [
     ["🌍 Overview Pasar", "📅 Kalender"],
     ["📰 Sentimen Pasar", "🏛️ Data Makro"],
     ["🌅 Morning Brief", "🎯 Prediksi News"],
-    ["🔔 Alert Event", "❓ Bantuan"],
+    ["🔔 Alert Event", "⚙️ Pengaturan"],
+    ["❓ Bantuan"],
 ]
 
 MENU_KEYBOARD_ACTIONS = {
@@ -370,6 +371,7 @@ MENU_KEYBOARD_ACTIONS = {
     "🌅 Morning Brief": "morning",
     "🎯 Prediksi News": "prediksi",
     "🔔 Alert Event": "alert_on",
+    "⚙️ Pengaturan": "settings",
     "❓ Bantuan": "help",
 }
 
@@ -382,6 +384,36 @@ def _menu_reply_keyboard() -> ReplyKeyboardMarkup:
         is_persistent=True,
         input_field_placeholder="Pilih menu atau tanya pasar...",
     )
+
+
+def _main_menu_inline_keyboard() -> InlineKeyboardMarkup:
+    """Menu utama inline (di dalam pesan) — dipakai /start dan tombol 'Kembali'."""
+    keyboard = [
+        [
+            InlineKeyboardButton("🥇 Harga Gold", callback_data="gold_price"),
+            InlineKeyboardButton("💱 EUR/USD", callback_data="eurusd"),
+        ],
+        [
+            InlineKeyboardButton("🌍 Overview Pasar", callback_data="overview"),
+            InlineKeyboardButton("📅 Kalender", callback_data="calendar"),
+        ],
+        [
+            InlineKeyboardButton("📰 Sentimen Pasar", callback_data="sentiment"),
+            InlineKeyboardButton("🏛️ Data Makro", callback_data="macro"),
+        ],
+        [
+            InlineKeyboardButton("🌅 Morning Brief", callback_data="morning"),
+            InlineKeyboardButton("🎯 Prediksi News", callback_data="prediksi"),
+        ],
+        [
+            InlineKeyboardButton("🔔 Alert Event", callback_data="alert_on"),
+            InlineKeyboardButton("⚙️ Pengaturan", callback_data="settings"),
+        ],
+        [
+            InlineKeyboardButton("❓ Bantuan", callback_data="help"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 
 def _quick_action_keyboard(symbol: Optional[str] = None):
@@ -492,32 +524,10 @@ class MarketBot:
         # Simpan/update user ke database (async — jangan blokir event loop)
         await db.upsert_user_async(user.id, user.username, user.first_name)
 
-        # Keyboard menu — ringkas (8 tombol, 2 kolom), tanpa duplikasi fitur:
-        # harga cepat → overview/kalender → analisis → notifikasi → bantuan.
+        # Keyboard menu — ringkas, tanpa duplikasi fitur: harga cepat →
+        # overview/kalender → analisis → notifikasi → pengaturan → bantuan.
         # Fitur lain tetap tersedia via perintah (/sentimen, /subscribe, dll).
-        keyboard = [
-            [
-                InlineKeyboardButton("🥇 Harga Gold", callback_data="gold_price"),
-                InlineKeyboardButton("💱 EUR/USD", callback_data="eurusd"),
-            ],
-            [
-                InlineKeyboardButton("🌍 Overview Pasar", callback_data="overview"),
-                InlineKeyboardButton("📅 Kalender", callback_data="calendar"),
-            ],
-            [
-                InlineKeyboardButton("📰 Sentimen Pasar", callback_data="sentiment"),
-                InlineKeyboardButton("🏛️ Data Makro", callback_data="macro"),
-            ],
-            [
-                InlineKeyboardButton("🌅 Morning Brief", callback_data="morning"),
-                InlineKeyboardButton("🎯 Prediksi News", callback_data="prediksi"),
-            ],
-            [
-                InlineKeyboardButton("🔔 Alert Event", callback_data="alert_on"),
-                InlineKeyboardButton("❓ Bantuan", callback_data="help"),
-            ],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = _main_menu_inline_keyboard()
 
         await safe_reply_text(
             update.message,
@@ -650,6 +660,69 @@ class MarketBot:
             await safe_reply_text(update.message, "👋 Berhasil berhenti langganan Morning Brief.")
         else:
             await safe_reply_text(update.message, "❌ Gagal membatalkan langganan. Database mungkin belum dikonfigurasi.")
+
+    # ===================== PENGATURAN (SETTINGS) =====================
+    # Satu menu untuk mengatur SEMUA yang bisa diubah user: notifikasi event
+    # (/alert), langganan morning brief (/subscribe), dan konteks percakapan
+    # (/clear). Tombol inline memakai callback `settings*`; dari reply keyboard
+    # label '⚙️ Pengaturan' memicu aksi yang sama.
+
+    SETTINGS_HELP = (
+        "⚙️ *PENGATURAN*\n\n"
+        "Semua pengaturan bot dalam satu tempat — ketuk tombol untuk mengubah:\n\n"
+        "🔔 *Alert Event* — notifikasi otomatis: digest harian + reminder sebelum rilis "
+        "+ analisis aftermath + prediksi arah emas\n"
+        "🌅 *Morning Brief* — ringkasan pasar otomatis setiap pagi\n"
+        "🧠 *Konteks* — hapus riwayat percakapan yang bot ingat (privasi)"
+    )
+
+    async def _build_settings_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Bangun pesan + tombol menu pengaturan dengan STATUS TERKINI.
+
+        Returns:
+            (message, reply_markup) — selalu punya keyboard (tidak None).
+        """
+        chat_id = update.effective_chat.id
+        user_id = update.effective_user.id
+
+        # Status Alert Event (dari bot_data — sinkron dengan /alert)
+        alert_on = chat_id in context.bot_data.get("event_alert_subscribers", set())
+        alert_status = "✅ AKTIF" if alert_on else "❌ NONAKTIF"
+        alert_btn = (
+            "🔔 Matikan Alert Event" if alert_on else "🔔 Aktifkan Alert Event"
+        )
+
+        # Status Morning Brief (dari Supabase)
+        try:
+            brief_on = await db.is_subscribed_async(chat_id)
+        except Exception as e:
+            logger.debug(f"Cek status brief gagal: {e}")
+            brief_on = False
+        brief_status = "✅ AKTIF" if brief_on else "❌ NONAKTIF"
+        brief_btn = (
+            "🌅 Berhenti Langganan Brief" if brief_on else "🌅 Langganan Morning Brief"
+        )
+
+        # Status konteks percakapan
+        history = get_history(user_id)
+        ctx_count = len(history)
+        ctx_label = f"🧠 Konteks: {ctx_count} percakapan tersimpan" if ctx_count else "🧠 Konteks: kosong"
+
+        message = (
+            "⚙️ *PENGATURAN*\n\n"
+            f"🔔 *Alert Event:* {alert_status}\n"
+            f"🌅 *Morning Brief:* {brief_status}\n"
+            f"{ctx_label}\n\n"
+            "Ketuk tombol di bawah untuk mengubah."
+        )
+
+        keyboard = [
+            [InlineKeyboardButton(alert_btn, callback_data="settings_alert")],
+            [InlineKeyboardButton(brief_btn, callback_data="settings_brief")],
+            [InlineKeyboardButton("🧹 Bersihkan Konteks", callback_data="settings_clear")],
+            [InlineKeyboardButton("🔙 Kembali ke Menu", callback_data="menu")],
+        ]
+        return message, InlineKeyboardMarkup(keyboard)
 
     # ===================== CLEAR COMMAND =====================
 
@@ -1455,6 +1528,16 @@ class MarketBot:
             if subscribers != before:
                 await self._persist_alert_subscribers(context)
             await update.message.reply_text(ALERT_ON_MESSAGE, parse_mode="Markdown")
+        elif action == "settings":
+            # Menu pengaturan dari reply keyboard — kirim sebagai pesan baru
+            message, kb = await self._build_settings_menu(update, context)
+            await safe_reply_text(
+                update.message,
+                message,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+                reply_markup=kb,
+            )
         elif action == "help":
             await self.help_command(update, context)
 
@@ -2246,6 +2329,86 @@ class MarketBot:
                 await query.message.reply_text(
                     "⚠️ Kamu belum terdaftar sebagai subscriber Morning Brief."
                 )
+
+        elif data == "settings":
+            # Buka menu pengaturan (semua yang bisa diatur dalam satu tempat)
+            message, kb = await self._build_settings_menu(update, context)
+            await safe_edit_message_text(
+                query,
+                message,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+                reply_markup=kb,
+            )
+
+        elif data == "settings_alert":
+            # Toggle notifikasi event (sama dengan /alert on|off)
+            chat_id = update.effective_chat.id
+            subscribers = context.bot_data.setdefault("event_alert_subscribers", set())
+            before = set(subscribers)
+            if chat_id in subscribers:
+                subscribers.discard(chat_id)
+                feedback = "🔔 Alert Event *dimatikan*."
+            else:
+                subscribers.add(chat_id)
+                feedback = "🔔 Alert Event *diaktifkan*."
+            context.bot_data["event_alert_subscribers"] = subscribers
+            if subscribers != before:
+                await self._persist_alert_subscribers(context)
+            message, kb = await self._build_settings_menu(update, context)
+            await safe_edit_message_text(
+                query,
+                f"{feedback}\n\n{message}",
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+                reply_markup=kb,
+            )
+
+        elif data == "settings_brief":
+            # Toggle langganan morning brief (sama dengan /subscribe|/unsubscribe)
+            chat_id = update.effective_chat.id
+            try:
+                subscribed = await db.is_subscribed_async(chat_id)
+            except Exception as e:
+                logger.debug(f"Cek status brief gagal: {e}")
+                subscribed = False
+            if subscribed:
+                removed = await db.remove_subscriber_async(chat_id)
+                feedback = "🌅 Langganan Morning Brief *dihentikan*." if removed else "❌ Gagal mengubah langganan."
+            else:
+                added = await db.add_subscriber_async(chat_id)
+                feedback = "🌅 Langganan Morning Brief *diaktifkan*." if added else "❌ Gagal mengubah langganan."
+            message, kb = await self._build_settings_menu(update, context)
+            await safe_edit_message_text(
+                query,
+                f"{feedback}\n\n{message}",
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+                reply_markup=kb,
+            )
+
+        elif data == "settings_clear":
+            # Hapus konteks percakapan (sama dengan /clear)
+            user_id = query.from_user.id
+            clear(user_id)
+            message, kb = await self._build_settings_menu(update, context)
+            await safe_edit_message_text(
+                query,
+                f"🧹 *Konteks percakapan dibersihkan.*\n\n{message}",
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+                reply_markup=kb,
+            )
+
+        elif data == "menu":
+            # Kembali ke menu utama (re-render welcome + menu inline)
+            await safe_edit_message_text(
+                query,
+                WELCOME_MESSAGE,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+                reply_markup=_main_menu_inline_keyboard(),
+            )
 
         elif data.startswith("qa:"):
             # ===== QUICK ACTIONS — memakai konteks multi-turn user =====

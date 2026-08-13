@@ -2,7 +2,9 @@
 
 import asyncio
 import unittest
+from unittest import mock
 
+from bot import handlers as handlers_mod
 from bot.handlers import (
     MarketBot,
     split_long_text,
@@ -131,7 +133,8 @@ class TestStartMenuKeyboard(unittest.TestCase):
     SUPPORTED = {
         "morning", "overview", "gold_price", "eurusd", "macro",
         "calendar", "sentiment", "sentimen_retail", "alert_on",
-        "prediksi", "subscribe", "unsubscribe", "help",
+        "prediksi", "subscribe", "unsubscribe", "help", "settings",
+        "settings_alert", "settings_brief", "settings_clear", "menu",
     }
 
     def _run_start(self):
@@ -191,20 +194,21 @@ class TestReplyKeyboardMenu(unittest.TestCase):
     def test_reply_keyboard_built(self):
         kb = _menu_reply_keyboard()
         rows = kb.keyboard
-        # 5 baris × 2 tombol, sama dengan menu inline
-        self.assertEqual(len(rows), 5)
-        for row in rows:
+        # 5 baris × 2 tombol + 1 baris bantuan, sama dengan menu inline
+        self.assertEqual(len(rows), 6)
+        for row in rows[:-1]:
             self.assertEqual(len(row), 2)
+        self.assertEqual(len(rows[-1]), 1)
         # Tombolnya KeyboardButton (bukan inline)
         self.assertTrue(all(b.text for row in rows for b in row))
 
     def test_all_labels_map_to_supported_actions(self):
         # Setiap label tombol keyboard harus terpetakan ke aksi yang punya
         # handler (gold_price, eurusd, overview, calendar, sentiment, macro,
-        # morning, prediksi, alert_on, help).
+        # morning, prediksi, alert_on, settings, help).
         supported = {
             "gold_price", "eurusd", "overview", "calendar", "sentiment",
-            "macro", "morning", "prediksi", "alert_on", "help",
+            "macro", "morning", "prediksi", "alert_on", "settings", "help",
         }
         for row in MENU_KEYBOARD_LABELS:
             for label in row:
@@ -216,7 +220,7 @@ class TestReplyKeyboardMenu(unittest.TestCase):
         inline_labels = {
             "🥇 Harga Gold", "💱 EUR/USD", "🌍 Overview Pasar", "📅 Kalender",
             "📰 Sentimen Pasar", "🏛️ Data Makro", "🌅 Morning Brief",
-            "🎯 Prediksi News", "🔔 Alert Event", "❓ Bantuan",
+            "🎯 Prediksi News", "🔔 Alert Event", "⚙️ Pengaturan", "❓ Bantuan",
         }
         keyboard_labels = {label for row in MENU_KEYBOARD_LABELS for label in row}
         self.assertEqual(keyboard_labels, inline_labels)
@@ -232,7 +236,7 @@ class TestReplyKeyboardMenu(unittest.TestCase):
         reply_kb = upd.message.replies[1][1].get("reply_markup")
         self.assertIsNotNone(reply_kb, "Pesan kedua harus memasang reply keyboard")
         self.assertTrue(hasattr(reply_kb, "keyboard"))
-        self.assertEqual(len(reply_kb.keyboard), 5)
+        self.assertEqual(len(reply_kb.keyboard), 6)
 
 
 class TestMenuCallbacks(unittest.TestCase):
@@ -273,6 +277,89 @@ class TestMenuCallbacks(unittest.TestCase):
         self.assertIn(777, ctx.bot_data["event_alert_subscribers"])
         text, _ = query.message.replies[0]
         self.assertIn("AKTIF", text)
+
+
+class TestSettingsMenu(unittest.TestCase):
+    """Menu Pengaturan (⚙️): menampilkan status & toggle alert/brief/konteks."""
+
+    class _QMsg:
+        def __init__(self):
+            self.replies = []
+
+        async def reply_text(self, text, **kwargs):
+            self.replies.append((text, kwargs))
+
+    class _Query:
+        def __init__(self, data, user_id=9999):
+            self.data = data
+            self.answered = False
+            self.message = TestSettingsMenu._QMsg()
+            self.from_user = type("U", (), {"id": user_id})()
+            self.edited = []
+
+        async def answer(self):
+            self.answered = True
+
+        async def edit_message_text(self, text, **kwargs):
+            self.edited.append((text, kwargs))
+
+    def _run(self, data):
+        query = self._Query(data)
+        upd = type("U", (), {
+            "callback_query": query,
+            "effective_chat": type("C", (), {"id": 777})(),
+            "effective_user": type("U", (), {"id": 9999})(),
+        })()
+        bot = MarketBot.__new__(MarketBot)
+        ctx = _FakeContext()
+        with mock.patch.object(
+            handlers_mod.db, "is_subscribed_async", new=mock.AsyncMock(return_value=True)
+        ), mock.patch.object(
+            handlers_mod.db, "remove_subscriber_async", new=mock.AsyncMock(return_value=True)
+        ), mock.patch.object(
+            handlers_mod.db, "add_subscriber_async", new=mock.AsyncMock(return_value=True)
+        ):
+            asyncio.run(bot.handle_callback(upd, ctx))
+        return query, ctx
+
+    def test_settings_shows_status_and_buttons(self):
+        query, ctx = self._run("settings")
+        self.assertTrue(query.answered)
+        text, kwargs = query.edited[0]
+        self.assertIn("PENGATURAN", text)
+        self.assertIn("Alert Event", text)
+        self.assertIn("Morning Brief", text)
+        kb = kwargs.get("reply_markup")
+        callbacks = [
+            btn.callback_data for row in kb.inline_keyboard for btn in row
+        ]
+        self.assertIn("settings_alert", callbacks)
+        self.assertIn("settings_brief", callbacks)
+        self.assertIn("settings_clear", callbacks)
+        self.assertIn("menu", callbacks)
+
+    def test_settings_alert_toggles_on(self):
+        query, _ = self._run("settings_alert")
+        text, _ = query.edited[0]
+        self.assertIn("diaktifkan", text)
+
+    def test_settings_brief_toggles(self):
+        query, _ = self._run("settings_brief")
+        text, _ = query.edited[0]
+        self.assertIn("dihentikan", text)  # is_subscribed mocked True → berhenti
+
+    def test_settings_clear(self):
+        query, _ = self._run("settings_clear")
+        text, _ = query.edited[0]
+        self.assertIn("dibersihkan", text)
+
+    def test_menu_returns_to_main(self):
+        query, _ = self._run("menu")
+        text, kwargs = query.edited[0]
+        from bot.messages import WELCOME_MESSAGE
+        self.assertEqual(text, WELCOME_MESSAGE)
+        kb = kwargs.get("reply_markup")
+        self.assertIsNotNone(kb)
 
 
 class TestQuickActionKeyboard(unittest.TestCase):
