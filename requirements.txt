@@ -6,9 +6,14 @@ python-dotenv==1.0.1
 # yfinance >=1.0 memakai backend curl_cffi (impersonasi fingerprint browser)
 # yang jauh lebih jarang kena rate-limit 429 Yahoo dibanding 0.2.x (requests
 # polos dengan User-Agent default yfinance yang mudah diblokir).
-yfinance>=1.0.0,<2.0
-requests==2.31.0
-aiohttp==3.9.1
+# DIPIN versi yang sudah teruji (bukan range): yfinance sering rilis yang
+# bisa mengubah perilaku internal — deploy tak boleh rusak oleh rilis baru.
+yfinance==1.5.1
+requests==2.33.0
+# aiohttp di-pin ke versi >=3.9.2 karena CVE-2024-23334 (path traversal)
+# menyerang aiohttp <3.9.2; 3.14.x juga sudah lewat CVE-2025-27516. Versi
+# ini teruji lokal (webhook server memakai aiohttp).
+aiohttp==3.14.1
 # Streaming harga OANDA real-time (WebSocket)
 websockets>=12.0
 
@@ -24,7 +29,8 @@ tiktoken>=0.7.0
 # TANPA API key — pengganti Yahoo Finance yang delayed 15-20 menit untuk
 # BTC-USD & ETH-USD (data/ccxt_client.py). Public REST, gratis, rate-limit
 # longgar. Bila gagal, data layer otomatis fallback ke Yahoo.
-ccxt>=4.0,<5.0
+# DIPIN versi teruji (bukan range) — rilis ccxt bisa mengubah API exchange.
+ccxt==4.5.71
 
 # Timezone & JobQueue support
 pytz>=2023.3

@@ -546,6 +546,18 @@ def build_webhook_app(application, url_path: str, secret: Optional[str]):
             # semaphore (concurrent_updates) & mengarahkan error handler ke
             # process_error, jadi aman dijalankan di background.
             task = asyncio.create_task(application.process_update(update))
+            # PENTING: simpan referensi KUAT ke task. asyncio hanya memegang
+            # weak reference ke task — task yang pending (pipeline AI bisa
+            # 5-30 dtk dengan banyak await) tanpa referensi eksternal bisa
+            # di-GC di tengah jalan ("Task was destroyed but it is pending!")
+            # dan update hilang DIAM-DIAM (Telegram sudah dapat 200).
+            # Set berisi referensi kuat; discard otomatis saat task selesai.
+            bg_tasks = getattr(application, "_bg_tasks", None)
+            if bg_tasks is None:
+                bg_tasks = set()
+                application._bg_tasks = bg_tasks
+            bg_tasks.add(task)
+            task.add_done_callback(bg_tasks.discard)
             task.add_done_callback(_log_update_error)
         return web.Response(status=200)
 

@@ -500,6 +500,10 @@ class MarketBot:
         # batch ke Supabase setiap ~10 menit (numpang job cache cleanup) agar
         # statistik user bertahan lintas restart tanpa request per pesan.
         self._user_activity: Dict[int, int] = {}
+        # Batas user unik yang ditrack di _user_activity — anti membengkak tanpa
+        # batas bila Supabase TIDAK dikonfigurasi (flush gagal → hitungan selalu
+        # dikembalikan ke memori). User terlama di-evict (FIFO aproximatif).
+        self._MAX_USER_ACTIVITY_ENTRIES = 5000
 
         # Initialize multi-agent analysis system
         if ENABLE_MULTI_AGENT:
@@ -513,6 +517,51 @@ class MarketBot:
         else:
             self.analysis_director = None
             logger.info("Multi-agent analysis system disabled (using legacy mode)")
+
+    # ===================== RATE LIMIT COMMAND AI-HEAVY =====================
+    # Interval minimum antar command yang menjalankan pipeline AI / fetch data
+    # berat (/morning, /aftermath, /sentiment, /sentimen, /overview, /calendar).
+    # Tanpa limit, spam command memicu banyak pipeline LLM paralel → 429 provider
+    # free tier + lonjakan RAM di container kecil (Render free 512MB).
+    COMMAND_RATE_LIMIT_SECONDS = 15.0
+
+    async    def _check_command_rate_limit(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+        """
+        True bila command boleh jalan; False bila kena rate limit (pesan sudah dikirim).
+
+        Rate limit PER-USER (context.user_data) — user lain tidak terpengaruh.
+        """
+        user_data = context.user_data
+        now = time.time()
+        last = user_data.get("last_ai_command_time", 0)
+        remaining = self.COMMAND_RATE_LIMIT_SECONDS - (now - last)
+        if remaining > 0:
+            wait = int(remaining) + 1
+            await safe_reply_text(
+                update.message,
+                f"⏳ Mohon tunggu *{wait} detik* sebelum menjalankan perintah ini lagi "
+                f"(analisis AI butuh waktu & kuota).",
+                parse_mode="Markdown",
+            )
+            return False
+        user_data["last_ai_command_time"] = now
+        return True
+
+    def _track_user_activity(self, user_id: int) -> None:
+        """
+        Catat satu pertanyaan dari user (dengan batas jumlah user unik).
+
+        Batasi user unik yang ditrack: bila Supabase TIDAK dikonfigurasi, flush
+        gagal dan hitungan terus dikembalikan ke memori → tanpa batas, dict
+        membengkak seiring bertambahnya user. User terlama di-evict (FIFO
+        aproximatif via iterasi dict) — hitungan hanya statistik, aman hilang.
+        """
+        if user_id not in self._user_activity and len(self._user_activity) >= self._MAX_USER_ACTIVITY_ENTRIES:
+            try:
+                self._user_activity.pop(next(iter(self._user_activity)))
+            except (StopIteration, RuntimeError):
+                pass
+        self._user_activity[user_id] = self._user_activity.get(user_id, 0) + 1
 
     # ===================== COMMAND HANDLERS =====================
 
@@ -990,6 +1039,8 @@ class MarketBot:
 
     async def sentiment_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler untuk /sentiment - Skor sentimen pasar berbasis berita."""
+        if not await self._check_command_rate_limit(update, context):
+            return
         chat_id = update.effective_chat.id
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
@@ -1082,6 +1133,8 @@ class MarketBot:
         Hanya pair FOREX yang punya data posisi ritel (gold/index/oil/crypto
         tidak memiliki Position/Order Book di OANDA).
         """
+        if not await self._check_command_rate_limit(update, context):
+            return
         text = update.message.text or ""
         arg = text.replace("/sentimen", "").strip().lower()
 
@@ -1224,6 +1277,8 @@ class MarketBot:
 
     async def calendar_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler untuk perintah /calendar - Kalender Ekonomi."""
+        if not await self._check_command_rate_limit(update, context):
+            return
         await context.bot.send_chat_action(
             chat_id=update.effective_chat.id,
             action="typing",
@@ -1280,6 +1335,8 @@ class MarketBot:
         Handler untuk perintah /overview - Ringkasan cepat semua instrumen utama.
         Dibaca dari cache (10 menit), jadi responsnya INSTAN tanpa menunggu AI.
         """
+        if not await self._check_command_rate_limit(update, context):
+            return
         chat_id = update.effective_chat.id
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         message, kb = await self._build_overview_reply()
@@ -1293,6 +1350,8 @@ class MarketBot:
 
     async def morning_brief_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler untuk perintah /morning - Morning Brief harian."""
+        if not await self._check_command_rate_limit(update, context):
+            return
         await context.bot.send_chat_action(
             chat_id=update.effective_chat.id,
             action="typing",
@@ -1582,7 +1641,7 @@ class MarketBot:
         user_data["last_message_time"] = time.time()
         self.total_questions += 1
         # Aktivitas per-user (in-memory, di-flush batch ke Supabase berkala)
-        self._user_activity[user_id] = self._user_activity.get(user_id, 0) + 1
+        self._track_user_activity(user_id)
 
         # ===== REPLY KEYBOARD MENU: label tombol dikirim sebagai teks =====
         # Tombol di keyboard bawah (Reply Keyboard) mengirim label sebagai pesan
@@ -3630,6 +3689,10 @@ class MarketBot:
 
         if not arg or arg in ("help", "bantuan"):
             await safe_reply_text(update.message, self.AFTERMATH_USAGE, parse_mode="Markdown")
+            return
+
+        # Rate limit HANYA untuk analisis (bukan pesan usage yang ringan).
+        if not await self._check_command_rate_limit(update, context):
             return
 
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")

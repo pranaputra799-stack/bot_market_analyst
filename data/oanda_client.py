@@ -430,16 +430,16 @@ def _test():
     inst = sys.argv[1] if len(sys.argv) > 1 else "EUR_USD"
     client = OandaClient()
     if not client.is_configured:
-        print("OANDA_API_KEY belum di-set (lihat .env)")
+        logger.warning("OANDA_API_KEY belum di-set (lihat .env)")
         return
     try:
         price = client.get_mid_price(inst)
-        print(f"{inst} mid={price['mid']} bid={price['bid']} ask={price['ask']} ({client.env_name})")
+        logger.info(f"{inst} mid={price['mid']} bid={price['bid']} ask={price['ask']} ({client.env_name})")
         candles = client.get_candles(inst, "H1", 5)
-        print(f"candles: {len(candles)} bar, terakhir close={candles[-1]['close'] if candles else '-'}")
-        print(f"previous_close (daily): {client.get_previous_close(inst)}")
+        logger.info(f"candles: {len(candles)} bar, terakhir close={candles[-1]['close'] if candles else '-'}")
+        logger.info(f"previous_close (daily): {client.get_previous_close(inst)}")
     except Exception as e:
-        print(f"ERROR: {e}")
+        logger.error(f"ERROR: {e}")
 
 
 if __name__ == "__main__":

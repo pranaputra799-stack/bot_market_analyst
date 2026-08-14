@@ -277,15 +277,15 @@ def start_stream() -> None:
 
 
 def _test():
-    """CLI dev: python -m data.oanda_stream (jalan 30 detik, print harga live)."""
+    """CLI dev: python -m data.oanda_stream (jalan 30 detik, tampilkan harga live)."""
     start_stream()
-    print("Menunggu harga live 30 detik... (pastikan OANDA_API_KEY terisi)")
+    logger.info("Menunggu harga live 30 detik... (pastikan OANDA_API_KEY terisi)")
     end = time.time() + 30
     while time.time() < end:
         for inst in oanda_stream.live_instruments[:5]:
             p = oanda_stream.get_price(inst)
             if p:
-                print(f"{inst}: mid={p['mid']} bid={p['bid']} ask={p['ask']}")
+                logger.info(f"{inst}: mid={p['mid']} bid={p['bid']} ask={p['ask']}")
         time.sleep(5)
 
 

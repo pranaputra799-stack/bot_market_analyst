@@ -190,8 +190,12 @@ NEWS_PREDICTION_ENABLED = os.getenv("NEWS_PREDICTION_ENABLED", "true").lower() i
 NEWS_PREDICTION_LEAD_MINUTES = int(os.getenv("NEWS_PREDICTION_LEAD_MINUTES", "5"))
 # Menit setelah rilis sebelum hasil dievaluasi (beri waktu harga bereaksi)
 NEWS_PREDICTION_SETTLE_MINUTES = int(os.getenv("NEWS_PREDICTION_SETTLE_MINUTES", "15"))
-# Interval pengecekan (menit) — kecil agar prediksi mendekati T-5 menit
-NEWS_PREDICTION_CHECK_INTERVAL_MINUTES = int(os.getenv("NEWS_PREDICTION_CHECK_INTERVAL_MINUTES", "1"))
+# Interval pengecekan (menit) — kecil agar prediksi mendekati T-5 menit.
+# Default 2 (dulu 1): dengan lead 5 menit, prediksi tetap terkirim antara
+# T-5 s.d. T-3 — selisih 1-2 menit tidak signifikan, tapi beban job
+# konstan di free tier (Render 512MB) berkurang SETENGAH (720 job/hari
+# → 360), termasuk fetch kalender & pengecekan dedup tiap tick.
+NEWS_PREDICTION_CHECK_INTERVAL_MINUTES = int(os.getenv("NEWS_PREDICTION_CHECK_INTERVAL_MINUTES", "2"))
 # Ambang pergerakan harga (persen): di bawah ini AI/aturan menyatakan "flat"
 # (pergerakan tidak signifikan — tidak dihitung benar/salah pada win rate)
 NEWS_PREDICTION_MIN_MOVE_PCT = float(os.getenv("NEWS_PREDICTION_MIN_MOVE_PCT", "0.05"))
