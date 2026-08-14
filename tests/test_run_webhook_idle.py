@@ -81,7 +81,9 @@ class TestRunWebhookIdle(unittest.TestCase):
                         mock.patch.object(main_mod, "WEBHOOK_LISTEN", "127.0.0.1"), \
                         mock.patch.object(main_mod, "PORT", 0), \
                         mock.patch.object(main_mod, "WEBHOOK_SECRET", "sec-123456"), \
-                        mock.patch.object(main_mod, "TELEGRAM_TOKEN", "123456789:AAFAKE"):
+                        mock.patch.object(main_mod, "TELEGRAM_TOKEN", "123456789:AAFAKE"), \
+                        mock.patch.object(main_mod, "SETUP_RETRY_ATTEMPTS", 2), \
+                        mock.patch.object(main_mod, "SETUP_RETRY_BASE_DELAY", 0.01):
                     main_mod.run_webhook()
                 result["ok"] = True
             except Exception as e:  # pragma: no cover - detail error
@@ -127,6 +129,77 @@ class TestRunWebhookIdle(unittest.TestCase):
             "http://example.com/123456789:AAFAKE",
             "URL webhook tidak sesuai",
         )
+
+
+class TestSetupWebhookRetry(unittest.IsolatedAsyncioTestCase):
+    """Retry per-fase: error transient Telegram (500) tidak membuat bot idle."""
+
+    class _QuietApp(_FakeApplication):
+        """start() tidak menjadwalkan loop.stop (test murni retry, tanpa loop)."""
+
+        async def start(self):
+            self.started = True
+
+    def _app(self, set_webhook_impl=None):
+        app = self._QuietApp()
+        if set_webhook_impl is not None:
+            app.bot.set_webhook = set_webhook_impl
+        return app
+
+    async def test_transient_failure_then_success(self):
+        """set_webhook gagal 1x (transient) lalu sukses → webhook terdaftar."""
+        calls = {"n": 0}
+
+        async def flaky(url=None, secret_token=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("Telegram API 500 (transient)")
+            return None
+
+        app = self._app(flaky)
+        with mock.patch.object(main_mod, "SETUP_RETRY_ATTEMPTS", 3), \
+                mock.patch.object(main_mod, "SETUP_RETRY_BASE_DELAY", 0.01):
+            exc = await main_mod._setup_webhook_with_retry(app)
+
+        self.assertIsNone(exc, "retry harus berhasil setelah error transient")
+        self.assertEqual(calls["n"], 2, "harus di-retry tepat sekali")
+        self.assertTrue(app.started)
+
+    async def test_persistent_failure_returns_last_error(self):
+        """Semua percobaan gagal → return Exception (pemanggil idle, bukan crash)."""
+        calls = {"n": 0}
+
+        async def always_fail(url=None, secret_token=None):
+            calls["n"] += 1
+            raise RuntimeError("Telegram API down")
+
+        app = self._app(always_fail)
+        with mock.patch.object(main_mod, "SETUP_RETRY_ATTEMPTS", 2), \
+                mock.patch.object(main_mod, "SETUP_RETRY_BASE_DELAY", 0.01):
+            exc = await main_mod._setup_webhook_with_retry(app)
+
+        self.assertIsInstance(exc, RuntimeError)
+        self.assertEqual(calls["n"], 2, "harus mencoba sesuai SETUP_RETRY_ATTEMPTS")
+
+    async def test_initialize_retried_too(self):
+        """initialize() yang gagal transient juga di-retry (kasus di Render)."""
+        init_calls = {"n": 0}
+        app = self._app()
+
+        async def flaky_initialize():
+            init_calls["n"] += 1
+            if init_calls["n"] == 1:
+                raise RuntimeError("get_me: Internal Server Error (500)")
+
+        app.initialize = flaky_initialize
+        with mock.patch.object(main_mod, "SETUP_RETRY_ATTEMPTS", 3), \
+                mock.patch.object(main_mod, "SETUP_RETRY_BASE_DELAY", 0.01):
+            exc = await main_mod._setup_webhook_with_retry(app)
+
+        self.assertIsNone(exc)
+        self.assertEqual(init_calls["n"], 2)
+        self.assertTrue(app.started)
+        self.assertEqual(len(app.bot.set_webhook_calls), 1)
 
 
 if __name__ == "__main__":

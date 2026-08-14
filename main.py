@@ -506,6 +506,65 @@ def _log_update_error(task: asyncio.Task) -> None:
         logger.error(f"Gagal memproses update webhook: {exc}")
 
 
+# ===================== SETUP WEBHOOK RETRY (transient-safe) =====================
+# Telegram API kadang membalas error transient (500/502/503/NetworkError) —
+# mis. sesaat saat deploy / beban edge. Tanpa retry, SATU kegagalan sesaat di
+# fase setup (initialize/set_webhook) membuat bot idle permanen sampai redeploy
+# manual. Retry per-fase dengan backoff exponential memakai asyncio.sleep agar
+# event loop tetap responsif (server webhook & /health tidak ikut membeku).
+SETUP_RETRY_ATTEMPTS = 5
+SETUP_RETRY_BASE_DELAY = 5.0  # detik; backoff 5→10→20→40 (total ±75s per fase)
+
+
+async def _setup_webhook_with_retry(application) -> Optional[Exception]:
+    """initialize → start → set_webhook dengan retry per-fase.
+
+    initialize() & set_webhook() di-retry (error transient Telegram 500/502/
+    503/NetworkError); start() cukup SEKALI (memulai JobQueue — memanggil
+    ulang bisa dobel job scheduler).
+
+    Returns:
+        None bila sukses; Exception terakhir bila semua percobaan gagal
+        (pemanggil memutuskan idle, bukan crash-loop).
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, SETUP_RETRY_ATTEMPTS + 1):
+        try:
+            await application.initialize()
+            last_exc = None
+            break
+        except Exception as e:
+            last_exc = e
+            logger.warning(
+                f"initialize attempt {attempt}/{SETUP_RETRY_ATTEMPTS} gagal: {e}"
+            )
+            if attempt < SETUP_RETRY_ATTEMPTS:
+                await asyncio.sleep(SETUP_RETRY_BASE_DELAY * (2 ** (attempt - 1)))
+
+    if last_exc is not None:
+        return last_exc
+
+    await application.start()
+
+    for attempt in range(1, SETUP_RETRY_ATTEMPTS + 1):
+        try:
+            await application.bot.set_webhook(
+                url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}",
+                secret_token=WEBHOOK_SECRET,
+            )
+            last_exc = None
+            break
+        except Exception as e:
+            last_exc = e
+            logger.warning(
+                f"set_webhook attempt {attempt}/{SETUP_RETRY_ATTEMPTS} gagal: {e}"
+            )
+            if attempt < SETUP_RETRY_ATTEMPTS:
+                await asyncio.sleep(SETUP_RETRY_BASE_DELAY * (2 ** (attempt - 1)))
+
+    return last_exc
+
+
 def build_webhook_app(application, url_path: str, secret: Optional[str]):
     """Buat aiohttp app: GET /health (200) + POST /<url_path> (webhook Telegram).
 
@@ -623,26 +682,33 @@ def run_webhook():
         # bind, biarkan hidup (idle) agar port Render tetap terbuka & /health
         # 200 untuk diagnosa — Telegram belum punya webhook (update tak masuk)
         # sampai env diperbaiki + redeploy.
+        #
+        # Retry PER-FASE (lihat _setup_webhook_with_retry): Telegram kadang
+        # membalas error transient (500/502/503/NetworkError) — tanpa retry,
+        # satu kegagalan sesaat membuat bot idle permanen sampai redeploy
+        # manual. Backoff memakai asyncio.sleep agar event loop tetap
+        # responsif (server webhook + /health tidak ikut membeku).
+        global BOT_STARTED
         try:
-            loop.run_until_complete(application.initialize())
-            loop.run_until_complete(application.start())
-            loop.run_until_complete(
-                application.bot.set_webhook(
-                    url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}",
-                    secret_token=WEBHOOK_SECRET,
-                )
-            )
+            setup_exc = loop.run_until_complete(_setup_webhook_with_retry(application))
         except Exception:
-            global BOT_STARTED
             BOT_STARTED = False
             logger.exception(
                 "Setup webhook gagal (initialize/start/set_webhook) — server "
                 "dibiarkan hidup untuk diagnosa; perbaiki env lalu redeploy."
             )
         else:
-            logger.info(
-                f"Webhook terdaftar di Telegram: {WEBHOOK_URL}/{TELEGRAM_TOKEN[:8]}..."
-            )
+            if setup_exc is not None:
+                BOT_STARTED = False
+                logger.error(
+                    f"Setup webhook gagal setelah {SETUP_RETRY_ATTEMPTS} percobaan "
+                    f"({setup_exc}) — server dibiarkan hidup untuk diagnosa; "
+                    "perbaiki env lalu redeploy."
+                )
+            else:
+                logger.info(
+                    f"Webhook terdaftar di Telegram: {WEBHOOK_URL}/{TELEGRAM_TOKEN[:8]}..."
+                )
 
         # Blok sampai sinyal stop. PTB 20.7 TIDAK punya Application.idle()
         # (method dihapus; run_polling/run_webhook bawaan memakai loop.run_forever
