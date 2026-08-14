@@ -54,6 +54,8 @@ from config.settings import (
     ECONOMIC_ALERT_DIGEST_MINUTE,
     ECONOMIC_ALERT_CHECK_INTERVAL_MINUTES,
     EVENT_AFTERMATH_CHECK_INTERVAL_MINUTES,
+    SESSION_ALERT_ENABLED,
+    SESSION_ALERT_INTERVAL_MINUTES,
     NEWS_PREDICTION_ENABLED,
     NEWS_PREDICTION_CHECK_INTERVAL_MINUTES,
     BOT_USERNAME,
@@ -150,6 +152,10 @@ async def post_init(application: Application):
         BotCommand("sentimen", "🧠 Sentimen retail (OANDA)"),
         BotCommand("subscribe", "🔔 Langganan Morning Brief"),
         BotCommand("unsubscribe", "🔕 Berhenti langganan"),
+        BotCommand("risk", "📐 Kalkulator ukuran posisi"),
+        BotCommand("pivot", "📐 Pivot point & level kunci"),
+        BotCommand("map", "🗺️ Heatmap semua instrumen"),
+        BotCommand("journal", "📓 Catatan transaksi (trading journal)"),
         BotCommand("about", "ℹ️ Tentang bot ini"),
     ]
     # Kegagalan set menu perintah TIDAK boleh mematikan bot (mis. transient
@@ -319,6 +325,16 @@ async def admin_online_callback(context):
         logger.warning(f"Notif admin online gagal: {e}")
 
 
+async def session_alert_callback(context):
+    """Kirim alert sesi market baru buka (Sydney/Tokyo/London/New York)."""
+    bot_instance = context.application.bot_data.get("market_bot")
+    if bot_instance:
+        try:
+            await bot_instance.send_session_alerts(context.application)
+        except Exception as e:
+            logger.warning(f"Session alert check failed: {e}")
+
+
 def setup_scheduler(application: Application, bot: MarketBot):
     """
     Setup job queue untuk morning brief & notifikasi event ekonomi.
@@ -440,6 +456,21 @@ def setup_scheduler(application: Application, bot: MarketBot):
         )
         logger.info("Cache cleanup scheduled every 10 minutes")
 
+        # ===== Market Session Alerts =====
+        # Notif "sesi market buka" (Sydney/Tokyo/London/New York) ke subscriber
+        # morning brief. Tanpa AI — hanya cek jam & kirim. Interval 30 mnt sesuai
+        # jendela deteksi "baru buka" (30 mnt) di utils/sessions.py.
+        if SESSION_ALERT_ENABLED:
+            application.job_queue.run_repeating(
+                session_alert_callback,
+                interval=timedelta(minutes=SESSION_ALERT_INTERVAL_MINUTES),
+                first=150,  # Mulai 2,5 menit setelah start
+                name="session_alerts",
+            )
+            logger.info(
+                f"Market session alerts scheduled every {SESSION_ALERT_INTERVAL_MINUTES} minutes"
+            )
+
     else:
         logger.warning("JobQueue not available, morning brief & event alerts scheduling disabled. Install pytz if needed.")
 
@@ -469,6 +500,10 @@ def register_handlers(application: Application, bot: MarketBot):
     application.add_handler(CommandHandler("sentimen", bot.retail_sentiment_command))
     application.add_handler(CommandHandler("subscribe", bot.subscribe_command))
     application.add_handler(CommandHandler("unsubscribe", bot.unsubscribe_command))
+    application.add_handler(CommandHandler("risk", bot.risk_command))
+    application.add_handler(CommandHandler("pivot", bot.pivot_command))
+    application.add_handler(CommandHandler("map", bot.map_command))
+    application.add_handler(CommandHandler("journal", bot.journal_command))
     application.add_handler(CallbackQueryHandler(bot.handle_callback))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message)

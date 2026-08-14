@@ -24,6 +24,10 @@ Dibuat untuk trader retail Indonesia — semua jawaban dalam Bahasa Indonesia, b
 - **Prompt Evaluation** 🧪 — Scaffolding promptfoo (`promptfoo/`) untuk menguji kualitas prompt & validitas JSON agent lintas provider (dev-time)
 - **Error Tracking** (opsional) — Sentry, aktif otomatis jika `SENTRY_DSN` diisi
 - **Notifikasi Admin Otomatis** 🔔 — pesan ke `ADMIN_USER_IDS` saat bot online (deploy sukses), setup webhook gagal, tabel Supabase hilang, dan semua AI provider down/pulih — anti silent-fail tanpa perlu buka log panel
+- **Alat Edukasi Tanpa AI** 🧰 — `/risk` (position size), `/pivot` (level kunci), `/map` (heatmap instan) — cepat, tanpa biaya token
+- **Trading Journal** 📓 — `/journal` mencatat transaksi per user (win rate per pair) — data tersimpan di Supabase
+- **Kuota Harian Per-User** ⏳ — batas pertanyaan/hari (default 30, `USER_DAILY_QUOTA`) agar kuota AI gratis tidak terkuras satu user
+- **Market Session Alerts** 🌏 — notifikasi sesi Sydney/Tokyo/London/New York buka ke subscriber morning brief (tanpa AI)
 - **Memory Percakapan** 💬 — Bot mengingat konteks percakapan per-user (±15 menit) sehingga pertanyaan follow-up seperti *"kalau begitu level support-nya di mana?"* tetap dipahami konteksnya
 
 ## 🏗️ Arsitektur
@@ -379,6 +383,10 @@ curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
 | `⚙️ Pengaturan` (menu) | Satu menu untuk semua yang bisa diatur: toggle notifikasi event, langganan morning brief, & hapus konteks percakapan |
 | `/prediksi` | 🎯 Win rate prediksi news (XAU/USD) — total, benar/salah/flat, 10 prediksi terakhir (`/prediksi history` untuk 25) |
 | `/overview` | Ringkasan instan semua instrumen utama (tanpa AI) |
+| `/map` | 🗺️ Heatmap instan — RSI/trend/% change semua instrumen utama dalam satu pesan (tanpa AI) |
+| `/pivot` | 📐 Pivot point & level kunci (support/resistance + Fibonacci) — tanpa AI |
+| `/risk` | 📐 Kalkulator ukuran posisi: modal + risiko% + SL pips → lot (tanpa AI) |
+| `/journal` | 📓 Trading journal — catat transaksi, win rate per pair, rekap (butuh tabel `journal` di Supabase) |
 | `/settings` | ⚙️ Pengaturan bot — toggle alert event, morning brief, & hapus konteks dalam satu menu |
 | `/status` | Status sistem, AI provider, dan data source |
 | `/about` | Informasi bot |

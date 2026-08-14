@@ -37,6 +37,8 @@ from config.settings import (
     NEWS_PREDICTION_SETTLE_MINUTES,
     NEWS_PREDICTION_MIN_MOVE_PCT,
     NEWS_PREDICTION_MAX_PER_RUN,
+    USER_DAILY_QUOTA,
+    SESSION_ALERT_ENABLED,
 )
 
 try:
@@ -53,6 +55,8 @@ from data.database import db
 from data.news_predictions import NewsPredictionStore
 from data.conversation_memory import format_history, add_exchange, get_context, get_history, clear
 from utils.chart_generator import ChartGenerator
+from utils.risk_calculator import calculate_position_size, format_risk_result
+from utils.sessions import sessions_just_opened, format_session_text
 from analysis.director import AnalysisDirector
 from analysis.indicators import compute_indicators, format_key_levels, format_indicators_for_prompt
 from analysis.fact_check import build_fact_check_note, strip_fact_check_note
@@ -504,6 +508,9 @@ class MarketBot:
         # batas bila Supabase TIDAK dikonfigurasi (flush gagal → hitungan selalu
         # dikembalikan ke memori). User terlama di-evict (FIFO aproximatif).
         self._MAX_USER_ACTIVITY_ENTRIES = 5000
+        # Kuota harian per-user (user_id → [tanggal, jumlah]). In-memory:
+        # reset saat restart — trade-off sengaja agar ringan di free tier.
+        self._daily_usage: Dict[int, list] = {}
 
         # Initialize multi-agent analysis system
         if ENABLE_MULTI_AGENT:
@@ -531,6 +538,7 @@ class MarketBot:
 
         Rate limit PER-USER (context.user_data) — user lain tidak terpengaruh.
         """
+        user_id = update.effective_user.id
         user_data = context.user_data
         now = time.time()
         last = user_data.get("last_ai_command_time", 0)
@@ -544,6 +552,16 @@ class MarketBot:
                 parse_mode="Markdown",
             )
             return False
+        # Kuota harian per-user (proteksi kuota AI gratis)
+        if self._daily_quota_exceeded(user_id):
+            await safe_reply_text(
+                update.message,
+                f"⏳ Kuota harian *{USER_DAILY_QUOTA}* pertanyaan sudah habis. "
+                f"Kembali lagi besok ya 🙏",
+                parse_mode="Markdown",
+            )
+            return False
+        self._consume_daily_quota(user_id)
         user_data["last_ai_command_time"] = now
         return True
 
@@ -580,6 +598,38 @@ class MarketBot:
                 "dijalankan lagi.",
             )
             bot_data["_ai_down_notified"] = False
+
+    def _daily_quota_exceeded(self, user_id: int) -> bool:
+        """True bila user sudah melewati kuota harian (USER_DAILY_QUOTA)."""
+        if USER_DAILY_QUOTA <= 0:
+            return False
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        rec = self._daily_usage.get(user_id)
+        if not rec or rec[0] != today:
+            # Tanggal baru (atau user baru) — mulai dari 0
+            self._daily_usage[user_id] = [today, 0]
+            return False
+        return rec[1] >= USER_DAILY_QUOTA
+
+    def _consume_daily_quota(self, user_id: int) -> None:
+        """Catat satu penggunaan kuota harian (dipanggil saat pipeline AI jalan)."""
+        if USER_DAILY_QUOTA <= 0:
+            return
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        rec = self._daily_usage.get(user_id)
+        if not rec or rec[0] != today:
+            # Bersihkan entri tanggal lama kalau dict sudah besar (anti bocor)
+            if len(self._daily_usage) > self._MAX_USER_ACTIVITY_ENTRIES:
+                try:
+                    stale = [
+                        uid for uid, r in self._daily_usage.items() if r[0] != today
+                    ]
+                    for uid in stale:
+                        self._daily_usage.pop(uid, None)
+                except Exception:
+                    pass
+            self._daily_usage[user_id] = [today, 0]
+        self._daily_usage[user_id][1] += 1
 
     def _track_user_activity(self, user_id: int) -> None:
         """
@@ -1410,6 +1460,425 @@ class MarketBot:
             disable_web_page_preview=True,
         )
 
+    # ===================== /RISK (POSITION SIZE) =====================
+    # Kalkulator ukuran posisi — murni komputasi, tanpa AI & tanpa biaya.
+    # /risk <modal USD> <risiko%> <SL pips> [simbol] [harga_quote]
+
+    RISK_USAGE = (
+        "📐 *POSITION SIZE CALCULATOR*\n\n"
+        "Hitung ukuran posisi berdasarkan modal, risiko per trade, dan SL.\n\n"
+        "Contoh:\n"
+        "`/risk 1000 2 20` — modal $1.000, risiko 2%, SL 20 pips (default XAU/USD)\n"
+        "`/risk 500 1 15 EUR/USD`\n"
+        "`/risk 1000 2 30 USD/JPY 155` — pair ber-quote JPY butuh harga quote\n\n"
+        "Simbol didukung: forex mayor, XAU/USD (Gold), XAG/USD (Silver)."
+    )
+
+    async def risk_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler /risk — position size calculator (edukasi, tanpa AI)."""
+        text = update.message.text or ""
+        parts = text.replace("/risk", "").strip().split()
+        if not parts or parts[0] in ("help", "bantuan"):
+            await safe_reply_text(update.message, self.RISK_USAGE, parse_mode="Markdown")
+            return
+        try:
+            balance = float(parts[0])
+            risk_pct = float(parts[1]) if len(parts) > 1 else 1.0
+            sl_pips = float(parts[2]) if len(parts) > 2 else 20.0
+        except (ValueError, IndexError):
+            await safe_reply_text(update.message, self.RISK_USAGE, parse_mode="Markdown")
+            return
+        symbol = parts[3] if len(parts) > 3 else "XAU/USD"
+        price_quote = float(parts[4]) if len(parts) > 4 else None
+        result = calculate_position_size(balance, risk_pct, sl_pips, symbol, price_quote)
+        await safe_reply_text(
+            update.message,
+            format_risk_result(result),
+            parse_mode="Markdown",
+        )
+
+    # ===================== /PIVOT (LEVEL KUNCI) =====================
+    # Ekspos perhitungan pivot/fib yang SUDAH ada di analysis/indicators.py.
+
+    async def pivot_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler /pivot [simbol] — pivot point & level kunci (tanpa AI)."""
+        text = update.message.text or ""
+        arg = text.replace("/pivot", "").strip()
+        yahoo_symbol, display = self._resolve_symbol_from_text(arg or "XAU/USD")
+        if not yahoo_symbol:
+            await safe_reply_text(
+                update.message,
+                f"❌ Simbol *{arg or 'XAU/USD'}* tidak dikenali.",
+                parse_mode="Markdown",
+            )
+            return
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        try:
+            ohlcv = await asyncio.to_thread(
+                self.market.get_ohlcv_history, yahoo_symbol, period="1mo", interval="1d", limit=30
+            )
+            ind = compute_indicators(ohlcv)
+        except Exception as e:
+            logger.warning(f"Pivot data error: {e}")
+            ind = {}
+        price = ind.get("current_price")
+        if price is None:
+            await safe_reply_text(
+                update.message,
+                f"❌ Data untuk *{display}* tidak tersedia saat ini. Coba lagi nanti.",
+                parse_mode="Markdown",
+            )
+            return
+        levels = format_key_levels(ind)
+        ema20, ema50 = ind.get("ema_20"), ind.get("ema_50")
+        trend = "📈 Bullish" if (ema20 and ema50 and ema20 > ema50) else "📉 Bearish" if (ema20 and ema50) else "➖"
+        rsi = ind.get("rsi")
+        rsi_txt = f"RSI(14): {rsi:.1f}" if rsi is not None else "RSI: —"
+        msg = (
+            f"📐 *PIVOT & LEVEL KUNCI {display}*\n\n"
+            f"💰 Harga: {format_price(price)}\n"
+            f"{trend} (EMA20 vs EMA50)\n"
+            f"📊 {rsi_txt}\n\n"
+            f"{levels}\n\n"
+            f"⚠️ Edukasi — bukan saran trading."
+        )
+        await safe_reply_text(update.message, msg, parse_mode="Markdown")
+
+    # ===================== /MAP (MARKET HEATMAP) =====================
+    # Ringkasan instrumen utama dalam satu pesan — tanpa AI, data dari cache.
+
+    MAP_INSTRUMENTS = [
+        ("EUR/USD", "eur/usd"),
+        ("GBP/USD", "gbp/usd"),
+        ("USD/JPY", "usd/jpy"),
+        ("USD/IDR", "usd/idr"),
+        ("XAU/USD", "xau/usd spot"),
+        ("XAG/USD", "xag/usd"),
+        ("DXY", "dxy"),
+        ("BTC/USD", "btc/usd"),
+        ("ETH/USD", "eth/usd"),
+        ("S&P 500", "s&p 500"),
+    ]
+
+    @staticmethod
+    def _format_map_row(label: str, ind: Dict) -> str:
+        """Satu baris heatmap dari hasil compute_indicators (murni, mudah di-test)."""
+        if not ind or ind.get("current_price") is None:
+            return f"{label:<10} ❌ data tidak tersedia"
+        price = ind["current_price"]
+        chg = ind.get("price_5d_change")
+        chg_txt = f"{chg:+.2f}%" if chg is not None else "—"
+        rsi = ind.get("rsi")
+        rsi_txt = f"{rsi:.0f}" if rsi is not None else "—"
+        ema20, ema50 = ind.get("ema_20"), ind.get("ema_50")
+        if ema20 and ema50:
+            arrow = "📈" if ema20 > ema50 else "📉"
+        else:
+            arrow = "➖"
+        return f"{label:<10} {price:>12,.4f}  {chg_txt:>8}  RSI {rsi_txt:>4}  {arrow}"
+
+    async def map_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler /map — heatmap instan semua instrumen utama (tanpa AI)."""
+        if not await self._check_command_rate_limit(update, context):
+            return
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+        def _fetch(label: str, key: str) -> str:
+            try:
+                yahoo = YAHOO_SYMBOLS.get(key)
+                if not yahoo:
+                    return MarketBot._format_map_row(label, {})
+                ohlcv = self.market.get_ohlcv_history(yahoo, period="1mo", interval="1d", limit=30)
+                return MarketBot._format_map_row(label, compute_indicators(ohlcv))
+            except Exception:
+                return MarketBot._format_map_row(label, {})
+
+        rows = await asyncio.gather(
+            *(asyncio.to_thread(_fetch, label, key) for label, key in self.MAP_INSTRUMENTS)
+        )
+        now_str = datetime.now(ZoneInfo(MORNING_BRIEF_TIMEZONE)).strftime("%A, %d %B %Y %H:%M")
+        msg = (
+            f"🗺️ *MARKET HEATMAP*\n"
+            f"🕐 {now_str} WIB\n\n"
+            f"```\n" + "\n".join(rows) + "\n```\n\n"
+            f"RSI >70 overbought • <30 oversold • 5d = perubahan 5 hari.\n"
+            f"⚠️ Edukasi — bukan saran trading."
+        )
+        await safe_reply_text(update.message, msg, parse_mode="Markdown")
+
+    # ===================== TRADING JOURNAL =====================
+    # Catatan transaksi per user (butuh Supabase tabel `journal`; tanpa DB
+    # command ini menampilkan pesan ramah). Tanpa AI.
+
+    JOURNAL_USAGE = (
+        "📓 *TRADING JOURNAL*\n\n"
+        "Catat & evaluasi transaksimu (edukasi).\n\n"
+        "`/journal add XAU/USD long 2400 2390 2420 0.5` — tambah posisi\n"
+        "`/journal close 12 2410` — tutup posisi id 12 di harga 2410\n"
+        "`/journal list` — transaksi terbaru\n"
+        "`/journal stats` — win rate & rekap per pair\n"
+        "`/journal del 12` — hapus entri\n\n"
+        "Format add: `<simbol> <long|short> <entry> [sl] [tp] [lot]`"
+    )
+
+    @staticmethod
+    def _journal_stats(entries: list) -> dict:
+        """Rekap statistik journal (murni, mudah di-test)."""
+        closed = [e for e in entries if e.get("status") == "closed"]
+        wins = [e for e in closed if e.get("result") == "win"]
+        losses = [e for e in closed if e.get("result") == "loss"]
+        by_pair: Dict[str, dict] = {}
+        for e in closed:
+            sym = (e.get("symbol") or "?").upper()
+            d = by_pair.setdefault(sym, {"wins": 0, "losses": 0, "pnl_pct": 0.0})
+            if e.get("result") == "win":
+                d["wins"] += 1
+            elif e.get("result") == "loss":
+                d["losses"] += 1
+            try:
+                d["pnl_pct"] += float(e.get("pnl_pct") or 0)
+            except (TypeError, ValueError):
+                pass
+        return {
+            "total": len(entries),
+            "open": sum(1 for e in entries if e.get("status") != "closed"),
+            "closed": len(closed),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": (len(wins) / len(closed) * 100) if closed else None,
+            "total_pnl_pct": sum(
+                float(e.get("pnl_pct") or 0) for e in closed
+            ),
+            "by_pair": by_pair,
+        }
+
+    async def journal_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler /journal — catatan transaksi per user."""
+        text = update.message.text or ""
+        parts = text.replace("/journal", "").strip().split()
+        if not parts or parts[0] in ("help", "bantuan"):
+            await safe_reply_text(update.message, self.JOURNAL_USAGE, parse_mode="Markdown")
+            return
+        cmd = parts[0].lower()
+        user_id = update.effective_user.id
+        args = parts[1:]
+        if cmd == "add":
+            await self._journal_add(update, user_id, args)
+        elif cmd == "close":
+            await self._journal_close(update, user_id, args)
+        elif cmd == "list":
+            await self._journal_list(update, user_id)
+        elif cmd == "stats":
+            await self._journal_stats_reply(update, user_id)
+        elif cmd == "del":
+            await self._journal_del(update, user_id, args)
+        else:
+            await safe_reply_text(
+                update.message,
+                f"❌ Sub-perintah `{cmd}` tidak dikenal.\n\n{self.JOURNAL_USAGE}",
+                parse_mode="Markdown",
+            )
+
+    async def _journal_add(self, update, user_id: int, args: list):
+        if len(args) < 3:
+            await safe_reply_text(update.message, self.JOURNAL_USAGE, parse_mode="Markdown")
+            return
+        symbol_text = args[0]
+        direction = args[1].lower()
+        if direction not in ("long", "buy", "short", "sell"):
+            await safe_reply_text(update.message, "❌ Arah harus `long` atau `short`.", parse_mode="Markdown")
+            return
+        try:
+            entry = float(args[2])
+        except ValueError:
+            await safe_reply_text(update.message, "❌ Harga entry harus angka.", parse_mode="Markdown")
+            return
+        try:
+            sl = float(args[3]) if len(args) > 3 else None
+            tp = float(args[4]) if len(args) > 4 else None
+            lot = float(args[5]) if len(args) > 5 else None
+        except ValueError:
+            await safe_reply_text(update.message, "❌ SL/TP/lot harus angka (atau kosongkan).", parse_mode="Markdown")
+            return
+        _yahoo, display = self._resolve_symbol_from_text(symbol_text)
+        record = {
+            "user_id": user_id,
+            "symbol": (display or symbol_text).upper(),
+            "direction": "long" if direction in ("long", "buy") else "short",
+            "entry": entry,
+            "sl": sl,
+            "tp": tp,
+            "lot": lot,
+            "status": "open",
+        }
+        ok = await db.add_journal_entry_async(record)
+        if ok:
+            await safe_reply_text(
+                update.message,
+                f"✅ Journal tersimpan: *{record['symbol']}* {record['direction'].upper()} @ {format_price(entry)}.",
+                parse_mode="Markdown",
+            )
+        else:
+            await safe_reply_text(
+                update.message,
+                "❌ Gagal menyimpan — database belum dikonfigurasi? Jalankan `migrations/supabase.sql`.",
+                parse_mode="Markdown",
+            )
+
+    async def _journal_close(self, update, user_id: int, args: list):
+        if not args:
+            await safe_reply_text(update.message, "❌ Contoh: `/journal close 12 2410`", parse_mode="Markdown")
+            return
+        try:
+            entry_id = int(args[0])
+        except ValueError:
+            await safe_reply_text(update.message, "❌ ID harus angka (lihat `/journal list`).", parse_mode="Markdown")
+            return
+        try:
+            exit_price = float(args[1]) if len(args) > 1 else None
+        except ValueError:
+            await safe_reply_text(update.message, "❌ Harga exit harus angka.", parse_mode="Markdown")
+            return
+        if exit_price is None:
+            await safe_reply_text(
+                update.message,
+                "❌ Berikan harga exit: `/journal close <id> <harga>`",
+                parse_mode="Markdown",
+            )
+            return
+        entries = await db.list_journal_entries_async(user_id, limit=50)
+        rec = next((e for e in entries if int(e.get("id", 0)) == entry_id), None)
+        if not rec:
+            await safe_reply_text(update.message, f"❌ Entri id `{entry_id}` tidak ditemukan.", parse_mode="Markdown")
+            return
+        if rec.get("status") == "closed":
+            await safe_reply_text(update.message, f"ℹ️ Entri id `{entry_id}` sudah ditutup.", parse_mode="Markdown")
+            return
+        entry = float(rec.get("entry") or 0)
+        direction = rec.get("direction", "long")
+        pnl_pct = (
+            (exit_price - entry) / entry * 100 if direction == "long" else (entry - exit_price) / entry * 100
+        )
+        result = "win" if pnl_pct >= 0 else "loss"
+        ok = await db.close_journal_entry_async(entry_id, user_id, exit_price, result, pnl_pct)
+        if ok:
+            emoji = "🟢" if result == "win" else "🔴"
+            await safe_reply_text(
+                update.message,
+                f"{emoji} Entri `{entry_id}` ditutup @ {format_price(exit_price)} — "
+                f"{result.upper()} ({pnl_pct:+.2f}%)",
+                parse_mode="Markdown",
+            )
+        else:
+            await safe_reply_text(update.message, "❌ Gagal menutup entri (database?).", parse_mode="Markdown")
+
+    async def _journal_list(self, update, user_id: int):
+        entries = await db.list_journal_entries_async(user_id, limit=20)
+        if not entries:
+            await safe_reply_text(
+                update.message,
+                "📓 Journal masih kosong. Mulai: `/journal add XAU/USD long 2400 2390 2420 0.5`",
+                parse_mode="Markdown",
+            )
+            return
+        lines = ["📓 *JOURNAL (20 terakhir)*\n"]
+        for e in entries:
+            eid = e.get("id")
+            sym = (e.get("symbol") or "?").upper()
+            direction = e.get("direction", "long").upper()
+            entry = format_price(e.get("entry"))
+            status = e.get("status", "open")
+            if status == "closed":
+                result = e.get("result", "?")
+                pnl = e.get("pnl_pct")
+                pnl_txt = f"({pnl:+.2f}%)" if pnl is not None else ""
+                lines.append(f"`{eid}` {sym} {direction} {entry} → {format_price(e.get('exit_price'))} {result.upper()} {pnl_txt}")
+            else:
+                sl = format_price(e.get("sl")) if e.get("sl") else "—"
+                tp = format_price(e.get("tp")) if e.get("tp") else "—"
+                lines.append(f"`{eid}` {sym} {direction} {entry} | SL {sl} TP {tp} | 🔓 open")
+        await safe_reply_text(update.message, "\n".join(lines), parse_mode="Markdown")
+
+    async def _journal_stats_reply(self, update, user_id: int):
+        entries = await db.list_journal_entries_async(user_id, limit=500)
+        if not entries:
+            await safe_reply_text(update.message, "📓 Journal masih kosong.", parse_mode="Markdown")
+            return
+        s = self._journal_stats(entries)
+        lines = [
+            "📊 *STATISTIK JOURNAL*\n",
+            f"Total: {s['total']} ({s['open']} open, {s['closed']} closed)",
+        ]
+        if s["closed"]:
+            wr = s["win_rate"]
+            lines.append(f"Win rate: {wr:.0f}% ({s['wins']}W / {s['losses']}L)")
+            lines.append(f"Total PnL: {s['total_pnl_pct']:+.2f}%\n")
+            lines.append("*Per pair:*")
+            for sym, d in sorted(s["by_pair"].items(), key=lambda kv: -kv[1]["pnl_pct"]):
+                lines.append(
+                    f"• {sym}: {d['wins']}W/{d['losses']}L — {d['pnl_pct']:+.2f}%"
+                )
+        else:
+            lines.append("Belum ada posisi yang ditutup.")
+        lines.append("\n⚠️ Edukasi — bukan saran trading.")
+        await safe_reply_text(update.message, "\n".join(lines), parse_mode="Markdown")
+
+    async def _journal_del(self, update, user_id: int, args: list):
+        if not args:
+            await safe_reply_text(update.message, "❌ Contoh: `/journal del 12`", parse_mode="Markdown")
+            return
+        try:
+            entry_id = int(args[0])
+        except ValueError:
+            await safe_reply_text(update.message, "❌ ID harus angka.", parse_mode="Markdown")
+            return
+        ok = await db.delete_journal_entry_async(entry_id, user_id)
+        if ok:
+            await safe_reply_text(update.message, f"🗑️ Entri `{entry_id}` dihapus.", parse_mode="Markdown")
+        else:
+            await safe_reply_text(update.message, "❌ Gagal menghapus (id salah / database?).", parse_mode="Markdown")
+
+    # ===================== MARKET SESSION ALERTS =====================
+    # Notifikasi "sesi market buka" (Sydney/Tokyo/London/New York) ke
+    # subscriber morning brief — tanpa AI, dedup per (sesi, tanggal).
+
+    async def send_session_alerts(self, application: Application):
+        """Kirim alert sesi market baru buka ke subscriber (job terjadwal)."""
+        try:
+            now_utc = datetime.now(timezone.utc)
+            opened = sessions_just_opened(now_utc)
+            if not opened:
+                return
+            subscribers = await db.get_all_subscribers_async()
+            if not subscribers:
+                return
+            # Dedup per (sesi, tanggal) — prune kunci lama agar set tidak membengkak
+            today = now_utc.strftime("%Y-%m-%d")
+            yesterday = (now_utc - timedelta(days=1)).strftime("%Y-%m-%d")
+            sent_keys = set(application.bot_data.get("session_alert_sent", set()))
+            sent_keys = {k for k in sent_keys if k.split("|")[-1] in (today, yesterday)}
+            to_send = []
+            for s in opened:
+                key = f"{s.key}|{today}"
+                if key not in sent_keys:
+                    sent_keys.add(key)
+                    to_send.append(s)
+            application.bot_data["session_alert_sent"] = sent_keys
+            for s in to_send:
+                text = format_session_text(s, MORNING_BRIEF_TIMEZONE)
+                for chat_id in list(subscribers):
+                    try:
+                        await safe_send_message(
+                            application.bot,
+                            chat_id=chat_id,
+                            text=text,
+                            parse_mode="Markdown",
+                        )
+                    except Exception as ex:
+                        logger.error(f"Gagal kirim alert sesi ke {chat_id}: {ex}")
+        except Exception as e:
+            logger.warning(f"Session alert error: {e}")
+
     async def _generate_morning_brief(self) -> str:
         """
         Generate morning brief dengan data terkini.
@@ -1721,6 +2190,17 @@ class MarketBot:
         # Riwayat percakapan user (untuk konteks follow-up)
         history_text = format_history(user_id)
 
+        # Kuota harian per-user — cek SEBELUM pipeline AI. Fast price path di
+        # atas tidak dihitung; hanya pertanyaan yang benar-benar memakai AI
+        # yang memakai kuota (di-consume tepat sebelum pipeline dijalankan).
+        if self._daily_quota_exceeded(user_id):
+            await update.message.reply_text(
+                f"⏳ Kuota harian *{USER_DAILY_QUOTA}* pertanyaan sudah habis. "
+                f"Kembali lagi besok ya 🙏",
+                parse_mode="Markdown",
+            )
+            return
+
         # Typing indicator
         await context.bot.send_chat_action(
             chat_id=chat_id,
@@ -1740,6 +2220,8 @@ class MarketBot:
         core_answer = ""
 
         try:
+            # Pertanyaan ini benar-benar memakai pipeline AI → pakai 1 kuota
+            self._consume_daily_quota(user_id)
             if self.analysis_director and ENABLE_MULTI_AGENT:
                 # ===== NEW: Multi-Agent Analysis Pipeline =====
                 logger.info(f"Using multi-agent analysis for: {user_question[:80]}...")

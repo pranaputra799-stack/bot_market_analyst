@@ -224,6 +224,30 @@ CREATE TABLE IF NOT EXISTS public.news_predictions (
 CREATE INDEX IF NOT EXISTS idx_news_predictions_status
     ON public.news_predictions (status);
 
+-- ------------------------------------------------------------
+-- O) journal — trading journal per user (fitur /journal).
+--     Catatan transaksi: entry/SL/TP/lot + hasil setelah ditutup.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.journal (
+    id          BIGSERIAL PRIMARY KEY,
+    user_id     BIGINT NOT NULL,
+    symbol      TEXT NOT NULL,
+    direction   TEXT NOT NULL,                   -- 'long' | 'short'
+    entry       DOUBLE PRECISION,
+    sl          DOUBLE PRECISION,
+    tp          DOUBLE PRECISION,
+    lot         DOUBLE PRECISION,
+    status      TEXT NOT NULL DEFAULT 'open',    -- 'open' | 'closed'
+    exit_price  DOUBLE PRECISION,
+    result      TEXT,                            -- 'win' | 'loss'
+    pnl_pct     DOUBLE PRECISION,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    closed_at   TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_journal_user
+    ON public.journal (user_id, id DESC);
+
 -- Grant eksplisit (pengaman tambahan; Supabase biasanya sudah
 -- memberi default privileges untuk schema public)
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.app_cache TO anon, authenticated, service_role;
@@ -233,6 +257,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_reports TO anon, auth
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_alert_subscribers TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_alert_notified TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.news_predictions TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.journal TO anon, authenticated, service_role;
 
 -- ============================================================
 -- Verifikasi cepat (jalankan setelah semua statement di atas):
@@ -241,8 +266,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.news_predictions TO anon, a
 --   where table_schema = 'public'
 --   and table_name in ('app_cache', 'users', 'subscribers', 'event_reports',
 --                      'event_alert_subscribers', 'event_alert_notified',
---                      'news_predictions');
+--                      'news_predictions', 'journal');
 --
--- Harus mengembalikan 7 baris. Jika sudah pernah punya tabel
+-- Harus mengembalikan 8 baris. Jika sudah pernah punya tabel
 -- users/subscribers sebelumnya, baris lama tetap aman (IF NOT EXISTS).
 -- ============================================================

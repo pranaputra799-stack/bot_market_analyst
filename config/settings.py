@@ -202,6 +202,21 @@ NEWS_PREDICTION_MIN_MOVE_PCT = float(os.getenv("NEWS_PREDICTION_MIN_MOVE_PCT", "
 # Maksimum prediksi dibuat/dievaluasi per run (batas anggaran AI)
 NEWS_PREDICTION_MAX_PER_RUN = int(os.getenv("NEWS_PREDICTION_MAX_PER_RUN", "2"))
 
+# ===================== USER DAILY QUOTA =====================
+# Batas pertanyaan/analisis per user PER HARI (proteksi kuota AI gratis dari
+# 1 user yang spam). 0 = tanpa batas. Counter di memori (reset saat restart —
+# trade-off sengaja agar tetap ringan di free tier). Diklem 1..2000.
+USER_DAILY_QUOTA = int(os.getenv("USER_DAILY_QUOTA", "30"))
+USER_DAILY_QUOTA = max(0, min(USER_DAILY_QUOTA, 2000))
+
+# ===================== MARKET SESSION ALERTS =====================
+# Notifikasi "sesi market buka" (Sydney/Tokyo/London/New York) ke subscriber
+# morning brief. Tanpa AI, numpang job scheduler yang sudah ada.
+SESSION_ALERT_ENABLED = os.getenv("SESSION_ALERT_ENABLED", "true").lower() in ("1", "true", "yes")
+# Interval pengecekan (menit) — jendela deteksi "baru buka" juga 30 menit.
+SESSION_ALERT_INTERVAL_MINUTES = int(os.getenv("SESSION_ALERT_INTERVAL_MINUTES", "30"))
+SESSION_ALERT_INTERVAL_MINUTES = max(5, min(SESSION_ALERT_INTERVAL_MINUTES, 120))
+
 # ===================== PRICE ALERTS =====================
 # ===================== BOT SETTINGS =====================
 BOT_USERNAME = os.getenv("BOT_USERNAME", "marketai_analyst_bot")

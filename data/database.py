@@ -73,6 +73,7 @@ class Database:
         "event_alert_subscribers",
         "event_alert_notified",
         "news_predictions",
+        "journal",
     ]
 
     @staticmethod
@@ -380,6 +381,79 @@ class Database:
             logger.error(f"Error fetching news predictions: {_err_detail(e)}")
             return []
 
+    # ===================== TRADING JOURNAL =====================
+    # Catatan transaksi per user (edukasi): tabel `journal` (lihat
+    # migrations/supabase.sql). Tanpa Supabase → semua method return False/[]
+    # (konsisten dengan fitur lain).
+
+    @staticmethod
+    def add_journal_entry(record: dict) -> bool:
+        """Simpan satu entri journal baru (status open)."""
+        if not _is_configured():
+            return False
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/journal"
+            resp = _session().post(
+                url, json=record, headers=_get_headers(), timeout=10
+            )
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error menambah journal entry: {_err_detail(e)}")
+            return False
+
+    @staticmethod
+    def list_journal_entries(user_id: int, limit: int = 20) -> list:
+        """Entri journal milik satu user, terbaru dulu."""
+        if not _is_configured():
+            return []
+        try:
+            url = (
+                f"{SUPABASE_URL}/rest/v1/journal?select=*"
+                f"&user_id=eq.{int(user_id)}&order=id.desc&limit={int(limit)}"
+            )
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.error(f"Error mengambil journal: {_err_detail(e)}")
+            return []
+
+    @staticmethod
+    def close_journal_entry(entry_id: int, user_id: int, exit_price: float, result: str, pnl_pct: float) -> bool:
+        """Tutup entri journal (set exit_price/result/pnl_pct)."""
+        if not _is_configured():
+            return False
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/journal?id=eq.{int(entry_id)}&user_id=eq.{int(user_id)}"
+            payload = {
+                "status": "closed",
+                "exit_price": float(exit_price),
+                "result": result,
+                "pnl_pct": float(pnl_pct),
+                "closed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            resp = _session().patch(url, json=payload, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error menutup journal entry: {_err_detail(e)}")
+            return False
+
+    @staticmethod
+    def delete_journal_entry(entry_id: int, user_id: int) -> bool:
+        """Hapus entri journal (hanya milik user)."""
+        if not _is_configured():
+            return False
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/journal?id=eq.{int(entry_id)}&user_id=eq.{int(user_id)}"
+            resp = _session().delete(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error menghapus journal entry: {_err_detail(e)}")
+            return False
+
     # ===================== USER ACTIVITY (batched) =====================
     # Aktivitas user (last_active_at + total_questions) di-flush dari memori
     # bot secara batch setiap ~10 menit (numpang job cache cleanup yang sudah
@@ -534,6 +608,24 @@ class Database:
     @staticmethod
     async def get_news_predictions_async(limit: int = 1000) -> list:
         return await asyncio.to_thread(Database.get_news_predictions, limit)
+
+    @staticmethod
+    async def add_journal_entry_async(record: dict) -> bool:
+        return await asyncio.to_thread(Database.add_journal_entry, record)
+
+    @staticmethod
+    async def list_journal_entries_async(user_id: int, limit: int = 20) -> list:
+        return await asyncio.to_thread(Database.list_journal_entries, user_id, limit)
+
+    @staticmethod
+    async def close_journal_entry_async(entry_id: int, user_id: int, exit_price: float, result: str, pnl_pct: float) -> bool:
+        return await asyncio.to_thread(
+            Database.close_journal_entry, entry_id, user_id, exit_price, result, pnl_pct
+        )
+
+    @staticmethod
+    async def delete_journal_entry_async(entry_id: int, user_id: int) -> bool:
+        return await asyncio.to_thread(Database.delete_journal_entry, entry_id, user_id)
 
 
 db = Database()

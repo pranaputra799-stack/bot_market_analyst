@@ -35,6 +35,8 @@ class _FakeContext:
 class TestCommandRateLimit(unittest.TestCase):
     def _run(self, update, context):
         bot = MarketBot.__new__(MarketBot)
+        bot._daily_usage = {}
+        bot._MAX_USER_ACTIVITY_ENTRIES = 5000
         return asyncio.run(bot._check_command_rate_limit(update, context))
 
     def test_first_call_allowed(self):
