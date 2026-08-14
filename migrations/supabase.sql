@@ -189,12 +189,6 @@ DROP POLICY IF EXISTS "subscribers_all_anon" ON public.subscribers;
 CREATE POLICY "subscribers_all_anon" ON public.subscribers
     FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
--- user_daily_usage
-ALTER TABLE public.user_daily_usage ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "user_daily_usage_all_anon" ON public.user_daily_usage;
-CREATE POLICY "user_daily_usage_all_anon" ON public.user_daily_usage
-    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
 -- ------------------------------------------------------------
 -- N) news_predictions — prediksi arah emas (XAU/USD) terhadap event
 --     ekonomi high-impact + hasil benar/salah (fitur /prediksi).
@@ -272,6 +266,13 @@ CREATE TABLE IF NOT EXISTS public.user_daily_usage (
 
 CREATE INDEX IF NOT EXISTS idx_user_daily_usage_date
     ON public.user_daily_usage (usage_date);
+
+-- RLS untuk user_daily_usage — ditaruh SETELAH CREATE TABLE (PostgREST
+-- menolak ALTER/POLICY pada tabel yang belum ada: 42P01).
+ALTER TABLE public.user_daily_usage ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "user_daily_usage_all_anon" ON public.user_daily_usage;
+CREATE POLICY "user_daily_usage_all_anon" ON public.user_daily_usage
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
 -- Grant eksplisit (pengaman tambahan; Supabase biasanya sudah
 -- memberi default privileges untuk schema public)
