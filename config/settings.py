@@ -217,6 +217,18 @@ SESSION_ALERT_ENABLED = os.getenv("SESSION_ALERT_ENABLED", "true").lower() in ("
 SESSION_ALERT_INTERVAL_MINUTES = int(os.getenv("SESSION_ALERT_INTERVAL_MINUTES", "30"))
 SESSION_ALERT_INTERVAL_MINUTES = max(5, min(SESSION_ALERT_INTERVAL_MINUTES, 120))
 
+# ===================== AI USAGE REPORT =====================
+# Laporan pemakaian AI harian (token & request per provider) ke ADMIN_USER_IDS
+# — 1 pesan/hari, numpang job run_daily. Membantu memantau kuota gratis
+# provider sebelum kena limit (limit biasanya reset per hari di sisi provider).
+AI_USAGE_REPORT_ENABLED = os.getenv("AI_USAGE_REPORT_ENABLED", "true").lower() in ("1", "true", "yes")
+# Jam kirim (zona MORNING_BRIEF_TIMEZONE). Default 21:00 — setelah market
+# tutup, angka pemakaian hari itu sudah mendekati final.
+AI_USAGE_REPORT_HOUR = int(os.getenv("AI_USAGE_REPORT_HOUR", "21"))
+AI_USAGE_REPORT_HOUR = max(0, min(AI_USAGE_REPORT_HOUR, 23))
+AI_USAGE_REPORT_MINUTE = int(os.getenv("AI_USAGE_REPORT_MINUTE", "0"))
+AI_USAGE_REPORT_MINUTE = max(0, min(AI_USAGE_REPORT_MINUTE, 59))
+
 # ===================== PRICE ALERTS =====================
 # ===================== BOT SETTINGS =====================
 BOT_USERNAME = os.getenv("BOT_USERNAME", "marketai_analyst_bot")

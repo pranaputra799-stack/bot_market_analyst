@@ -442,6 +442,51 @@ class MarketBot(
             logger.warning(f"User activity flush error: {e}")
             for uid, _last_active, count in rows:
                 self._user_activity[uid] = self._user_activity.get(uid, 0) + count
+    async def flush_daily_usage(self) -> None:
+        """
+        Flush kuota harian per-user ke Supabase (batch, numpang job 10 menit).
+
+        Kuota persist supaya TIDAK reset saat bot restart / spin-down free tier
+        (sebelumnya murni in-memory — bisa disiasati dengan restart). Gagal DB
+        aman: hitungan dikembalikan ke memori untuk flush berikutnya.
+        """
+        if not self._daily_usage:
+            return
+        rows = [
+            (uid, date_str, count)
+            for uid, (date_str, count) in self._daily_usage.items()
+        ]
+        self._daily_usage.clear()
+        try:
+            ok = await db.update_daily_usage_async(rows)
+            if not ok:
+                for uid, date_str, count in rows:
+                    self._daily_usage[uid] = [date_str, count]
+                logger.debug("Daily usage flush gagal — hitungan dikembalikan ke memori")
+        except Exception as e:
+            logger.warning(f"Daily usage flush error: {e}")
+            for uid, date_str, count in rows:
+                self._daily_usage[uid] = [date_str, count]
+
+    async def load_daily_usage(self) -> None:
+        """
+        Muat kuota harian HARI INI dari Supabase ke memori (dipanggil saat boot).
+
+        Tanpa ini kuota yang sudah terpakai sebelum restart hilang (reset →
+        user bisa melewati batas dengan restart). Best-effort: gagal DB aman,
+        bot tetap jalan dengan kuota mulai dari 0.
+        """
+        try:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            loaded = await db.get_daily_usage_async(today)
+            if loaded:
+                self._daily_usage = {
+                    uid: [today, count]
+                    for uid, count in loaded.items()
+                }
+                logger.info(f"Loaded daily usage dari Supabase: {len(loaded)} user")
+        except Exception as e:
+            logger.warning(f"Load daily usage gagal: {e}")
     async def subscribe_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler untuk perintah /subscribe - Berlangganan Morning Brief."""
         chat_id = update.effective_chat.id
@@ -683,6 +728,24 @@ class MarketBot(
             f"💾 *Cache:* {cache_stats.get('active_entries', 0)} entries aktif"
         )
         await safe_reply_text(update.message, msg, parse_mode="Markdown")
+    async def usage_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler /usage — laporan pemakaian AI (token & request, khusus admin).
+
+        Lebih ringkas dari /stats: fokus pada token & request per provider agar
+        admin bisa memantau kuota gratis sebelum kena limit.
+        """
+        user_id = update.effective_user.id
+        if user_id not in ADMIN_USER_IDS:
+            await safe_reply_text(
+                update.message,
+                "🔒 Perintah ini khusus admin bot.",
+                parse_mode="Markdown",
+            )
+            return
+        from bot.messages import format_ai_usage_report
+
+        report = format_ai_usage_report(self.ai.get_stats())
+        await safe_reply_text(update.message, report, parse_mode="Markdown")
     async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler /broadcast — kirim pesan ke semua subscriber (khusus admin)."""
         user_id = update.effective_user.id

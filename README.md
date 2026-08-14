@@ -26,7 +26,8 @@ Dibuat untuk trader retail Indonesia — semua jawaban dalam Bahasa Indonesia, b
 - **Notifikasi Admin Otomatis** 🔔 — pesan ke `ADMIN_USER_IDS` saat bot online (deploy sukses), setup webhook gagal, tabel Supabase hilang, dan semua AI provider down/pulih — anti silent-fail tanpa perlu buka log panel
 - **Alat Edukasi Tanpa AI** 🧰 — `/risk` (position size), `/pivot` (level kunci), `/map` (heatmap instan) — cepat, tanpa biaya token
 - **Trading Journal** 📓 — `/journal` mencatat transaksi per user (win rate per pair) — data tersimpan di Supabase
-- **Kuota Harian Per-User** ⏳ — batas pertanyaan/hari (default 30, `USER_DAILY_QUOTA`) agar kuota AI gratis tidak terkuras satu user
+- **Kuota Harian Per-User (persisten)** ⏳ — batas pertanyaan/hari (default 30, `USER_DAILY_QUOTA`) agar kuota AI gratis tidak terkuras satu user; tersimpan di Supabase sehingga **tidak reset saat restart/spin-down** free tier
+- **Laporan AI Usage** 📊 — `/usage` (admin) + laporan harian otomatis ke admin: token & request per provider, biar tahu kapan mendekati limit gratis
 - **Market Session Alerts** 🌏 — notifikasi sesi Sydney/Tokyo/London/New York buka ke subscriber morning brief (tanpa AI)
 - **Memory Percakapan** 💬 — Bot mengingat konteks percakapan per-user (±15 menit) sehingga pertanyaan follow-up seperti *"kalau begitu level support-nya di mana?"* tetap dipahami konteksnya
 
@@ -397,6 +398,7 @@ curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
 | `/status` | Status sistem, AI provider, dan data source |
 | `/about` | Informasi bot |
 | `/broadcast <pesan>` | 🔒 **Khusus admin** (`ADMIN_USER_IDS`) — preview jumlah penerima, lalu `/broadcast send <pesan>` untuk mengirim pengumuman ke semua subscriber |
+| `/usage` | 🔒 **Khusus admin** — laporan pemakaian AI (token & request per provider) |
 | `/stats` | 🔒 **Khusus admin** (`ADMIN_USER_IDS`) — statistik lengkap: pemakaian token AI (per provider), user aktif 24 jam, subscriber, win rate prediksi news |
 | `/syncmenu` | 🔒 **Khusus admin** — force sinkronisasi menu perintah ke Telegram (hapus command lama yang sudah tidak ada, mis. `/pa`, `/chart`) tanpa redeploy |
 

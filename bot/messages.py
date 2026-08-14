@@ -386,3 +386,50 @@ def format_price(price: float, instrument: str = "forex") -> str:
             return f"{price:.4f}"
         else:
             return f"{price:.5f}"
+
+
+def format_ai_usage_report(stats: dict) -> str:
+    """Format laporan pemakaian AI (token & request per provider).
+
+    Dipakai /usage (admin) & laporan harian ke admin. Data kumulatif sejak bot
+    start (engine.stats). Toleran terhadap key yang hilang (provider baru dll).
+    """
+    usage = stats.get("usage") or {}
+    total_tokens = int(usage.get("total_tokens") or 0)
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+
+    lines = ["📊 *LAPORAN PEMAKAIAN AI*", ""]
+    lines.append(
+        f"💰 *Total token:* {total_tokens:,} "
+        f"(input {prompt_tokens:,} / output {completion_tokens:,})"
+    )
+    lines.append(
+        f"📡 Request: {stats.get('total_requests', 0):,} "
+        f"(✅ {stats.get('successful', 0):,} sukses · ❌ {stats.get('failed', 0):,} gagal)"
+    )
+
+    # Rincian per provider: request + token (jika ada data usage-nya)
+    by_provider = usage.get("by_provider") or {}
+    names = stats.get("provider_names") or {}
+    prov_usage = stats.get("provider_usage") or {}
+    if prov_usage or by_provider:
+        lines.append("")
+        lines.append("*Per provider:*")
+        for provider in stats.get("available_providers") or []:
+            name = names.get(provider, provider)
+            calls = prov_usage.get(provider, 0)
+            tok = by_provider.get(provider) or {}
+            tok_total = (tok.get("prompt_tokens") or 0) + (tok.get("completion_tokens") or 0)
+            tok_part = f" · {tok_total:,} token" if tok_total else ""
+            if calls or tok_total:
+                lines.append(f"  • {name}: {calls:,}x dipakai{tok_part}")
+
+    degraded = stats.get("degraded_providers") or []
+    if degraded:
+        lines.append("")
+        lines.append(f"⚠️ Rate-limited sementara: {', '.join(sorted(degraded))}")
+
+    lines.append("")
+    lines.append("*Kumulatif sejak bot start.*")
+    return "\n".join(lines)

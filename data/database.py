@@ -74,6 +74,7 @@ class Database:
         "event_alert_notified",
         "news_predictions",
         "journal",
+        "user_daily_usage",
     ]
 
     @staticmethod
@@ -493,6 +494,71 @@ class Database:
             logger.error(f"Error updating user activity: {_err_detail(e)}")
             return False
 
+    # ===================== DAILY USAGE (kuota persist) =====================
+    # Kuota harian per-user disimpan di tabel user_daily_usage agar TIDAK reset
+    # saat bot restart / spin-down free tier. Bot memuat ke memori saat boot dan
+    # flush batch tiap ~10 menit (numpang job cache cleanup) — tanpa request DB
+    # per pesan, konsisten dengan pola update_user_activity.
+
+    @staticmethod
+    def update_daily_usage(rows: list) -> bool:
+        """
+        Upsert batch kuota harian: [(user_id, usage_date, count)].
+
+        Satu request HTTP untuk semua user (Primary Key user_id+usage_date →
+        upsert lewat resolution=merge-duplicates). Gagal DB aman: pemanggil
+        mengembalikan hitungan ke memori untuk flush berikutnya.
+        """
+        if not _is_configured():
+            return False
+        payload = []
+        for uid, date_str, count in rows:
+            if not (isinstance(uid, int) and not isinstance(uid, bool)) or not date_str:
+                continue
+            payload.append({
+                "user_id": uid,
+                "usage_date": date_str,
+                "count": int(count),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+        if not payload:
+            return True
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/user_daily_usage"
+            headers = {**_get_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"}
+            resp = _session().post(url, json=payload, headers=headers, timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error updating daily usage: {_err_detail(e)}")
+            return False
+
+    @staticmethod
+    def get_daily_usage(usage_date: str = None) -> dict:
+        """
+        Ambil kuota harian dari DB → {user_id: count}.
+
+        usage_date: 'YYYY-MM-DD' (UTC). None → semua tanggal (bot menyaring
+        sendiri tanggal hari ini saat boot — satu request cukup).
+        """
+        if not _is_configured():
+            return {}
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/user_daily_usage?select=user_id,usage_date,count"
+            if usage_date:
+                url += f"&usage_date=eq.{quote(usage_date)}"
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            rows = resp.json()
+            return {
+                int(r["user_id"]): int(r.get("count") or 0)
+                for r in rows
+                if r.get("usage_date") == (usage_date or r.get("usage_date"))
+            }
+        except Exception as e:
+            logger.error(f"Error fetching daily usage: {_err_detail(e)}")
+            return {}
+
     @staticmethod
     def get_user_stats() -> dict:
         """Statistik user untuk admin /stats (best-effort, aman tanpa DB)."""
@@ -626,6 +692,14 @@ class Database:
     @staticmethod
     async def delete_journal_entry_async(entry_id: int, user_id: int) -> bool:
         return await asyncio.to_thread(Database.delete_journal_entry, entry_id, user_id)
+
+    @staticmethod
+    async def update_daily_usage_async(rows: list) -> bool:
+        return await asyncio.to_thread(Database.update_daily_usage, rows)
+
+    @staticmethod
+    async def get_daily_usage_async(usage_date: str = None) -> dict:
+        return await asyncio.to_thread(Database.get_daily_usage, usage_date)
 
 
 db = Database()

@@ -54,6 +54,9 @@ from config.settings import (
     EVENT_AFTERMATH_CHECK_INTERVAL_MINUTES,
     SESSION_ALERT_ENABLED,
     SESSION_ALERT_INTERVAL_MINUTES,
+    AI_USAGE_REPORT_ENABLED,
+    AI_USAGE_REPORT_HOUR,
+    AI_USAGE_REPORT_MINUTE,
     NEWS_PREDICTION_ENABLED,
     NEWS_PREDICTION_CHECK_INTERVAL_MINUTES,
     BOT_USERNAME,
@@ -167,6 +170,16 @@ async def post_init(application: Application):
     except Exception as e:
         logger.warning(f"Gagal memuat state persisten dari database: {e}")
 
+    # Muat kuota harian per-user dari Supabase — kuota TIDAK reset saat
+    # restart/spin-down free tier (sebelumnya in-memory → bisa disiasati
+    # dengan restart). Best-effort; tanpa Supabase no-op.
+    bot_instance = application.bot_data.get("market_bot")
+    if bot_instance:
+        try:
+            await bot_instance.load_daily_usage()
+        except Exception as e:
+            logger.warning(f"Load daily usage gagal saat boot: {e}")
+
     # Cek tabel Supabase WAJIB — notif admin bila ada yang hilang (penyebab
     # paling umum fitur persisten diam-diam mati: subscriber, cache L2,
     # prediksi news tidak tersimpan). Best-effort; tanpa ADMIN_USER_IDS no-op.
@@ -279,6 +292,11 @@ async def cache_cleanup_callback(context):
             await bot_instance.flush_user_activity()
         except Exception as e:
             logger.warning(f"User activity flush failed: {e}")
+        # Flush kuota harian per-user (persist) — batch, tanpa request per pesan.
+        try:
+            await bot_instance.flush_daily_usage()
+        except Exception as e:
+            logger.warning(f"Daily usage flush failed: {e}")
         # Notif admin saat semua AI provider down / pulih (rate-limited) —
         # tanpa ini, AI-down hanya tampil sebagai pesan error di sisi user.
         try:
@@ -308,6 +326,25 @@ async def session_alert_callback(context):
             await bot_instance.send_session_alerts(context.application)
         except Exception as e:
             logger.warning(f"Session alert check failed: {e}")
+
+
+async def ai_usage_report_callback(context):
+    """Kirim laporan pemakaian AI harian ke admin (token & request per provider).
+
+    Data kumulatif sejak bot start (di engine.stats). Dikirim 1x/hari via job
+    run_daily — 1 pesan, tanpa beban berarti di free tier.
+    """
+    from utils.admin_alerts import notify_admins
+    from bot.messages import format_ai_usage_report
+
+    try:
+        bot_instance = context.application.bot_data.get("market_bot")
+        if not bot_instance:
+            return
+        report = format_ai_usage_report(bot_instance.ai.get_stats())
+        await notify_admins(context.bot, report)
+    except Exception as e:
+        logger.warning(f"AI usage report gagal: {e}")
 
 
 def setup_scheduler(application: Application, bot: MarketBot):
@@ -446,6 +483,25 @@ def setup_scheduler(application: Application, bot: MarketBot):
                 f"Market session alerts scheduled every {SESSION_ALERT_INTERVAL_MINUTES} minutes"
             )
 
+        # ===== Laporan AI Usage Harian (ke admin) =====
+        # Token & request per provider — 1 pesan/hari. Membantu pantau kuota
+        # gratis sebelum kena limit (biasanya reset per hari di sisi provider).
+        if AI_USAGE_REPORT_ENABLED:
+            report_time = time(
+                hour=AI_USAGE_REPORT_HOUR,
+                minute=AI_USAGE_REPORT_MINUTE,
+                tzinfo=brief_tz,
+            )
+            application.job_queue.run_daily(
+                ai_usage_report_callback,
+                time=report_time,
+                name="ai_usage_report",
+            )
+            logger.info(
+                f"AI usage report scheduled daily at "
+                f"{AI_USAGE_REPORT_HOUR:02d}:{AI_USAGE_REPORT_MINUTE:02d} ({MORNING_BRIEF_TIMEZONE})"
+            )
+
     else:
         logger.warning("JobQueue not available, morning brief & event alerts scheduling disabled. Install pytz if needed.")
 
@@ -465,6 +521,7 @@ def register_handlers(application: Application, bot: MarketBot):
     # Admin-only (ADMIN_USER_IDS) — tidak dipajang di menu command bot
     application.add_handler(CommandHandler("broadcast", bot.broadcast_command))
     application.add_handler(CommandHandler("stats", bot.stats_command))
+    application.add_handler(CommandHandler("usage", bot.usage_command))
     application.add_handler(CommandHandler("syncmenu", bot.syncmenu_command))
     application.add_handler(CommandHandler("morning", bot.morning_brief_command))
     application.add_handler(CommandHandler("sentiment", bot.sentiment_command))

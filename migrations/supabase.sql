@@ -189,6 +189,12 @@ DROP POLICY IF EXISTS "subscribers_all_anon" ON public.subscribers;
 CREATE POLICY "subscribers_all_anon" ON public.subscribers
     FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
+-- user_daily_usage
+ALTER TABLE public.user_daily_usage ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "user_daily_usage_all_anon" ON public.user_daily_usage;
+CREATE POLICY "user_daily_usage_all_anon" ON public.user_daily_usage
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
 -- ------------------------------------------------------------
 -- N) news_predictions — prediksi arah emas (XAU/USD) terhadap event
 --     ekonomi high-impact + hasil benar/salah (fitur /prediksi).
@@ -248,6 +254,25 @@ CREATE TABLE IF NOT EXISTS public.journal (
 CREATE INDEX IF NOT EXISTS idx_journal_user
     ON public.journal (user_id, id DESC);
 
+-- ------------------------------------------------------------
+-- P) user_daily_usage — kuota harian per-user (PERSISTEN).
+--     Sebelumnya dihitung hanya di memori bot (reset tiap restart / spin-down
+--     free tier — bisa disiasati dengan restart). Sekarang disimpan di sini:
+--     bot memuat ke memori saat boot & flush batch tiap 10 menit, sehingga
+--     kuota bertahan lintas restart tanpa request DB per pesan.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.user_daily_usage (
+    user_id     BIGINT NOT NULL,
+    usage_date  TEXT NOT NULL,                -- 'YYYY-MM-DD' (UTC)
+    count       BIGINT NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, usage_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_daily_usage_date
+    ON public.user_daily_usage (usage_date);
+
 -- Grant eksplisit (pengaman tambahan; Supabase biasanya sudah
 -- memberi default privileges untuk schema public)
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.app_cache TO anon, authenticated, service_role;
@@ -258,6 +283,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_alert_subscribers TO 
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_alert_notified TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.news_predictions TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.journal TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.user_daily_usage TO anon, authenticated, service_role;
 
 -- ============================================================
 -- Verifikasi cepat (jalankan setelah semua statement di atas):
@@ -266,8 +292,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.journal TO anon, authentica
 --   where table_schema = 'public'
 --   and table_name in ('app_cache', 'users', 'subscribers', 'event_reports',
 --                      'event_alert_subscribers', 'event_alert_notified',
---                      'news_predictions', 'journal');
+--                      'news_predictions', 'journal', 'user_daily_usage');
 --
--- Harus mengembalikan 8 baris. Jika sudah pernah punya tabel
+-- Harus mengembalikan 9 baris. Jika sudah pernah punya tabel
 -- users/subscribers sebelumnya, baris lama tetap aman (IF NOT EXISTS).
 -- ============================================================
