@@ -186,6 +186,25 @@ async def post_init(application: Application):
     except Exception as e:
         logger.warning(f"Gagal memuat state persisten dari database: {e}")
 
+    # Cek tabel Supabase WAJIB — notif admin bila ada yang hilang (penyebab
+    # paling umum fitur persisten diam-diam mati: subscriber, cache L2,
+    # prediksi news tidak tersimpan). Best-effort; tanpa ADMIN_USER_IDS no-op.
+    try:
+        missing = await db.check_required_tables_async()
+        if missing:
+            from utils.admin_alerts import notify_admins
+
+            await notify_admins(
+                application.bot,
+                "⚠️ *Supabase: tabel belum lengkap!*\n\n"
+                f"Tabel hilang: {', '.join(missing)}\n\n"
+                "Jalankan `migrations/supabase.sql` di Supabase SQL Editor lalu "
+                "redeploy. Tanpa tabel ini, subscriber, cache persisten, & "
+                "prediksi news tidak tersimpan.",
+            )
+    except Exception as e:
+        logger.warning(f"Supabase schema check gagal: {e}")
+
     global BOT_STARTED
     BOT_STARTED = True
 
@@ -279,6 +298,25 @@ async def cache_cleanup_callback(context):
             await bot_instance.flush_user_activity()
         except Exception as e:
             logger.warning(f"User activity flush failed: {e}")
+        # Notif admin saat semua AI provider down / pulih (rate-limited) —
+        # tanpa ini, AI-down hanya tampil sebagai pesan error di sisi user.
+        try:
+            await bot_instance.notify_ai_outage(context.application)
+        except Exception as e:
+            logger.warning(f"AI outage check failed: {e}")
+
+
+async def admin_online_callback(context):
+    """Kirim notif 'bot online' ke admin (dipakai mode polling — setelah start)."""
+    from utils.admin_alerts import notify_admins
+
+    try:
+        await notify_admins(
+            context.bot,
+            f"✅ *{BOT_NAME}* online — mode {BOT_RUN_MODE.upper()} (polling).",
+        )
+    except Exception as e:
+        logger.warning(f"Notif admin online gagal: {e}")
 
 
 def setup_scheduler(application: Application, bot: MarketBot):
@@ -462,11 +500,53 @@ def build_application():
     return application
 
 
+def _notify_admin_online(loop, application, mode: str) -> None:
+    """Kirim notif 'bot online' ke admin (best-effort, tidak pernah raise)."""
+    from utils.admin_alerts import notify_admins
+
+    try:
+        loop.run_until_complete(
+            notify_admins(
+                application.bot,
+                f"✅ *{BOT_NAME}* online — mode {mode.upper()}.",
+            )
+        )
+    except Exception as e:
+        logger.warning(f"Notif admin online gagal: {e}")
+
+
+def _notify_admin_setup_failed(loop, application) -> None:
+    """Kirim notif 'setup webhook gagal' ke admin (best-effort)."""
+    from utils.admin_alerts import notify_admins
+
+    try:
+        loop.run_until_complete(
+            notify_admins(
+                application.bot,
+                "⚠️ *Bot gagal start (setup webhook).*\n\n"
+                "Bot dalam mode idle — perbaiki environment (token/URL/network) "
+                "lalu redeploy. Cek log Render untuk detail.",
+            )
+        )
+    except Exception as e:
+        logger.warning(f"Notif admin setup gagal: {e}")
+
+
 def run_polling():
     """Jalankan bot dengan metode polling (untuk development)."""
     logger.info("Starting bot in polling mode...")
 
     application = build_application()
+
+    # Notif 'bot online' ke admin setelah polling benar-benar start — job
+    # queue baru berjalan DI DALAM run_polling, jadi run_once baru di-fetch
+    # setelah itu (when=5 dtk memberi waktu initialize/start selesai).
+    if application.job_queue:
+        application.job_queue.run_once(
+            admin_online_callback,
+            when=5,
+            name="admin_online_notif",
+        )
 
     # Start polling
     logger.info("Bot is polling... Press Ctrl+C to stop.")
@@ -705,10 +785,12 @@ def run_webhook():
                     f"({setup_exc}) — server dibiarkan hidup untuk diagnosa; "
                     "perbaiki env lalu redeploy."
                 )
+                _notify_admin_setup_failed(loop, application)
             else:
                 logger.info(
                     f"Webhook terdaftar di Telegram: {WEBHOOK_URL}/{TELEGRAM_TOKEN[:8]}..."
                 )
+                _notify_admin_online(loop, application, "webhook")
 
         # Blok sampai sinyal stop. PTB 20.7 TIDAK punya Application.idle()
         # (method dihapus; run_polling/run_webhook bawaan memakai loop.run_forever

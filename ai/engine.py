@@ -781,6 +781,15 @@ class AIFallbackEngine:
             wait = 5.0
         return min(max(wait, 1.0), 10.0)
 
+    def is_total_failure_active(self) -> bool:
+        """True bila circuit breaker total-failure sedang aktif.
+
+        Artinya SEMUA provider baru saja gagal beruntun (dalam cooldown
+        _TOTAL_FAILURE_COOLDOWN) — dipakai notifikasi admin anti silent-fail
+        (lihat bot.handlers.MarketBot.notify_ai_outage).
+        """
+        return time.time() < self._total_failure_until
+
     def get_stats(self) -> Dict:
         """Dapatkan statistik penggunaan AI engine."""
         return {

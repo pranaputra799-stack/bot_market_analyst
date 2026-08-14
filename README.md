@@ -23,6 +23,7 @@ Dibuat untuk trader retail Indonesia — semua jawaban dalam Bahasa Indonesia, b
 - **Health Endpoint** 💚 — `GET /health` (aiohttp, port `HEALTH_PORT`) untuk uptime monitoring & Docker healthcheck
 - **Prompt Evaluation** 🧪 — Scaffolding promptfoo (`promptfoo/`) untuk menguji kualitas prompt & validitas JSON agent lintas provider (dev-time)
 - **Error Tracking** (opsional) — Sentry, aktif otomatis jika `SENTRY_DSN` diisi
+- **Notifikasi Admin Otomatis** 🔔 — pesan ke `ADMIN_USER_IDS` saat bot online (deploy sukses), setup webhook gagal, tabel Supabase hilang, dan semua AI provider down/pulih — anti silent-fail tanpa perlu buka log panel
 - **Memory Percakapan** 💬 — Bot mengingat konteks percakapan per-user (±15 menit) sehingga pertanyaan follow-up seperti *"kalau begitu level support-nya di mana?"* tetap dipahami konteksnya
 
 ## 🏗️ Arsitektur

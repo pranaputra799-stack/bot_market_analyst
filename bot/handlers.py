@@ -547,6 +547,40 @@ class MarketBot:
         user_data["last_ai_command_time"] = now
         return True
 
+    async def notify_ai_outage(self, application: Application) -> None:
+        """Notif admin saat semua AI provider down (rate-limited) & saat pulih.
+
+        Dipanggil berkala (numpang job cache cleanup tiap 10 menit). Mencegah
+        silent-fail: kalau SEMUA provider AI gagal, user hanya melihat pesan
+        error "semua provider sedang tidak tersedia" — tanpa notif ini admin
+        tidak tahu ada masalah nyata di balik layar.
+
+        Rate-limited: alert down dikirim sekali; alert pulih dikirim saat
+        provider kembali normal (state disimpan di bot_data, bukan RAM class).
+        """
+        from utils.admin_alerts import notify_admins
+
+        if not ADMIN_USER_IDS:
+            return
+        bot_data = application.bot_data
+        down = bool(self.ai and self.ai.is_total_failure_active())
+        was_down = bool(bot_data.get("_ai_down_notified", False))
+        if down and not was_down:
+            await notify_admins(
+                application.bot,
+                "⚠️ *AI DOWN:* semua provider AI gagal beruntun — bot tidak bisa "
+                "menjawab analisis baru. Cek API keys & rate limit provider "
+                "(OpenRouter/Groq/Gemini/dll), lalu /status.",
+            )
+            bot_data["_ai_down_notified"] = True
+        elif not down and was_down:
+            await notify_admins(
+                application.bot,
+                "✅ *AI pulih:* provider AI kembali normal — analisis bisa "
+                "dijalankan lagi.",
+            )
+            bot_data["_ai_down_notified"] = False
+
     def _track_user_activity(self, user_id: int) -> None:
         """
         Catat satu pertanyaan dari user (dengan batas jumlah user unik).

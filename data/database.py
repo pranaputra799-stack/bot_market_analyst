@@ -62,9 +62,51 @@ def _err_detail(e: Exception) -> str:
 
 
 class Database:
+    # Tabel yang WAJIB ada agar fitur persisten jalan (migrations/supabase.sql).
+    # Dipakai check_required_tables() saat boot — bila ada yang hilang, admin
+    # dinotifikasi (fitur diam-diam mati adalah penyebab support issue #1).
+    REQUIRED_TABLES = [
+        "app_cache",
+        "users",
+        "subscribers",
+        "event_reports",
+        "event_alert_subscribers",
+        "event_alert_notified",
+        "news_predictions",
+    ]
+
     @staticmethod
     def is_connected():
         return _is_configured()
+
+    @staticmethod
+    def check_required_tables() -> list:
+        """Cek tabel penting ada/tidak via REST (best-effort).
+
+        Returns:
+            List nama tabel yang HILANG (kosong bila lengkap / Supabase tidak
+            dikonfigurasi). Error jaringan BUKAN dianggap tabel hilang — hanya
+            HTTP 404 (PostgREST PGRST205: table does not exist) yang dilaporkan.
+        """
+        if not _is_configured():
+            return []
+        missing = []
+        for table in Database.REQUIRED_TABLES:
+            try:
+                url = f"{SUPABASE_URL}/rest/v1/{table}?select=*&limit=1"
+                resp = _session().get(url, headers=_get_headers(), timeout=10)
+                if resp.status_code == 404:
+                    missing.append(table)
+                else:
+                    resp.raise_for_status()
+            except Exception as e:
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status == 404:
+                    missing.append(table)
+                else:
+                    # Jaringan / auth error → jangan salah lapor sebagai tabel hilang
+                    logger.debug(f"check_required_tables {table}: {_err_detail(e)}")
+        return missing
 
     @staticmethod
     def upsert_user(user_id: int, username: str, first_name: str):
@@ -424,6 +466,10 @@ class Database:
     # Handler Telegram (python-telegram-bot v20) berjalan di event loop asyncio.
     # Varian *_async memindahkan operasi sinkron ke thread pool sehingga tidak
     # memblokir event loop saat banyak user berinteraksi bersamaan.
+
+    @staticmethod
+    async def check_required_tables_async() -> list:
+        return await asyncio.to_thread(Database.check_required_tables)
 
     @staticmethod
     async def upsert_user_async(user_id: int, username: str, first_name: str) -> bool:
