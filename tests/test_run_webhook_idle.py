@@ -1,6 +1,6 @@
 """Regresi: run_webhook TIDAK boleh memanggil Application.idle().
 
-PTB 20.7 menghapus method idle() dari Application (AttributeError →
+Application.idle() tidak ada di PTB 20.x maupun 22.x (AttributeError →
 "Webhook mode gagal start" saat deploy). Penggantinya: blocking
 loop.run_forever() yang berhenti via loop.stop() (signal handler /
 stop_running()), lalu finally membersihkan aiohttp runner + application.
@@ -27,7 +27,7 @@ class _FakeBot:
 
 
 class _FakeApplication:
-    """Meniru Application PTB 20.7: method yang ada, TANPA idle()."""
+    """Meniru Application PTB: method yang ada, TANPA idle()."""
 
     def __init__(self):
         self.bot = _FakeBot()

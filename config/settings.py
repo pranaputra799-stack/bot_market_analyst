@@ -297,7 +297,7 @@ LOG_FILE = os.getenv("LOG_FILE", "bot.log")
 # ===================== HEALTH ENDPOINT =====================
 # Endpoint HTTP /health (aiohttp, port terpisah HEALTH_PORT) untuk uptime
 # monitoring / Docker healthcheck. Berjalan di daemon thread sehingga tidak
-# mengganggu webhook Telegram (PTB 20.x tidak punya hook untuk route custom).
+# mengganggu webhook Telegram (PTB tidak punya hook untuk route custom).
 # Diaktifkan via env HEALTH_ENDPOINT_ENABLED=true.
 HEALTH_ENDPOINT_ENABLED = os.getenv("HEALTH_ENDPOINT_ENABLED", "true").lower() in ("1", "true", "yes")
 # Port /health — HARUS berbeda dari PORT webhook Telegram. Default 8090.

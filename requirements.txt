@@ -1,5 +1,9 @@
 # Core
-python-telegram-bot[job-queue]==20.7
+# python-telegram-bot 22.x: butuh Python >=3.10 (CI matrix di-update).
+# v22 membuat TelegramObject immutable & menghapus API yang deprecated di
+# v20.x (filters.CHAT, Defaults.*, quote=, proxy_url, timeout args run_polling)
+# — kode ini tidak memakai salah satu dari itu (semua 600 test lolos).
+python-telegram-bot[job-queue]==22.8
 python-dotenv==1.0.1
 
 # Data Layer
@@ -39,9 +43,10 @@ backports.zoneinfo; python_version < "3.9"
 # Error tracking (opsional — aktif otomatis jika SENTRY_DSN diisi)
 sentry-sdk>=2.0,<3.0
 
-# WAJIB untuk mode webhook python-telegram-bot 20.x (production). Tornado adalah
-# HTTP server internal PTB untuk menerima update dari Telegram. Tanpa ini,
-# webhook crash saat start di cloud (bug laten: dulu tidak pernah terpasang).
+# Tornado = HTTP server internal PTB untuk mode webhook bawaan (Updater.
+# start_webhook). Production memakai server aiohttp MILIK KITA (main.
+# build_webhook_app) — tapi test_webhook_simulation.py menguji webhook
+# tornado PTB end-to-end, jadi dependency tetap dipertahankan.
 tornado>=6.3,<7.0
 
 # Logging

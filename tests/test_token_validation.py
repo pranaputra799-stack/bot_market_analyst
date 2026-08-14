@@ -1,6 +1,6 @@
-"""Unit tests untuk _token_valid_async (main.py) — pemetaan exception PTB 20.x.
+"""Unit tests untuk _token_valid_async (main.py) — pemetaan exception PTB 22.x.
 
-Regresi: PTB 20.x melempar telegram.error.InvalidToken (bukan Unauthorized
+Regresi: PTB melempar telegram.error.InvalidToken (bukan Unauthorized
 yang ada di PTB <20) saat token ditolak. Pastikan:
 - token valid → True
 - InvalidToken (token ditolak) → False

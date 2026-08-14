@@ -537,7 +537,7 @@ class Database:
         return counts
 
     # ===================== ASYNC WRAPPERS =====================
-    # Handler Telegram (python-telegram-bot v20) berjalan di event loop asyncio.
+    # Handler Telegram (python-telegram-bot 22.x) berjalan di event loop asyncio.
     # Varian *_async memindahkan operasi sinkron ke thread pool sehingga tidak
     # memblokir event loop saat banyak user berinteraksi bersamaan.
 

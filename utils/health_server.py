@@ -2,8 +2,9 @@
 Health Endpoint - HTTP /health untuk uptime monitoring & Docker healthcheck.
 
 Kenapa server terpisah (bukan route di webhook Telegram)?
-- python-telegram-bot 20.x memakai tornado internal dan TIDAK menyediakan hook
-  untuk route HTTP custom. Menambah route di sana tidak mungkin tanpa patch.
+- python-telegram-bot memakai tornado internal (webhook bawaan) dan TIDAK
+  menyediakan hook untuk route HTTP custom. Menambah route di sana tidak
+  mungkin tanpa patch.
 - Solusi: server aiohttp kecil (dependency sudah ada) di port terpisah
   HEALTH_PORT (default 8090, jangan sama dengan PORT webhook), berjalan di
   daemon thread — tidak mengganggu event loop Telegram sama sekali.

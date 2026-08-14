@@ -1,14 +1,13 @@
-"""Regression test: mode webhook PTB 20.7 benar-benar jalan dengan tornado.
+"""Regression test: mode webhook bawaan PTB benar-benar jalan dengan tornado.
 
 Latar belakang: sebelumnya `tornado` (HTTP server internal webhook PTB) TIDAK
 ada di requirements — webhook mode crash saat start di production. Test ini
-menyalakan server webhook NYATA (infrastruktur PTB 20.7 + tornado) secara
-lokal dan memverifikasi perilaku HTTP, tanpa menghubungi api.telegram.org
-(get_me & set_webhook di-stub).
+menyalakan server webhook NYATA (infrastruktur PTB + tornado) secara lokal dan
+memverifikasi perilaku HTTP, tanpa menghubungi api.telegram.org (get_me &
+set_webhook di-stub).
 
-Catatan: memakai atribut privat PTB (`_bot_user`, `updater.start_webhook`) —
-karena requirements PIN python-telegram-bot==20.7, struktur ini stabil. Jika
-PTB dinaikkan versi dan test mulai gagal, itu sinyal untuk meninjau ulang.
+Catatan: memakai atribut privat PTB (`_bot_user`, `updater.start_webhook`).
+Diverifikasi kompatibel dengan python-telegram-bot 22.8 (600 test lolos).
 
 Tidak ada network: aiohttp probe ke 127.0.0.1 port ephemeral.
 """
@@ -108,7 +107,7 @@ async def _run_simulation() -> dict:
 
 
 class TestWebhookSimulation(unittest.TestCase):
-    """Server webhook tornado PTB 20.7 berfungsi penuh secara lokal."""
+    """Server webhook tornado PTB berfungsi penuh secara lokal."""
 
     def test_webhook_serves_and_validates(self):
         # Guard timeout: server webhook tak boleh menggantung suite selamanya

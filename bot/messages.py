@@ -100,7 +100,7 @@ ABOUT_MESSAGE = """
 Bot ini adalah alat edukasi untuk memahami dinamika pasar global. Bukan untuk eksekusi trading.
 
 *Teknologi:*
-• python-telegram-bot 20.x
+• python-telegram-bot 22.x
 • OANDA v20 API (real-time) + yfinance untuk data pasar
 • Multi-AI fallback engine
 • In-memory caching

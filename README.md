@@ -35,7 +35,13 @@ Dibuat untuk trader retail Indonesia — semua jawaban dalam Bahasa Indonesia, b
 ```
 main.py                  → Entry point (polling / webhook) + scheduler job
 bot/
-  handlers.py            → Handler perintah & pesan Telegram
+  handlers.py            → Agregator MarketBot (gabungan mixin per domain) + re-export API publik
+  handlers_utils.py      → Fungsi & konstanta murni (split teks, keyboard, deteksi query harga)
+  scheduler_jobs.py      → Job terjadwal & prediksi news/aftermath (SchedulerJobsMixin)
+  commands_market.py     → Command analisis pasar (sentiment, kalender, overview, risk, pivot, map)
+  commands_journal.py    → Trading journal (/journal)
+  message_flow.py        → Alur pesan (handle_message, fast price, prompt)
+  callback_flow.py       → Alur callback tombol inline & keyboard (handle_callback)
   messages.py            → Template pesan & formatter status
 analysis/
   director.py            → Orchestrator pipeline multi-agent
