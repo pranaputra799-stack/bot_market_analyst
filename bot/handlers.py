@@ -937,6 +937,38 @@ class MarketBot:
         lines.append("🗑️ Hapus sekarang: `/memory clear`")
         await safe_reply_text(update.message, "\n".join(lines), parse_mode="Markdown")
 
+    # ===================== ADMIN COMMAND (/syncmenu) =====================
+    # Khusus ADMIN_USER_IDS — force sinkronisasi menu perintah ke Telegram.
+    # Dipakai kalau menu masih menampilkan command lama yang sudah dihapus
+    # (/pa, /chart, /watch) — tanpa perlu redeploy.
+
+    async def syncmenu_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler /syncmenu — sinkronkan menu perintah (khusus admin)."""
+        user_id = update.effective_user.id
+        if user_id not in ADMIN_USER_IDS:
+            await safe_reply_text(
+                update.message,
+                "🔒 Perintah ini khusus admin bot.",
+                parse_mode="Markdown",
+            )
+            return
+        from utils.bot_menu import set_bot_commands
+
+        ok = await set_bot_commands(context.bot)
+        if ok:
+            await safe_reply_text(
+                update.message,
+                "✅ Menu perintah berhasil disinkronkan ke versi terbaru "
+                "(command lama seperti /pa dihapus).",
+                parse_mode="Markdown",
+            )
+        else:
+            await safe_reply_text(
+                update.message,
+                "❌ Gagal sinkronisasi menu (coba lagi / cek log).",
+                parse_mode="Markdown",
+            )
+
     # ===================== ADMIN COMMAND (/stats) =====================
     # Khusus ADMIN_USER_IDS — ringkasan sistem untuk admin: pemakaian token
     # AI, data Supabase (user aktif, subscriber, prediksi), cache, uptime.

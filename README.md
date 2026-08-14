@@ -392,6 +392,7 @@ curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
 | `/about` | Informasi bot |
 | `/broadcast <pesan>` | 🔒 **Khusus admin** (`ADMIN_USER_IDS`) — preview jumlah penerima, lalu `/broadcast send <pesan>` untuk mengirim pengumuman ke semua subscriber |
 | `/stats` | 🔒 **Khusus admin** (`ADMIN_USER_IDS`) — statistik lengkap: pemakaian token AI (per provider), user aktif 24 jam, subscriber, win rate prediksi news |
+| `/syncmenu` | 🔒 **Khusus admin** — force sinkronisasi menu perintah ke Telegram (hapus command lama yang sudah tidak ada, mis. `/pa`, `/chart`) tanpa redeploy |
 
 ## ⚠️ Disclaimer
 

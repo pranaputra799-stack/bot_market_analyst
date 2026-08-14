@@ -39,8 +39,6 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters,
 )
-from telegram import BotCommand
-
 from config.settings import (
     TELEGRAM_TOKEN,
     LOG_LEVEL,
@@ -134,36 +132,13 @@ async def handle_bot_error(update: object, context) -> None:
 
 async def post_init(application: Application):
     """Setup setelah bot initialize."""
-    # Set commands untuk menu bot
-    commands = [
-        BotCommand("start", "🚀 Mulai bot"),
-        BotCommand("help", "❓ Bantuan & panduan"),
-        BotCommand("morning", "🌅 Morning Brief harian"),
-        BotCommand("sentiment", "🧠 Sentimen pasar"),
-        BotCommand("calendar", "📅 Kalender Ekonomi"),
-        BotCommand("aftermath", "🎯 Analisis dampak event (contoh: /aftermath nfp)"),
-        BotCommand("prediksi", "🎯 Win rate prediksi news (XAU/USD)"),
-        BotCommand("alert", "🔔 Notifikasi event ekonomi"),
-        BotCommand("status", "✅ Status sistem & API"),
-        BotCommand("clear", "🧹 Bersihkan konteks"),
-        BotCommand("memory", "🧠 Lihat & hapus riwayat percakapan"),
-        BotCommand("settings", "⚙️ Pengaturan bot"),
-        BotCommand("overview", "🌍 Overview pasar"),
-        BotCommand("sentimen", "🧠 Sentimen retail (OANDA)"),
-        BotCommand("subscribe", "🔔 Langganan Morning Brief"),
-        BotCommand("unsubscribe", "🔕 Berhenti langganan"),
-        BotCommand("risk", "📐 Kalkulator ukuran posisi"),
-        BotCommand("pivot", "📐 Pivot point & level kunci"),
-        BotCommand("map", "🗺️ Heatmap semua instrumen"),
-        BotCommand("journal", "📓 Catatan transaksi (trading journal)"),
-        BotCommand("about", "ℹ️ Tentang bot ini"),
-    ]
-    # Kegagalan set menu perintah TIDAK boleh mematikan bot (mis. transient
-    # network error / token bermasalah) — log & lanjut agar bot tetap merespons.
-    try:
-        await application.bot.set_my_commands(commands)
-    except Exception as e:
-        logger.warning(f"set_my_commands gagal (bot tetap jalan): {e}")
+    # Set commands untuk menu bot — daftar ada di utils/bot_menu.py (satu
+    # sumber kebenaran). Retry + bersihkan semua scope: kalau deploy lama
+    # meninggalkan command mati (/pa, /chart, /watch) di Telegram, menu
+    # langsung diperbarui ke versi terbaru. Kegagalan TIDAK mematikan bot.
+    from utils.bot_menu import set_bot_commands
+
+    await set_bot_commands(application.bot)
 
     # Log diagnostik startup: token (termask) + mode — membantu cek konfigurasi
     # di panel JustRunMy bila bot tidak merespons.
@@ -490,6 +465,7 @@ def register_handlers(application: Application, bot: MarketBot):
     # Admin-only (ADMIN_USER_IDS) — tidak dipajang di menu command bot
     application.add_handler(CommandHandler("broadcast", bot.broadcast_command))
     application.add_handler(CommandHandler("stats", bot.stats_command))
+    application.add_handler(CommandHandler("syncmenu", bot.syncmenu_command))
     application.add_handler(CommandHandler("morning", bot.morning_brief_command))
     application.add_handler(CommandHandler("sentiment", bot.sentiment_command))
     application.add_handler(CommandHandler("calendar", bot.calendar_command))
