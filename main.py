@@ -57,6 +57,10 @@ from config.settings import (
     AI_USAGE_REPORT_ENABLED,
     AI_USAGE_REPORT_HOUR,
     AI_USAGE_REPORT_MINUTE,
+    COT_PREWARM_ENABLED,
+    COT_PREWARM_HOUR,
+    COT_PREWARM_MINUTE,
+    COT_PREWARM_MAX_INSTRUMENTS,
     NEWS_PREDICTION_ENABLED,
     NEWS_PREDICTION_CHECK_INTERVAL_MINUTES,
     BOT_USERNAME,
@@ -328,6 +332,24 @@ async def session_alert_callback(context):
             logger.warning(f"Session alert check failed: {e}")
 
 
+async def cot_prewarm_callback(context):
+    """Pre-warm cache COT (CFTC) — jadwal COT_PREWARM_HOUR:MINUTE harian.
+
+    Hanya berjalan saat di jendela rilis mingguan (Jumat malam s.d. Sabtu siang
+    WIB — dicek di SchedulerJobsMixin.prewarm_cot_cache). Mengisi cache Supabase
+    SEMUA instrumen COT sehingga /cot langsung instan tanpa download di tengah
+    request user. Best-effort: kegagalan hanya di-log, tidak pernah raise.
+    """
+    bot_instance = context.application.bot_data.get("market_bot")
+    if bot_instance:
+        try:
+            await bot_instance.prewarm_cot_cache(
+                context.application, max_instruments=COT_PREWARM_MAX_INSTRUMENTS
+            )
+        except Exception as e:
+            logger.warning(f"COT pre-warm job gagal: {e}")
+
+
 async def ai_usage_report_callback(context):
     """Kirim laporan pemakaian AI harian ke admin (token & request per provider).
 
@@ -483,6 +505,28 @@ def setup_scheduler(application: Application, bot: MarketBot):
                 f"Market session alerts scheduled every {SESSION_ALERT_INTERVAL_MINUTES} minutes"
             )
 
+        # ===== Pre-warm Cache COT (CFTC mingguan) =====
+        # CFTC rilis laporan Jumat malam WIB. Job run_daily mengisi cache
+        # Supabase semua instrumen COT di jendela rilis (Jumat >= 21:00 / Sabtu
+        # < 12:00 — dicek di prewarm_cot_cache) sehingga /cot langsung instan
+        # tanpa download di tengah request user. Tanpa AI untuk data lama
+        # (reuse interpretasi yang ada) — 1x/minggu, ringan untuk free tier.
+        if COT_PREWARM_ENABLED:
+            prewarm_time = time(
+                hour=COT_PREWARM_HOUR,
+                minute=COT_PREWARM_MINUTE,
+                tzinfo=brief_tz,
+            )
+            application.job_queue.run_daily(
+                cot_prewarm_callback,
+                time=prewarm_time,
+                name="cot_prewarm",
+            )
+            logger.info(
+                f"COT pre-warm scheduled daily at "
+                f"{COT_PREWARM_HOUR:02d}:{COT_PREWARM_MINUTE:02d} ({MORNING_BRIEF_TIMEZONE})"
+            )
+
         # ===== Laporan AI Usage Harian (ke admin) =====
         # Token & request per provider — 1 pesan/hari. Membantu pantau kuota
         # gratis sebelum kena limit (biasanya reset per hari di sisi provider).
@@ -537,6 +581,18 @@ def register_handlers(application: Application, bot: MarketBot):
     application.add_handler(CommandHandler("pivot", bot.pivot_command))
     application.add_handler(CommandHandler("map", bot.map_command))
     application.add_handler(CommandHandler("journal", bot.journal_command))
+    application.add_handler(CommandHandler("watchlist", bot.watchlist_command))
+    # /plan memakai ConversationHandler (alur tanya-jawab /plan setup). Wajib
+    # didaftarkan SEBELUM MessageHandler teks umum di bawah agar pesan user saat
+    # percakapan aktif diarahkan ke state handler-nya.
+    from bot.conversation_plan import build_plan_setup_conversation
+
+    application.add_handler(
+        build_plan_setup_conversation(entry=bot.plan_conversation_entry)
+    )
+    application.add_handler(CommandHandler("cot", bot.cot_command))
+    # Admin-only (ADMIN_USER_IDS) — pemicu manual pre-warm cache COT
+    application.add_handler(CommandHandler("cotrefresh", bot.cotrefresh_command))
     application.add_handler(CallbackQueryHandler(bot.handle_callback))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message)

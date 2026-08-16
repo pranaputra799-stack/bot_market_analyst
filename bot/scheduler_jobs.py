@@ -19,6 +19,8 @@ from config.settings import (
     NEWS_PREDICTION_SETTLE_MINUTES,
     NEWS_PREDICTION_MIN_MOVE_PCT,
     NEWS_PREDICTION_MAX_PER_RUN,
+    COT_PREWARM_HOUR,
+    COT_PREWARM_DAYS,
 )
 from telegram import (
     Update,
@@ -27,8 +29,16 @@ from telegram import (
 )
 import asyncio
 from datetime import datetime, timedelta, timezone
+from data.cot import (
+    COT_INSTRUMENTS,
+    cot_data_to_json,
+    extract_market,
+    fetch_tff_rows,
+    fetch_year_rows,
+)
 from data.database import db
 from prompts.loader import format_prompt
+from utils.admin_alerts import notify_admins
 from utils.sessions import sessions_just_opened, format_session_text
 import hashlib
 import logging
@@ -87,10 +97,15 @@ class SchedulerJobsMixin:
                         logger.error(f"Gagal kirim alert sesi ke {chat_id}: {ex}")
         except Exception as e:
             logger.warning(f"Session alert error: {e}")
-    async def _generate_morning_brief(self) -> str:
+    async def _generate_morning_brief(self, watchlist: Optional[List[str]] = None) -> str:
         """
         Generate morning brief dengan data terkini.
         Menggabungkan data pasar, makro, kalender ekonomi, berita, dan AI-generated outlook.
+
+        Args:
+            watchlist: Daftar instrumen favorit user — bila diisi, prompt brief
+                difokuskan ke instrumen ini (tetap 1 panggilan AI; data global
+                disajikan sebagai konteks). None/kosong = brief global biasa.
 
         Defensif penuh: SATU sumber data error TIDAK boleh menggagalkan seluruh
         brief (tiap bagian punya fallback teks), dan kegagalan AI menghasilkan
@@ -98,6 +113,7 @@ class SchedulerJobsMixin:
         """
         # Tanggal harus sesuai zona WIB, bukan waktu server (yang bisa UTC)
         today = datetime.now(ZoneInfo(MORNING_BRIEF_TIMEZONE)).strftime("%A, %d %B %Y")
+        watchlist_text = ", ".join(watchlist) if watchlist else ""
 
         # Gather data secara parallel — return_exceptions: satu sumber gagal
         # (jaringan Yahoo/FRED/news) tidak membatalkan bagian lain.
@@ -139,7 +155,8 @@ class SchedulerJobsMixin:
             try:
                 # Gunakan multi-agent untuk analisis yang lebih dalam
                 analysis_prompt = self._build_morning_brief_prompt(
-                    today, market_summary, macro_summary, calendar_text, news_summary, sentiment_text
+                    today, market_summary, macro_summary, calendar_text, news_summary,
+                    sentiment_text, watchlist_text,
                 )
 
                 result = await self.analysis_director.analyze(analysis_prompt)
@@ -177,7 +194,8 @@ class SchedulerJobsMixin:
         # down). Kegagalan AI → placeholder ramah, bukan exception.
         try:
             outlook_prompt = self._build_morning_brief_prompt(
-                today, market_summary, macro_summary, calendar_text, news_summary, sentiment_text
+                today, market_summary, macro_summary, calendar_text, news_summary,
+                sentiment_text, watchlist_text,
             )
             ai_response = await self.ai.generate_async(
                 outlook_prompt, use_cache=True, max_tokens=2048
@@ -227,9 +245,14 @@ class SchedulerJobsMixin:
         calendar_text: str,
         news_summary: str,
         sentiment_text: str = "",
+        watchlist: str = "",
     ) -> str:
         """
         Bangun prompt morning brief (dipakai path multi-agent & legacy).
+
+        Args:
+            watchlist: Daftar instrumen favorit user (string gabungan) — diisi
+                placeholder {WATCHLIST}; kosong = analisis pasar global.
 
         Konten prompt DIAMBIL dari `prompts/morning_brief.txt` (single source
         of truth) — edit file tersebut untuk mengubah perilaku tanpa mengubah
@@ -239,6 +262,7 @@ class SchedulerJobsMixin:
         return format_prompt(
             "morning_brief",
             DATE=today,
+            WATCHLIST=watchlist or "(tidak ada — analisis pasar secara umum)",
             market_data=market_summary,
             macro_data=macro_summary,
             calendar_data=calendar_text,
@@ -1498,6 +1522,138 @@ class SchedulerJobsMixin:
             parse_mode="Markdown",
             disable_web_page_preview=True,
         )
+    @staticmethod
+    def _is_cot_prewarm_window(now_local: datetime) -> bool:
+        """Jendela pre-warm COT: hari + jam terkonfigurasi (zona lokal).
+
+        CFTC rilis Jumat 15:30 ET = Jumat malam/sabtu dini hari WIB. Default
+        COT_PREWARM_DAYS=1-6 (Senin-Sabtu): Jumat/Sabtu menangkap rilis
+        mingguan, hari kerja lain (termasuk Senin pagi) menjaga cache tetap
+        hangat untuk /cot pertama di hari itu. Minggu dilewati (data masih
+        segar dari Sabtu). Jam pintu masuk COT_PREWARM_HOUR.
+        """
+        iso_weekday = now_local.weekday() + 1  # Python weekday(): Mon=0..Sun=6 → ISO Mon=1..Sun=7
+        if iso_weekday not in COT_PREWARM_DAYS:
+            return False
+        return now_local.hour >= COT_PREWARM_HOUR
+
+    async def prewarm_cot_cache(self, application: Application, max_instruments: int = 0):
+        """Job mingguan: isi cache COT SEMUA instrumen sebelum user bertanya.
+
+        CFTC merilis laporan COT 1x/minggu (Jumat malam WIB). Job ini mendownload
+        arsip tahun berjalan (sekali, di-cache memori 12 jam), mengekstrak data
+        per instrumen, dan menyimpannya ke Supabase (TTL 7 hari) beserta
+        interpretasi AI bila belum ada — sehingga /cot langsung instan tanpa
+        menunggu download di tengah request user.
+
+        Defensif penuh: kegagalan SATU instrumen tidak menghentikan sisanya,
+        dan kegagalan total hanya di-log (tidak ada notifikasi spam — admin
+        tetap bisa melihat /cot per instrumen).
+
+        Args:
+            application: Application PTB (bot_data untuk statistik run).
+            max_instruments: batas instrumen per run (0 = semua).
+        """
+        instruments = list(COT_INSTRUMENTS)
+        if max_instruments and max_instruments > 0:
+            instruments = instruments[:max_instruments]
+        if not instruments:
+            return
+
+        # Download arsip SEKALI (legacy + TFF) — di-cache memori 12 jam di data/cot.py.
+        try:
+            legacy_rows = await asyncio.to_thread(fetch_year_rows)
+        except Exception as e:
+            logger.warning(f"COT pre-warm: arsip legacy gagal: {e}")
+            legacy_rows = []
+        try:
+            tff_rows = await asyncio.to_thread(fetch_tff_rows)
+        except Exception as e:
+            logger.warning(f"COT pre-warm: arsip TFF gagal: {e}")
+            tff_rows = []
+        if not legacy_rows and not tff_rows:
+            # Gagal TOTAL: semua arsip CFTC tidak bisa diunduh → user /cot akan
+            # tetap coba download on-demand (kemungkinan besar ikut gagal).
+            # Kabari admin — kalau dibiarkan, fitur COT diam-diam mati dan baru
+            # ketahuan saat user komplain. Best-effort (tanpa admin = no-op).
+            # RATE-LIMIT: maks 1 notif per hari kalender — job sekarang berjalan
+            # tiap pagi (Senin-Sabtu), tanpa dedup admin bisa dapat 6 notif
+            # berturut-turut saat CFTC down berhari-hari.
+            logger.error("COT pre-warm: semua arsip CFTC gagal diunduh — dilewati")
+            today_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if application.bot_data.get("cot_prewarm_notified") != today_key:
+                try:
+                    await notify_admins(
+                        application.bot,
+                        "⚠️ *COT pre-warm gagal total*\n\n"
+                        "Semua arsip CFTC (legacy & TFF) tidak bisa diunduh. "
+                        "`/cot` akan tetap mencoba download on-demand — kalau "
+                        "situs CFTC sedang bermasalah, user bisa melihat error.\n\n"
+                        "Cek koneksi/URL CFTC lalu pantau pre-warm berikutnya "
+                        "(atau `/cotrefresh` untuk coba manual).",
+                    )
+                    application.bot_data["cot_prewarm_notified"] = today_key
+                except Exception as e:
+                    logger.warning(f"Notif admin COT pre-warm gagal: {e}")
+            return
+
+        ok_count = skip_count = fail_count = 0
+        for config in instruments:
+            cache_key = self._cot_cache_key(config)
+            rows = tff_rows if config.get("report") == "tff" else legacy_rows
+            if not rows:
+                fail_count += 1
+                continue
+            try:
+                data = extract_market(rows, config)
+                if not data:
+                    skip_count += 1  # instrumen tidak ada di laporan terbaru
+                    continue
+
+                # Pertahankan interpretasi AI lama (bila ada) — 1 panggilan AI
+                # per instrumen per minggu, tidak perlu ulangi untuk data sama.
+                try:
+                    cached = await db.get_cot_cache_async(cache_key)
+                    if cached and cached.get("data"):
+                        old_ai = cached["data"].get("ai_interpretation")
+                        if old_ai:
+                            data["ai_interpretation"] = old_ai
+                        # Data identik dengan cache → tidak perlu tulis ulang
+                        if cached["data"].get("data") == cot_data_to_json(data):
+                            skip_count += 1
+                            continue
+                except Exception as e:
+                    logger.debug(f"COT pre-warm: baca cache {cache_key} gagal: {e}")
+
+                # Interpretasi AI hanya untuk data BARU / instrumen tanpa AI
+                if not data.get("ai_interpretation") and getattr(self, "ai", None) is not None:
+                    try:
+                        ai_text = await self._cot_ai_interpretation(data)
+                        if ai_text:
+                            data["ai_interpretation"] = ai_text
+                    except Exception as e:
+                        logger.warning(f"COT pre-warm: AI {cache_key} gagal: {e}")
+
+                ok = await db.set_cot_cache_async(cache_key, cot_data_to_json(data))
+                if ok:
+                    ok_count += 1
+                else:
+                    fail_count += 1
+            except Exception as e:
+                logger.warning(f"COT pre-warm: instrumen {config.get('display')} gagal: {e}")
+                fail_count += 1
+
+        logger.info(
+            f"COT pre-warm selesai: {ok_count} cache diisi, {skip_count} sudah segar, "
+            f"{fail_count} gagal"
+        )
+        application.bot_data["cot_prewarm_stats"] = {
+            "ok": ok_count,
+            "skipped": skip_count,
+            "failed": fail_count,
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+
     async def send_scheduled_morning_brief(self, application: Application):
         """
         Kirim morning brief ke semua chat yang terdaftar.
@@ -1505,6 +1661,10 @@ class SchedulerJobsMixin:
         """
         logger.info("Sending scheduled morning brief...")
 
+        # CATATAN PERSONALISASI: brief terjadwal sengaja GLOBAL (tanpa watchlist)
+        # — brief per-user untuk SEMUA subscriber = N panggilan AI per pagi,
+        # tidak aman untuk free tier. Personalisasi hanya di /morning (on-demand,
+        # 1 user = 1 panggilan AI).
         brief = await self._generate_morning_brief()
 
         # Gabungkan chat_ids dari ENV dan Database

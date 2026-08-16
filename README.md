@@ -26,6 +26,9 @@ Dibuat untuk trader retail Indonesia — semua jawaban dalam Bahasa Indonesia, b
 - **Notifikasi Admin Otomatis** 🔔 — pesan ke `ADMIN_USER_IDS` saat bot online (deploy sukses), setup webhook gagal, tabel Supabase hilang, dan semua AI provider down/pulih — anti silent-fail tanpa perlu buka log panel
 - **Alat Edukasi Tanpa AI** 🧰 — `/risk` (position size), `/pivot` (level kunci), `/map` (heatmap instan) — cepat, tanpa biaya token
 - **Trading Journal** 📓 — `/journal` mencatat transaksi per user (win rate per pair) — data tersimpan di Supabase
+- **Watchlist Personal** 👁️ — `/watchlist` menyimpan daftar pair/instrumen favorit per user; morning brief & `/map watchlist` fokus ke daftarmu (di-cache, hemat token)
+- **Trading Plan Mingguan** 📋 — `/plan setup` (alur tanya-jawab: modal → risiko → gaya → pair → jam) lalu `/plan` menghasilkan rencana trading personal: pair layak, entry/SL/TP, R:R, dan ukuran posisi dari modal & risiko (1 call AI/minggu, di-cache)
+- **COT Report (CFTC)** 📊 — `/cot` menampilkan posisi institusional (speculative vs commercial/hedger) untuk 32 instrumen: FX, Gold, Oil, BTC, index, treasury (2Y/5Y/10Y/30Y), Fed Funds, SOFR, dll — data gratis CFTC, cache 7 hari + pre-warm otomatis tiap Jumat malam agar instan
 - **Kuota Harian Per-User (persisten)** ⏳ — batas pertanyaan/hari (default 30, `USER_DAILY_QUOTA`) agar kuota AI gratis tidak terkuras satu user; tersimpan di Supabase sehingga **tidak reset saat restart/spin-down** free tier
 - **Laporan AI Usage** 📊 — `/usage` (admin) + laporan harian otomatis ke admin: token & request per provider, biar tahu kapan mendekati limit gratis
 - **Market Session Alerts** 🌏 — notifikasi sesi Sydney/Tokyo/London/New York buka ke subscriber morning brief (tanpa AI)
@@ -38,9 +41,13 @@ main.py                  → Entry point (polling / webhook) + scheduler job
 bot/
   handlers.py            → Agregator MarketBot (gabungan mixin per domain) + re-export API publik
   handlers_utils.py      → Fungsi & konstanta murni (split teks, keyboard, deteksi query harga)
-  scheduler_jobs.py      → Job terjadwal & prediksi news/aftermath (SchedulerJobsMixin)
+  scheduler_jobs.py      → Job terjadwal & prediksi news/aftermath + pre-warm cache COT (SchedulerJobsMixin)
   commands_market.py     → Command analisis pasar (sentiment, kalender, overview, risk, pivot, map)
   commands_journal.py    → Trading journal (/journal)
+  commands_watchlist.py  → Watchlist personal (/watchlist + /map watchlist + submenu Settings)
+  commands_plan.py       → Trading plan mingguan (/plan, /plan setup)
+  conversation_plan.py   → ConversationHandler alur tanya-jawab /plan setup
+  commands_cot.py        → Laporan COT CFTC (/cot)
   message_flow.py        → Alur pesan (handle_message, fast price, prompt)
   callback_flow.py       → Alur callback tombol inline & keyboard (handle_callback)
   messages.py            → Template pesan & formatter status
@@ -70,7 +77,8 @@ data/
   macro_data.py          → Data makro & kalender ekonomi (FRED, Finnhub, jadwal resmi)
   news_data.py           → Berita & sentimen (Finnhub, Marketaux, RSS)
   cache.py               → Cache dua lapis (L1 memori + L2 Supabase) dengan TTL
-  database.py            → Supabase REST (opsional): user, subscriber, event alert & news predictions
+  database.py            → Supabase REST (opsional): user, subscriber, event alert, news predictions, watchlist, profil /plan, cache COT
+  cot.py                 → Parser & fetcher laporan COT CFTC (legacy + TFF, 32 instrumen)
   conversation_memory.py → Memori percakapan per-user (konteks follow-up)
   news_predictions.py    → Store prediksi news XAU/USD (win rate & riwayat)
   http_session.py        → Session requests/aiohttp bersama (connection pooling per-thread)
@@ -101,7 +109,9 @@ prompt agent multi-agent (sebelumnya inline di `analysis/prompts.py`):
 | `market_analysis.txt` | Analisis pasar/teknikal (path legacy) |
 | `technical_analysis.txt` | Analisis korelasi antar instrumen (DXY vs Gold vs FX) |
 | `macro_explanation.txt` | Penjelasan data makroekonomi (CPI, NFP, Fed, GDP, dll) |
-| `morning_brief.txt` | Morning brief harian |
+| `morning_brief.txt` | Morning brief harian (placeholder `{WATCHLIST}` untuk brief personal) |
+| `trading_plan.txt` | Rencana trading mingguan personal (`/plan`) |
+| `cot_interpretation.txt` | Interpretasi AI laporan COT (`/cot`) |
 | `director_system.txt` | Orchestrator pipeline multi-agent (Director) |
 | `research_system.txt` / `research_analysis_template.txt` | Agent Research |
 | `signals_system.txt` | Agent Signals |
@@ -190,6 +200,10 @@ python main.py
 | `NEWS_PREDICTION_LEAD_MINUTES` | opsi | Menit sebelum rilis saat prediksi dikirim (default `5`) |
 | `NEWS_PREDICTION_SETTLE_MINUTES` | opsi | Menit setelah rilis sebelum hasil dievaluasi (default `15`) |
 | `NEWS_PREDICTION_MIN_MOVE_PCT` | opsi | Ambang pergerakan harga untuk status flat (default `0.05`) |
+| `COT_PREWARM_ENABLED` | opsi | Pre-warm cache COT otomatis harian agar `/cot` instan (`true`/`false`, default `true`) |
+| `COT_PREWARM_HOUR` / `COT_PREWARM_MINUTE` | opsi | Jam pre-warm COT (zona `MORNING_BRIEF_TIMEZONE`, default `4:00` — setelah rilis CFTC Jumat 15:30 ET / 02:30 WIB) |
+| `COT_PREWARM_DAYS` | opsi | Hari pre-warm (ISO weekday `1`=Senin..`7`=Minggu, pisahkan koma; default `1,2,3,4,5,6` = Senin-Sabtu) |
+| `COT_PREWARM_MAX_INSTRUMENTS` | opsi | Batas instrumen COT per run pre-warm (0 = semua, default `0`) |
 | `HEALTH_ENDPOINT_ENABLED` | opsi | Endpoint `/health` untuk monitoring (`true`/`false`, default `true`) |
 | `HEALTH_PORT` | opsi | Port `/health` — beda dari PORT webhook (default `8090`) |
 | `CCXT_PRICE_TTL` | opsi | TTL cache harga crypto ccxt dalam detik (default `30`) |
@@ -212,8 +226,9 @@ Bot memakai cache **dua lapis (hybrid)**:
 
 **Setup sekali saja** — jalankan `migrations/supabase.sql` di Supabase SQL Editor
 (membuat tabel `app_cache`, `users`, `subscribers`, `event_reports`,
-`event_alert_subscribers`, `event_alert_notified`, `news_predictions`
-+ index + kebijakan RLS).
+`event_alert_subscribers`, `event_alert_notified`, `news_predictions`,
+`journal`, `user_daily_usage`, `watchlists`, `user_profiles`, `cot_cache`
++ index + kebijakan RLS). File idempotent — aman dijalankan ulang.
 Jika Supabase belum dikonfigurasi / tabel belum dibuat, bot otomatis jatuh ke
 mode memory-only tanpa error.
 
@@ -390,17 +405,26 @@ curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
 | `⚙️ Pengaturan` (menu) | Satu menu untuk semua yang bisa diatur: toggle notifikasi event, langganan morning brief, & hapus konteks percakapan |
 | `/prediksi` | 🎯 Win rate prediksi news (XAU/USD) — total, benar/salah/flat, 10 prediksi terakhir (`/prediksi history` untuk 25) |
 | `/overview` | Ringkasan instan semua instrumen utama (tanpa AI) |
-| `/map` | 🗺️ Heatmap instan — RSI/trend/% change semua instrumen utama dalam satu pesan (tanpa AI) |
+| `/map` | 🗺️ Heatmap instan — RSI/trend/% change semua instrumen utama dalam satu pesan (tanpa AI). Varian: `/map watchlist` = heatmap hanya untuk pair di watchlist-mu |
 | `/pivot` | 📐 Pivot point & level kunci (support/resistance + Fibonacci) — tanpa AI |
 | `/risk` | 📐 Kalkulator ukuran posisi: modal + risiko% + SL pips → lot (tanpa AI) |
 | `/journal` | 📓 Trading journal — catat transaksi, win rate per pair, rekap (butuh tabel `journal` di Supabase) |
-| `/settings` | ⚙️ Pengaturan bot — toggle alert event, morning brief, & hapus konteks dalam satu menu |
+| `/watchlist` | 👁️ Lihat daftar pair/instrumen favorit + harga terkini (butuh tabel `watchlists`) |
+| `/watchlist add <pair>` | 👁️ Tambah instrumen ke watchlist (contoh: `/watchlist add gold`) |
+| `/watchlist remove <pair>` | 👁️ Hapus instrumen dari watchlist |
+| `/watchlist clear` | 👁️ Kosongkan seluruh watchlist |
+| `/plan setup` | 📋 Isi/update profil trading plan via alur **tanya-jawab** (modal → risiko % → gaya → pair favorit → jam). Sekali isi juga didukung: `/plan setup 1000 2 swing XAU/USD,EUR/USD 09:00-16:00` |
+| `/plan` | 📋 Generate rencana trading mingguan personal — pair layak, entry/SL/TP, R:R, ukuran posisi (1 call AI/minggu, di-cache) |
+| `/plan clear` | 📋 Hapus profil trading plan |
+| `/cot <instrumen>` | 📊 Laporan COT (CFTC): posisi net speculative & commercial + perubahan mingguan + interpretasi. 32 instrumen — contoh: `/cot gold`, `/cot eur`, `/cot oil`, `/cot btc`, `/cot dxy`, `/cot us2y`, `/cot us5y`, `/cot us10y`, `/cot us30y`, `/cot fed funds`, `/cot sofr`, `/cot sp400`, `/cot russell`, `/cot vix` (butuh tabel `cot_cache`) |
+| `/settings` | ⚙️ Pengaturan bot — toggle alert event, morning brief, kelola **watchlist**, & hapus konteks dalam satu menu |
 | `/status` | Status sistem, AI provider, dan data source |
 | `/about` | Informasi bot |
 | `/broadcast <pesan>` | 🔒 **Khusus admin** (`ADMIN_USER_IDS`) — preview jumlah penerima, lalu `/broadcast send <pesan>` untuk mengirim pengumuman ke semua subscriber |
 | `/usage` | 🔒 **Khusus admin** — laporan pemakaian AI (token & request per provider) |
 | `/stats` | 🔒 **Khusus admin** (`ADMIN_USER_IDS`) — statistik lengkap: pemakaian token AI (per provider), user aktif 24 jam, subscriber, win rate prediksi news |
 | `/syncmenu` | 🔒 **Khusus admin** — force sinkronisasi menu perintah ke Telegram (hapus command lama yang sudah tidak ada, mis. `/pa`, `/chart`) tanpa redeploy |
+| `/cotrefresh [jumlah]` | 🔒 **Khusus admin** — pemicu manual pre-warm cache COT kapan saja (tanpa menunggu jadwal Jumat malam); argumen opsional = batas jumlah instrumen |
 
 ## ⚠️ Disclaimer
 

@@ -235,6 +235,65 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
             self.assertEqual(asyncio.run(Database.get_counts_async()), {"subscribers": 5})
         m.assert_called_once()
 
+    # ===================== WATCHLIST / PROFILE / COT CACHE =====================
+
+    def test_watchlist_async_delegates(self):
+        with mock.patch.object(Database, "add_watchlist_symbol", return_value=True) as m1, \
+             mock.patch.object(Database, "remove_watchlist_symbol", return_value=True) as m2, \
+             mock.patch.object(Database, "get_watchlist", return_value=["EUR/USD"]) as m3, \
+             mock.patch.object(Database, "clear_watchlist", return_value=True) as m4:
+            self.assertTrue(asyncio.run(Database.add_watchlist_symbol_async(42, "EUR/USD")))
+            self.assertTrue(asyncio.run(Database.remove_watchlist_symbol_async(42, "EUR/USD")))
+            self.assertEqual(asyncio.run(Database.get_watchlist_async(42)), ["EUR/USD"])
+            self.assertTrue(asyncio.run(Database.clear_watchlist_async(42)))
+        m1.assert_called_once_with(42, "EUR/USD")
+        m2.assert_called_once_with(42, "EUR/USD")
+        m3.assert_called_once_with(42)
+        m4.assert_called_once_with(42)
+
+    def test_user_profile_async_delegates(self):
+        profile = {"balance": 1000.0, "risk_per_trade": 2.0}
+        with mock.patch.object(Database, "upsert_user_profile", return_value=True) as m1, \
+             mock.patch.object(Database, "get_user_profile", return_value=profile) as m2, \
+             mock.patch.object(Database, "delete_user_profile", return_value=True) as m3:
+            self.assertTrue(asyncio.run(Database.upsert_user_profile_async(42, profile)))
+            self.assertEqual(asyncio.run(Database.get_user_profile_async(42)), profile)
+            self.assertTrue(asyncio.run(Database.delete_user_profile_async(42)))
+        m1.assert_called_once_with(42, profile)
+        m2.assert_called_once_with(42)
+        m3.assert_called_once_with(42)
+
+    def test_cot_cache_async_delegates(self):
+        with mock.patch.object(Database, "get_cot_cache", return_value={"market_key": "cot:gold"}) as m1, \
+             mock.patch.object(Database, "set_cot_cache", return_value=True) as m2:
+            self.assertEqual(asyncio.run(Database.get_cot_cache_async("cot:gold")), {"market_key": "cot:gold"})
+            self.assertTrue(asyncio.run(Database.set_cot_cache_async("cot:gold", {"a": 1})))
+        m1.assert_called_once_with("cot:gold")
+        m2.assert_called_once_with("cot:gold", {"a": 1}, 7 * 24 * 3600)
+
+    def test_add_watchlist_requires_configured_db(self):
+        sess = mock.Mock()
+        post_fake = mock.Mock()
+        post_fake.raise_for_status = mock.Mock()
+        sess.post.return_value = post_fake
+        with mock.patch("data.database._is_configured", return_value=True), \
+             mock.patch("data.database._session", return_value=sess):
+            self.assertTrue(Database.add_watchlist_symbol(42, "EUR/USD"))
+        payload = sess.post.call_args.kwargs["json"]
+        self.assertEqual(payload["user_id"], 42)
+        self.assertEqual(payload["symbol"], "EUR/USD")
+        self.assertIn("merge-duplicates", sess.post.call_args.kwargs["headers"]["Prefer"])
+
+    def test_get_watchlist_orders_by_symbol(self):
+        sess = mock.Mock()
+        resp = mock.Mock()
+        resp.json.return_value = [{"symbol": "EUR/USD"}, {"symbol": "XAU/USD (Gold)"}]
+        sess.get.return_value = resp
+        with mock.patch("data.database._is_configured", return_value=True), \
+             mock.patch("data.database._session", return_value=sess):
+            self.assertEqual(Database.get_watchlist(42), ["EUR/USD", "XAU/USD (Gold)"])
+        self.assertIn("order=symbol.asc", sess.get.call_args.args[0])
+
 
 if __name__ == "__main__":
     unittest.main()

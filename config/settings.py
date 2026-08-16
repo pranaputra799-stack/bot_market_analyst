@@ -217,6 +217,32 @@ SESSION_ALERT_ENABLED = os.getenv("SESSION_ALERT_ENABLED", "true").lower() in ("
 SESSION_ALERT_INTERVAL_MINUTES = int(os.getenv("SESSION_ALERT_INTERVAL_MINUTES", "30"))
 SESSION_ALERT_INTERVAL_MINUTES = max(5, min(SESSION_ALERT_INTERVAL_MINUTES, 120))
 
+# ===================== COT PRE-WARM (CFTC weekly) =====================
+# Pemanasan cache COT otomatis: CFTC rilis laporan Jumat 15:30 ET (Sabtu
+# 02:30 WIB). Job ini mendownload arsip + mengisi cache Supabase SEMUA
+# instrumen SEBELUM user bertanya, sehingga /cot langsung instan (tanpa
+# download di tengah request). Jadwal default Sabtu 04:00 WIB — setelah rilis
+# mingguan; job juga melayani Jumat malam (fallback rilis awal) lewat
+# pengecekan hari di scheduler_jobs.prewarm_cot_cache.
+COT_PREWARM_ENABLED = os.getenv("COT_PREWARM_ENABLED", "true").lower() in ("1", "true", "yes")
+# Jam & menit pre-warm (zona MORNING_BRIEF_TIMEZONE).
+COT_PREWARM_HOUR = int(os.getenv("COT_PREWARM_HOUR", "4"))
+COT_PREWARM_HOUR = max(0, min(COT_PREWARM_HOUR, 23))
+COT_PREWARM_MINUTE = int(os.getenv("COT_PREWARM_MINUTE", "0"))
+COT_PREWARM_MINUTE = max(0, min(COT_PREWARM_MINUTE, 59))
+# Hari pre-warm (ISO weekday, 1=Senin .. 7=Minggu; pisahkan koma).
+# Default 1-6 (Senin s.d. Sabtu): Jumat malam/Sabtu pagi menangkap rilis CFTC
+# mingguan, Senin pagi & hari kerja lain memastikan cache tetap hangat untuk
+# /cot pertama di hari itu. Minggu dilewati (data masih segar dari Sabtu).
+# Set "1,2,3,4,5,6,7" untuk pre-warm setiap hari.
+COT_PREWARM_DAYS = [
+    int(x.strip()) for x in os.getenv("COT_PREWARM_DAYS", "1,2,3,4,5,6").split(",")
+    if x.strip().isdigit() and 1 <= int(x.strip()) <= 7
+] or [1, 2, 3, 4, 5, 6]
+# Maksimum instrumen yang diproses per run (0 = semua). Batas keamanan untuk
+# beban AI interpretasi (1 call per instrumen per minggu) & durasi job.
+COT_PREWARM_MAX_INSTRUMENTS = int(os.getenv("COT_PREWARM_MAX_INSTRUMENTS", "0"))
+
 # ===================== AI USAGE REPORT =====================
 # Laporan pemakaian AI harian (token & request per provider) ke ADMIN_USER_IDS
 # — 1 pesan/hari, numpang job run_daily. Membantu memantau kuota gratis

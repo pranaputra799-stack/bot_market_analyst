@@ -48,6 +48,9 @@ COMMANDS = [
     BotCommand("pivot", "📐 Pivot point & level kunci"),
     BotCommand("map", "🗺️ Heatmap semua instrumen"),
     BotCommand("journal", "📓 Catatan transaksi (trading journal)"),
+    BotCommand("watchlist", "👁️ Watchlist instrumen favorit"),
+    BotCommand("plan", "📋 Rencana trading mingguan (personal)"),
+    BotCommand("cot", "📊 Laporan COT (posisi institusional)"),
     BotCommand("about", "ℹ️ Tentang bot ini"),
 ]
 

@@ -267,11 +267,71 @@ CREATE TABLE IF NOT EXISTS public.user_daily_usage (
 CREATE INDEX IF NOT EXISTS idx_user_daily_usage_date
     ON public.user_daily_usage (usage_date);
 
--- RLS untuk user_daily_usage — ditaruh SETELAH CREATE TABLE (PostgREST
+-- ------------------------------------------------------------
+-- Q) watchlists — daftar pair/instrumen favorit per user (fitur /watchlist).
+--     Satu baris per (user_id, symbol) — dipakai filter morning brief personal,
+--     /map watchlist, dan menu Settings.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.watchlists (
+    user_id    BIGINT NOT NULL,
+    symbol     TEXT NOT NULL,              -- label display (mis. 'EUR/USD', 'XAU/USD (Gold)')
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_watchlists_user
+    ON public.watchlists (user_id, symbol);
+
+-- ------------------------------------------------------------
+-- R) user_profiles — profil risk & preferensi trading per user (fitur /plan).
+--     Diisi lewat /plan setup: modal, risiko % per trade, gaya trading,
+--     pair favorit, jam trading. PRIMARY KEY user_id.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.user_profiles (
+    user_id         BIGINT PRIMARY KEY,
+    balance         DOUBLE PRECISION,      -- modal (USD)
+    risk_per_trade  DOUBLE PRECISION,      -- % risiko per trade
+    trading_style   TEXT DEFAULT '',       -- scalping | day_trade | swing
+    favorite_pairs  TEXT DEFAULT '',       -- daftar pair, dipisah koma
+    trading_hours   TEXT DEFAULT '',       -- ketersediaan waktu (mis. '09:00-16:00 WIB')
+    experience      TEXT DEFAULT '',       -- level pengalaman (opsional)
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ------------------------------------------------------------
+-- S) cot_cache — cache laporan COT (CFTC) per instrumen (fitur /cot).
+--     Data dirilis CFTC hanya 1x/minggu (Jumat 15:30 ET, posisi per Selasa),
+--     jadi hasil download+parse disimpan di sini 7 hari agar tidak ada
+--     download berulang. `data` berisi JSON laporan (net position, perubahan,
+--     dll); interpretasi AI ikut di-cache di dalamnya bila ada.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.cot_cache (
+    market_key  TEXT PRIMARY KEY,          -- mis. 'cot:88691:2026-08-11'
+    data        JSONB NOT NULL,
+    expires_at  TIMESTAMPTZ NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cot_cache_expires
+    ON public.cot_cache (expires_at);
+
+-- RLS untuk tabel baru — ditaruh SETELAH CREATE TABLE (PostgREST
 -- menolak ALTER/POLICY pada tabel yang belum ada: 42P01).
-ALTER TABLE public.user_daily_usage ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "user_daily_usage_all_anon" ON public.user_daily_usage;
-CREATE POLICY "user_daily_usage_all_anon" ON public.user_daily_usage
+ALTER TABLE public.watchlists ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "watchlists_all_anon" ON public.watchlists;
+CREATE POLICY "watchlists_all_anon" ON public.watchlists
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "user_profiles_all_anon" ON public.user_profiles;
+CREATE POLICY "user_profiles_all_anon" ON public.user_profiles
+    FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+ALTER TABLE public.cot_cache ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "cot_cache_all_anon" ON public.cot_cache;
+CREATE POLICY "cot_cache_all_anon" ON public.cot_cache
     FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
 -- Grant eksplisit (pengaman tambahan; Supabase biasanya sudah
@@ -285,6 +345,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.event_alert_notified TO ano
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.news_predictions TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.journal TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.user_daily_usage TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.watchlists TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.user_profiles TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.cot_cache TO anon, authenticated, service_role;
 
 -- ============================================================
 -- Verifikasi cepat (jalankan setelah semua statement di atas):
@@ -293,8 +356,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.user_daily_usage TO anon, a
 --   where table_schema = 'public'
 --   and table_name in ('app_cache', 'users', 'subscribers', 'event_reports',
 --                      'event_alert_subscribers', 'event_alert_notified',
---                      'news_predictions', 'journal', 'user_daily_usage');
+--                      'news_predictions', 'journal', 'user_daily_usage',
+--                      'watchlists', 'user_profiles', 'cot_cache');
 --
--- Harus mengembalikan 9 baris. Jika sudah pernah punya tabel
+-- Harus mengembalikan 12 baris. Jika sudah pernah punya tabel
 -- users/subscribers sebelumnya, baris lama tetap aman (IF NOT EXISTS).
 -- ============================================================

@@ -69,7 +69,11 @@ HELP_MESSAGE = """
 /subscribe - 🔔 Langganan Morning Brief
 /unsubscribe - 🔕 Berhenti langganan
 /status - ✅ Status sistem & API
-/settings - ⚙️ Pengaturan bot (alert event, morning brief, konteks)
+/settings - ⚙️ Pengaturan bot (alert event, morning brief, watchlist, konteks)
+/watchlist - 👁️ Watchlist instrumen favorit (contoh: /watchlist add gold)
+/map watchlist - 🗺️ Heatmap khusus watchlistmu
+/plan - 📋 Rencana trading mingguan personal (contoh: /plan setup 1000 2 swing XAU/USD,EUR/USD)
+/cot - 📊 Laporan COT — posisi institusional CFTC (contoh: /cot gold)
 /clear - 🧹 Bersihkan konteks percakapan
 /memory - 🧠 Lihat & hapus riwayat percakapan (24 jam)
 /about - ℹ️ Tentang bot

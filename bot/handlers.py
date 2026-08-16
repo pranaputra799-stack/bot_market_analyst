@@ -66,6 +66,9 @@ from bot.handlers_utils import (
 from bot.scheduler_jobs import SchedulerJobsMixin
 from bot.commands_market import MarketCommandsMixin
 from bot.commands_journal import JournalCommandsMixin
+from bot.commands_watchlist import WatchlistCommandsMixin
+from bot.commands_plan import PlanCommandsMixin
+from bot.commands_cot import CotCommandsMixin
 from bot.message_flow import MessageFlowMixin
 from bot.callback_flow import CallbackFlowMixin
 
@@ -103,6 +106,9 @@ class MarketBot(
     SchedulerJobsMixin,
     MarketCommandsMixin,
     JournalCommandsMixin,
+    WatchlistCommandsMixin,
+    PlanCommandsMixin,
+    CotCommandsMixin,
     MessageFlowMixin,
     CallbackFlowMixin,
 ):
@@ -181,6 +187,7 @@ class MarketBot(
         "🔔 *Alert Event* — notifikasi otomatis: digest harian + reminder sebelum rilis "
         "+ analisis aftermath + prediksi arah emas\n"
         "🌅 *Morning Brief* — ringkasan pasar otomatis setiap pagi\n"
+        "👁️ *Watchlist* — instrumen favorit (morning brief fokus + /map watchlist)\n"
         "🧠 *Konteks* — hapus riwayat percakapan yang bot ingat (privasi)"
     )
 
@@ -543,10 +550,19 @@ class MarketBot(
         ctx_count = len(history)
         ctx_label = f"🧠 Konteks: {ctx_count} percakapan tersimpan" if ctx_count else "🧠 Konteks: kosong"
 
+        # Status watchlist (dari Supabase — best-effort)
+        try:
+            watchlist = await db.get_watchlist_async(user_id)
+        except Exception as e:
+            logger.debug(f"Cek watchlist gagal: {e}")
+            watchlist = []
+        wl_status = f"👁️ Watchlist: {len(watchlist)} instrumen" if watchlist else "👁️ Watchlist: kosong"
+
         message = (
             "⚙️ *PENGATURAN*\n\n"
             f"🔔 *Alert Event:* {alert_status}\n"
             f"🌅 *Morning Brief:* {brief_status}\n"
+            f"{wl_status}\n"
             f"{ctx_label}\n\n"
             "Ketuk tombol di bawah untuk mengubah."
         )
@@ -554,6 +570,7 @@ class MarketBot(
         keyboard = [
             [InlineKeyboardButton(alert_btn, callback_data="settings_alert")],
             [InlineKeyboardButton(brief_btn, callback_data="settings_brief")],
+            [InlineKeyboardButton("👁️ Kelola Watchlist", callback_data="settings_watchlist")],
             [InlineKeyboardButton("🧹 Bersihkan Konteks", callback_data="settings_clear")],
             [InlineKeyboardButton("🔙 Kembali ke Menu", callback_data="menu")],
         ]

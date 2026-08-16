@@ -25,6 +25,7 @@ from data.database import db
 import logging
 
 from bot.handlers_utils import (
+    label_to_symbol,
     safe_reply_text,
     strip_markdown_asterisks,
 )
@@ -339,7 +340,11 @@ class MarketCommandsMixin:
             reply_markup=kb,
         )
     async def morning_brief_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handler untuk perintah /morning - Morning Brief harian."""
+        """Handler untuk perintah /morning - Morning Brief harian.
+
+        Personalisasi: bila user punya watchlist, brief difokuskan ke instrumen
+        favoritnya (tetap 1 panggilan AI — data global disajikan sebagai konteks).
+        """
         if not await self._check_command_rate_limit(update, context):
             return
         await context.bot.send_chat_action(
@@ -347,8 +352,15 @@ class MarketCommandsMixin:
             action="typing",
         )
 
+        # Watchlist user → fokus brief (best-effort; [] = brief global)
         try:
-            brief = await self._generate_morning_brief()
+            watchlist = await db.get_watchlist_async(update.effective_user.id)
+        except Exception as e:
+            logger.debug(f"Watchlist load untuk /morning gagal: {e}")
+            watchlist = []
+
+        try:
+            brief = await self._generate_morning_brief(watchlist=watchlist)
         except Exception as e:
             # JANGAN diam: user harus dapat umpan balik, bukan keheningan.
             logger.exception(f"Morning brief gagal: {e}")
@@ -446,15 +458,14 @@ class MarketCommandsMixin:
         else:
             arrow = "➖"
         return f"{label:<10} {price:>12,.4f}  {chg_txt:>8}  RSI {rsi_txt:>4}  {arrow}"
-    async def map_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handler /map — heatmap instan semua instrumen utama (tanpa AI)."""
-        if not await self._check_command_rate_limit(update, context):
-            return
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    async def _fetch_map_rows(self, instruments) -> list:
+        """Fetch satu baris heatmap per instrumen (label, yahoo_symbol) secara paralel.
 
+        Dipakai /map (daftar default) dan /map watchlist (daftar user).
+        """
         def _fetch(label: str, key: str) -> str:
             try:
-                yahoo = YAHOO_SYMBOLS.get(key)
+                yahoo = YAHOO_SYMBOLS.get(key) or key
                 if not yahoo:
                     return MarketCommandsMixin._format_map_row(label, {})
                 ohlcv = self.market.get_ohlcv_history(yahoo, period="1mo", interval="1d", limit=30)
@@ -462,12 +473,54 @@ class MarketCommandsMixin:
             except Exception:
                 return MarketCommandsMixin._format_map_row(label, {})
 
-        rows = await asyncio.gather(
-            *(asyncio.to_thread(_fetch, label, key) for label, key in self.MAP_INSTRUMENTS)
+        return await asyncio.gather(
+            *(asyncio.to_thread(_fetch, label, key) for label, key in instruments)
         )
+
+    async def map_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler /map [watchlist] — heatmap instan instrumen (tanpa AI).
+
+        /map          → semua instrumen utama (default)
+        /map watchlist → hanya pair di watchlist user (reuse logika yang sama)
+        """
+        if not await self._check_command_rate_limit(update, context):
+            return
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+        text = update.message.text or ""
+        arg = text.replace("/map", "", 1).strip().lower()
+
+        if arg == "watchlist":
+            # Varian watchlist: resolve tiap label tersimpan → (label, yahoo)
+            try:
+                labels = await db.get_watchlist_async(update.effective_user.id)
+            except Exception as e:
+                logger.debug(f"Watchlist load untuk /map gagal: {e}")
+                labels = []
+            if not labels:
+                await safe_reply_text(
+                    update.message,
+                    "👁️ Watchlistmu masih kosong. Tambahkan dulu: `/watchlist add gold`\n\n"
+                    "Atau ketik `/map` untuk heatmap semua instrumen.",
+                    parse_mode="Markdown",
+                )
+                return
+            instruments = []
+            for label in labels:
+                yahoo = label_to_symbol(label)
+                if yahoo is None:
+                    _detected, _d = self._resolve_symbol_from_text(label)
+                    yahoo = _detected
+                instruments.append((label, yahoo or ""))
+            title = "🗺️ *HEATMAP WATCHLIST*"
+        else:
+            instruments = self.MAP_INSTRUMENTS
+            title = "🗺️ *MARKET HEATMAP*"
+
+        rows = await self._fetch_map_rows(instruments)
         now_str = datetime.now(ZoneInfo(MORNING_BRIEF_TIMEZONE)).strftime("%A, %d %B %Y %H:%M")
         msg = (
-            f"🗺️ *MARKET HEATMAP*\n"
+            f"{title}\n"
             f"🕐 {now_str} WIB\n\n"
             f"```\n" + "\n".join(rows) + "\n```\n\n"
             "RSI >70 overbought • <30 oversold • 5d = perubahan 5 hari.\n"

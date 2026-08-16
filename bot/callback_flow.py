@@ -40,8 +40,14 @@ class CallbackFlowMixin:
                 chat_id=update.effective_chat.id,
                 action="typing",
             )
+            # Personalisasi: brief fokus ke watchlist user (best-effort)
             try:
-                brief = await self._generate_morning_brief()
+                watchlist = await db.get_watchlist_async(query.from_user.id)
+            except Exception as e:
+                logger.debug(f"Watchlist load untuk brief (callback) gagal: {e}")
+                watchlist = []
+            try:
+                brief = await self._generate_morning_brief(watchlist=watchlist)
             except Exception as e:
                 logger.exception(f"Morning brief (callback) gagal: {e}")
                 brief = "⚠️ Morning brief tidak dapat dibuat saat ini. Coba lagi beberapa saat."
@@ -318,6 +324,36 @@ class CallbackFlowMixin:
             await safe_edit_message_text(
                 query,
                 f"🧹 *Konteks percakapan dibersihkan.*\n\n{message}",
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+                reply_markup=kb,
+            )
+
+        elif data == "settings_watchlist":
+            # Buka submenu kelola watchlist (lihat + tombol hapus per instrumen)
+            message, kb = await self._build_watchlist_menu(update)
+            await safe_edit_message_text(
+                query,
+                message,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+                reply_markup=kb,
+            )
+
+        elif data.startswith("wl_rm:"):
+            # Hapus satu instrumen dari watchlist (tombol di submenu settings)
+            symbol = data.split(":", 1)[1]
+            user_id = query.from_user.id
+            ok = await db.remove_watchlist_symbol_async(user_id, symbol)
+            feedback = (
+                f"🗑️ *{symbol}* dihapus dari watchlist."
+                if ok else
+                "❌ Gagal menghapus (database belum dikonfigurasi?)."
+            )
+            message, kb = await self._build_watchlist_menu(update)
+            await safe_edit_message_text(
+                query,
+                f"{feedback}\n\n{message}",
                 parse_mode="Markdown",
                 disable_web_page_preview=True,
                 reply_markup=kb,

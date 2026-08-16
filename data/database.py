@@ -75,6 +75,9 @@ class Database:
         "news_predictions",
         "journal",
         "user_daily_usage",
+        "watchlists",
+        "user_profiles",
+        "cot_cache",
     ]
 
     @staticmethod
@@ -602,6 +605,179 @@ class Database:
                 counts[table] = 0
         return counts
 
+    # ===================== WATCHLIST (personal) =====================
+    # Daftar pair/instrumen favorit per user (fitur /watchlist). Tabel
+    # `watchlists` (lihat migrations/supabase.sql): PRIMARY KEY (user_id, symbol).
+    # Tanpa Supabase → semua method return False/[] (konsisten fitur lain).
+
+    @staticmethod
+    def add_watchlist_symbol(user_id: int, symbol: str) -> bool:
+        """Simpan satu simbol ke watchlist user (idempotent — upsert)."""
+        if not _is_configured():
+            return False
+        symbol = (symbol or "").strip()
+        if not symbol or not (isinstance(user_id, int) and not isinstance(user_id, bool)):
+            return False
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/watchlists"
+            data = {"user_id": user_id, "symbol": symbol}
+            headers = {**_get_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"}
+            resp = _session().post(url, json=data, headers=headers, timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error menambah watchlist: {_err_detail(e)}")
+            return False
+
+    @staticmethod
+    def remove_watchlist_symbol(user_id: int, symbol: str) -> bool:
+        """Hapus satu simbol dari watchlist user."""
+        if not _is_configured():
+            return False
+        symbol = (symbol or "").strip()
+        if not symbol:
+            return False
+        try:
+            url = (
+                f"{SUPABASE_URL}/rest/v1/watchlists?user_id=eq.{int(user_id)}"
+                f"&symbol=eq.{quote(symbol)}"
+            )
+            resp = _session().delete(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error menghapus watchlist: {_err_detail(e)}")
+            return False
+
+    @staticmethod
+    def get_watchlist(user_id: int) -> list:
+        """Semua simbol di watchlist user, urut abjad."""
+        if not _is_configured():
+            return []
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/watchlists?select=symbol&user_id=eq.{int(user_id)}&order=symbol.asc"
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            return [row["symbol"] for row in resp.json() if row.get("symbol")]
+        except Exception as e:
+            logger.error(f"Error mengambil watchlist: {_err_detail(e)}")
+            return []
+
+    @staticmethod
+    def clear_watchlist(user_id: int) -> bool:
+        """Kosongkan seluruh watchlist user (DELETE selalu pakai WHERE clause)."""
+        if not _is_configured():
+            return False
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/watchlists?user_id=eq.{int(user_id)}"
+            resp = _session().delete(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error mengosongkan watchlist: {_err_detail(e)}")
+            return False
+
+    # ===================== USER PROFILE (trading plan) =====================
+    # Profil risk & preferensi trading per user (fitur /plan). Tabel
+    # `user_profiles` (lihat migrations/supabase.sql), PRIMARY KEY user_id.
+
+    @staticmethod
+    def upsert_user_profile(user_id: int, profile: dict) -> bool:
+        """Simpan/update profil user (merge-duplicates — kolom lain tidak hilang)."""
+        if not _is_configured():
+            return False
+        if not (isinstance(user_id, int) and not isinstance(user_id, bool)):
+            return False
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/user_profiles"
+            data = {"user_id": user_id, **profile}
+            headers = {**_get_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"}
+            resp = _session().post(url, json=data, headers=headers, timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error menyimpan user profile: {_err_detail(e)}")
+            return False
+
+    @staticmethod
+    def get_user_profile(user_id: int) -> dict:
+        """Profil user; {} bila belum ada / gagal."""
+        if not _is_configured():
+            return {}
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/user_profiles?select=*&user_id=eq.{int(user_id)}&limit=1"
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            rows = resp.json()
+            return rows[0] if rows else {}
+        except Exception as e:
+            logger.error(f"Error mengambil user profile: {_err_detail(e)}")
+            return {}
+
+    @staticmethod
+    def delete_user_profile(user_id: int) -> bool:
+        """Hapus profil user (reset /plan)."""
+        if not _is_configured():
+            return False
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/user_profiles?user_id=eq.{int(user_id)}"
+            resp = _session().delete(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error menghapus user profile: {_err_detail(e)}")
+            return False
+
+    # ===================== COT CACHE (CFTC report) =====================
+    # Cache laporan COT per instrumen (fitur /cot). Tabel `cot_cache`
+    # (lihat migrations/supabase.sql): PRIMARY KEY market_key. Data disimpan
+    # sebagai JSONB bersama expires_at (7 hari) — CFTC hanya rilis 1x/minggu,
+    # jadi tidak perlu download ulang dalam seminggu.
+
+    @staticmethod
+    def get_cot_cache(market_key: str) -> dict:
+        """Data COT ter-cache untuk satu market ({} bila tidak ada/expired)."""
+        if not _is_configured():
+            return {}
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/cot_cache?select=*&market_key=eq.{quote(market_key)}&limit=1"
+            resp = _session().get(url, headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            rows = resp.json()
+            if not rows:
+                return {}
+            row = rows[0]
+            expires = row.get("expires_at")
+            if expires:
+                exp_dt = datetime.fromisoformat(str(expires).replace("Z", "+00:00"))
+                if exp_dt <= datetime.now(timezone.utc):
+                    return {}
+            return row
+        except Exception as e:
+            logger.error(f"Error mengambil cot cache: {_err_detail(e)}")
+            return {}
+
+    @staticmethod
+    def set_cot_cache(market_key: str, data: dict, ttl_seconds: int = 7 * 24 * 3600) -> bool:
+        """Simpan data COT satu market ke cache (upsert, TTL default 7 hari)."""
+        if not _is_configured():
+            return False
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/cot_cache"
+            payload = {
+                "market_key": market_key,
+                "data": data,
+                "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            headers = {**_get_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"}
+            resp = _session().post(url, json=payload, headers=headers, timeout=10)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Error menyimpan cot cache: {_err_detail(e)}")
+            return False
+
     # ===================== ASYNC WRAPPERS =====================
     # Handler Telegram (python-telegram-bot 22.x) berjalan di event loop asyncio.
     # Varian *_async memindahkan operasi sinkron ke thread pool sehingga tidak
@@ -700,6 +876,42 @@ class Database:
     @staticmethod
     async def get_daily_usage_async(usage_date: str = None) -> dict:
         return await asyncio.to_thread(Database.get_daily_usage, usage_date)
+
+    @staticmethod
+    async def add_watchlist_symbol_async(user_id: int, symbol: str) -> bool:
+        return await asyncio.to_thread(Database.add_watchlist_symbol, user_id, symbol)
+
+    @staticmethod
+    async def remove_watchlist_symbol_async(user_id: int, symbol: str) -> bool:
+        return await asyncio.to_thread(Database.remove_watchlist_symbol, user_id, symbol)
+
+    @staticmethod
+    async def get_watchlist_async(user_id: int) -> list:
+        return await asyncio.to_thread(Database.get_watchlist, user_id)
+
+    @staticmethod
+    async def clear_watchlist_async(user_id: int) -> bool:
+        return await asyncio.to_thread(Database.clear_watchlist, user_id)
+
+    @staticmethod
+    async def upsert_user_profile_async(user_id: int, profile: dict) -> bool:
+        return await asyncio.to_thread(Database.upsert_user_profile, user_id, profile)
+
+    @staticmethod
+    async def get_user_profile_async(user_id: int) -> dict:
+        return await asyncio.to_thread(Database.get_user_profile, user_id)
+
+    @staticmethod
+    async def delete_user_profile_async(user_id: int) -> bool:
+        return await asyncio.to_thread(Database.delete_user_profile, user_id)
+
+    @staticmethod
+    async def get_cot_cache_async(market_key: str) -> dict:
+        return await asyncio.to_thread(Database.get_cot_cache, market_key)
+
+    @staticmethod
+    async def set_cot_cache_async(market_key: str, data: dict, ttl_seconds: int = 7 * 24 * 3600) -> bool:
+        return await asyncio.to_thread(Database.set_cot_cache, market_key, data, ttl_seconds)
 
 
 db = Database()
