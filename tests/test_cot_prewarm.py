@@ -301,6 +301,19 @@ class TestCotStatusText(unittest.TestCase):
         # 'at' (UTC) dikonversi ke WIB (+7) → 16 Agu 04:05
         self.assertIn("04:05", txt)
 
+    def test_notified_date_shown(self):
+        bot_data = {
+            "cot_prewarm_stats": {"ok": 0, "skipped": 0, "failed": 5, "at": "2026-08-15T21:05:00+00:00"},
+            "cot_prewarm_notified": "2026-08-16",
+        }
+        txt = SchedulerJobsMixin._cot_prewarm_status_text(bot_data)
+        self.assertIn("Notif admin gagal terakhir", txt)
+        self.assertIn("16 Aug 2026", txt)
+
+    def test_no_notified_no_line(self):
+        txt = SchedulerJobsMixin._cot_prewarm_status_text({"cot_prewarm_stats": {"ok": 1}})
+        self.assertNotIn("Notif admin", txt)
+
     def test_disabled(self):
         with mock.patch("bot.scheduler_jobs.COT_PREWARM_ENABLED", False):
             txt = SchedulerJobsMixin._cot_prewarm_status_text({})

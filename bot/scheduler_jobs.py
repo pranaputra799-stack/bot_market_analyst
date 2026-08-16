@@ -1561,10 +1561,23 @@ class SchedulerJobsMixin:
         ok = stats.get("ok", 0)
         skipped = stats.get("skipped", 0)
         failed = stats.get("failed", 0)
-        return (
-            f"{schedule}\n"
-            f"  • Terakhir {at_txt} — 🆕 {ok} di-cache · ⏭ {skipped} segar · ❌ {failed} gagal"
-        )
+        lines = [
+            schedule,
+            f"  • Terakhir {at_txt} — 🆕 {ok} di-cache · ⏭ {skipped} segar · ❌ {failed} gagal",
+        ]
+
+        # Tanggal notif admin terakhir saat pre-warm GAGAL TOTAL (rate-limit
+        # 1x/hari — kunci cot_prewarm_notified). Berguna memastikan admin masih
+        # tahu kalau CFTC bermasalah, walau run berikutnya gagal diam-diam.
+        notified = bot_data.get("cot_prewarm_notified")
+        if notified:
+            try:
+                notif_txt = datetime.strptime(notified, "%Y-%m-%d").strftime("%d %b %Y")
+            except ValueError:
+                notif_txt = str(notified)
+            lines.append(f"  • 🔔 Notif admin gagal terakhir: {notif_txt} (UTC)")
+
+        return "\n".join(lines)
 
     @staticmethod
     def _is_cot_prewarm_window(now_local: datetime) -> bool:
