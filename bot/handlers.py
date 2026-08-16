@@ -405,6 +405,10 @@ class MarketBot(
             analysis_status = "  • ⬜ Multi-Agent: Tidak tersedia"
         cache_stats = cache.get_stats()
 
+        # Jadwal & statistik run terakhir pre-warm COT (dari bot_data — ditulis
+        # oleh job prewarm_cot_cache; tanpa run → 'Belum pernah berjalan').
+        cot_prewarm_status = self._cot_prewarm_status_text(context.bot_data)
+
         status_msg = STATUS_MESSAGE_TEMPLATE.format(
             bot_status="✅ ONLINE",
             uptime=uptime_str,
@@ -413,6 +417,7 @@ class MarketBot(
             data_sources_status=data_status,
             cache_stats=f"{cache_stats['active_entries']} entries aktif",
             analysis_engine_status=analysis_status,
+            cot_prewarm_status=cot_prewarm_status,
             server_time=datetime.now(ZoneInfo(MORNING_BRIEF_TIMEZONE)).strftime("%Y-%m-%d %H:%M:%S"),
         )
 

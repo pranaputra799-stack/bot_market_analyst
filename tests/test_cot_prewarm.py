@@ -255,6 +255,47 @@ class TestCOTPrewarm(unittest.TestCase):
             self.assertEqual(m_notify.await_count, 1)
 
 
+class TestCotStatusText(unittest.TestCase):
+    """Formatter jadwal & statistik pre-warm untuk /status (murni)."""
+
+    def test_no_run_yet(self):
+        txt = SchedulerJobsMixin._cot_prewarm_status_text({})
+        self.assertIn("Aktif", txt)
+        self.assertIn("04:00", txt)
+        self.assertIn("Belum pernah berjalan", txt)
+
+    def test_with_stats(self):
+        bot_data = {
+            "cot_prewarm_stats": {
+                "ok": 31, "skipped": 1, "failed": 0,
+                "at": "2026-08-15T21:05:00+00:00",
+            }
+        }
+        txt = SchedulerJobsMixin._cot_prewarm_status_text(bot_data)
+        self.assertIn("31 di-cache", txt)
+        self.assertIn("1 segar", txt)
+        self.assertIn("0 gagal", txt)
+        self.assertIn("Terakhir", txt)
+        # 'at' (UTC) dikonversi ke WIB (+7) → 16 Agu 04:05
+        self.assertIn("04:05", txt)
+
+    def test_disabled(self):
+        with mock.patch("bot.scheduler_jobs.COT_PREWARM_ENABLED", False):
+            txt = SchedulerJobsMixin._cot_prewarm_status_text({})
+        self.assertIn("Nonaktif", txt)
+
+    def test_all_days_shows_every_day(self):
+        with mock.patch("bot.scheduler_jobs.COT_PREWARM_DAYS", [1, 2, 3, 4, 5, 6, 7]):
+            txt = SchedulerJobsMixin._cot_prewarm_status_text({})
+        self.assertIn("Setiap hari", txt)
+
+    def test_custom_days_listed(self):
+        with mock.patch("bot.scheduler_jobs.COT_PREWARM_DAYS", [1, 6]):
+            txt = SchedulerJobsMixin._cot_prewarm_status_text({})
+        self.assertIn("Senin", txt)
+        self.assertIn("Sabtu", txt)
+
+
 class TestCotQuickActions(unittest.TestCase):
     """Tombol quick action di pesan /cot (callback `cot:<alias>`)."""
 

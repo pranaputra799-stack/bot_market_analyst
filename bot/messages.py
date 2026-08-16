@@ -133,6 +133,8 @@ STATUS_MESSAGE_TEMPLATE = """
 
 💾 *Cache:* {cache_stats}
 
+📊 *COT Pre-warm:* {cot_prewarm_status}
+
 📅 *Waktu (WIB):* {server_time}
 """
 

@@ -19,7 +19,9 @@ from config.settings import (
     NEWS_PREDICTION_SETTLE_MINUTES,
     NEWS_PREDICTION_MIN_MOVE_PCT,
     NEWS_PREDICTION_MAX_PER_RUN,
+    COT_PREWARM_ENABLED,
     COT_PREWARM_HOUR,
+    COT_PREWARM_MINUTE,
     COT_PREWARM_DAYS,
 )
 from telegram import (
@@ -1522,6 +1524,48 @@ class SchedulerJobsMixin:
             parse_mode="Markdown",
             disable_web_page_preview=True,
         )
+    @staticmethod
+    def _cot_prewarm_status_text(bot_data: dict) -> str:
+        """Ringkasan jadwal + run terakhir pre-warm COT untuk /status.
+
+        - Jadwal: enabled/hari/jam dari config (zona MORNING_BRIEF_TIMEZONE).
+        - Statistik run terakhir dari bot_data["cot_prewarm_stats"] (ditulis
+          oleh prewarm_cot_cache). Tanpa statistik → 'Belum pernah berjalan'.
+        Murni (tanpa I/O) — mudah di-test.
+        """
+        day_names = {
+            1: "Senin", 2: "Selasa", 3: "Rabu", 4: "Kamis",
+            5: "Jumat", 6: "Sabtu", 7: "Minggu",
+        }
+        if not COT_PREWARM_ENABLED:
+            schedule = "Nonaktif (`COT_PREWARM_ENABLED=false`)"
+        else:
+            if COT_PREWARM_DAYS == [1, 2, 3, 4, 5, 6, 7]:
+                day_txt = "Setiap hari"
+            else:
+                day_txt = ", ".join(day_names.get(d, str(d)) for d in COT_PREWARM_DAYS)
+            schedule = (
+                f"Aktif — {COT_PREWARM_HOUR:02d}:{COT_PREWARM_MINUTE:02d} "
+                f"({day_txt})"
+            )
+
+        stats = bot_data.get("cot_prewarm_stats") or {}
+        if not stats:
+            return f"{schedule}\n  • Belum pernah berjalan sejak start"
+        at_txt = stats.get("at", "")
+        try:
+            at_dt = datetime.fromisoformat(at_txt).astimezone(ZoneInfo(MORNING_BRIEF_TIMEZONE))
+            at_txt = at_dt.strftime("%d %b %H:%M")
+        except Exception:
+            pass
+        ok = stats.get("ok", 0)
+        skipped = stats.get("skipped", 0)
+        failed = stats.get("failed", 0)
+        return (
+            f"{schedule}\n"
+            f"  • Terakhir {at_txt} — 🆕 {ok} di-cache · ⏭ {skipped} segar · ❌ {failed} gagal"
+        )
+
     @staticmethod
     def _is_cot_prewarm_window(now_local: datetime) -> bool:
         """Jendela pre-warm COT: hari + jam terkonfigurasi (zona lokal).

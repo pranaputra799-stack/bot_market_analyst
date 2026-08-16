@@ -418,7 +418,7 @@ curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
 | `/plan clear` | 📋 Hapus profil trading plan |
 | `/cot <instrumen>` | 📊 Laporan COT (CFTC): posisi net speculative & commercial + perubahan mingguan + interpretasi. 33 instrumen — contoh: `/cot gold`, `/cot eur`, `/cot oil`, `/cot btc`, `/cot dxy`, `/cot dow`, `/cot us2y`, `/cot us5y`, `/cot us10y`, `/cot us30y`, `/cot fed funds`, `/cot sofr`, `/cot sp400`, `/cot russell`, `/cot vix` (butuh tabel `cot_cache`). `/cot` tanpa argumen menampilkan **tombol quick action** 10 instrumen populer (Gold, Euro, Oil, BTC, DXY, 10Y, S&P 500, Corn, SOFR, VIX) |
 | `/settings` | ⚙️ Pengaturan bot — toggle alert event, morning brief, kelola **watchlist**, & hapus konteks dalam satu menu |
-| `/status` | Status sistem, AI provider, dan data source |
+| `/status` | Status sistem, AI provider, data source, **+ jadwal & statistik pre-warm COT terakhir** |
 | `/about` | Informasi bot |
 | `/broadcast <pesan>` | 🔒 **Khusus admin** (`ADMIN_USER_IDS`) — preview jumlah penerima, lalu `/broadcast send <pesan>` untuk mengirim pengumuman ke semua subscriber |
 | `/usage` | 🔒 **Khusus admin** — laporan pemakaian AI (token & request per provider) |
