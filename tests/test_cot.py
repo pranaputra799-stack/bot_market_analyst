@@ -54,13 +54,28 @@ SAMPLE_CSV = (
     '"CRUDE OIL, LIGHT SWEET - NEW YORK MERCANTILE EXCHANGE",67651,CL,2026-08-11,900000,'
     "500000,400000,100000,300000,400000,900000,900000,0,0,30000,-20000,"
     "56,44,33,44,0,0,300,250,100,200,250,500,500,100,10,20,15,25\n"
+    "RUSSELL E-MINI - CHICAGO MERCANTILE EXCHANGE,95426,RM,2026-08-11,419222,"
+    "220000,170000,20000,120000,260000,410000,450000,9000,-30000,15000,-8000,"
+    "52,41,29,62,2,-7,170,130,20,80,170,250,300,60,10,20,15,25\n"
+    "RUSSELL 2000 ANNUAL DIVIDEND - CHICAGO MERCANTILE EXCHANGE,95500,R2D,2026-08-11,44200,"
+    "20000,18000,3000,15000,20000,38000,41000,6200,3200,1000,-500,"
+    "45,41,34,45,14,7,80,70,10,40,60,120,130,30,10,20,15,25\n"
+    "DJIA Consolidated - CHICAGO BOARD OF TRADE,13560,DJ,2026-08-11,89844,"
+    "45000,30000,8000,20000,45000,73000,83000,16844,6844,5000,-2000,"
+    "50,33,22,50,19,8,90,70,20,40,90,130,160,30,10,20,15,25\n"
+    "DJIA x $5 - CHICAGO BOARD OF TRADE,13560,DJX,2026-08-11,60000,"
+    "30000,20000,5000,15000,30000,50000,55000,10000,5000,3000,-1000,"
+    "50,33,25,50,17,8,70,50,15,30,60,100,110,25,10,20,15,25\n"
+    "MICRO E-MINI DJIA (x$0.5) - CHICAGO BOARD OF TRADE,13890,MYM,2026-08-11,20000,"
+    "10000,8000,2000,5000,10000,17000,18000,3000,2000,500,-200,"
+    "50,40,25,50,15,10,40,30,10,20,40,60,70,15,10,20,15,25\n"
 )
 
 
 class TestParseLegacyCsv(unittest.TestCase):
     def test_parses_rows_with_expected_keys(self):
         rows = parse_legacy_csv(SAMPLE_CSV)
-        self.assertEqual(len(rows), 6)
+        self.assertEqual(len(rows), 11)
         gold = [r for r in rows if r["name"].startswith("GOLD")][0]
         self.assertEqual(gold["oi"], 500000)
         self.assertEqual(gold["nc_long"], 300000)
@@ -96,8 +111,12 @@ class TestResolveInstrument(unittest.TestCase):
         self.assertEqual(resolve_instrument("sofr")["keywords"], ["sofr 3m"])
         self.assertEqual(resolve_instrument("sofr1m")["keywords"], ["sofr 1m"])
         self.assertEqual(resolve_instrument("sp400")["keywords"], ["s&p 400"])
-        self.assertEqual(resolve_instrument("russell")["keywords"], ["russell 2000"])
+        self.assertEqual(resolve_instrument("russell")["keywords"], ["russell e-mini"])
         self.assertEqual(resolve_instrument("vix")["keywords"], ["vix"])
+        # E-mini Dow (DJIA)
+        self.assertEqual(resolve_instrument("dow")["keywords"], ["djia"])
+        self.assertEqual(resolve_instrument("DJIA")["keywords"], ["djia"])
+        self.assertEqual(resolve_instrument("e-mini dow")["keywords"], ["djia"])
         # Alias lama tetap bekerja
         self.assertEqual(resolve_instrument("10y")["keywords"], ["ust 10y"])
         self.assertEqual(resolve_instrument("30y")["keywords"], ["ust bond"])
@@ -147,6 +166,21 @@ class TestExtractMarket(unittest.TestCase):
         self.assertIsNotNone(data)
         self.assertIn("CRUDE OIL", data["market_name"])
         self.assertEqual(data["open_interest"], 900000)
+
+    def test_russell_picks_eminir_contract_not_dividend_index(self):
+        """Regresi: keyword lama 'russell 2000' cocok dengan 'RUSSELL 2000
+        ANNUAL DIVIDEND' (indeks dividen) — harusnya kontrak 'RUSSELL E-MINI'."""
+        cfg = resolve_instrument("russell")
+        data = extract_market(self.rows, cfg)
+        self.assertIsNotNone(data)
+        self.assertEqual(data["market_name"], "RUSSELL E-MINI - CHICAGO MERCANTILE EXCHANGE")
+        self.assertNotIn("DIVIDEND", data["market_name"])
+
+    def test_dow_picks_djia_contract(self):
+        cfg = resolve_instrument("dow")
+        data = extract_market(self.rows, cfg)
+        self.assertIsNotNone(data)
+        self.assertIn("DJIA", data["market_name"])
 
     def test_missing_market_returns_none(self):
         cfg = {"keywords": ["soybeans"], "display": "Soybean Futures"}

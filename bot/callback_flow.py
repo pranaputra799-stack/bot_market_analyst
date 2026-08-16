@@ -13,6 +13,7 @@ from telegram import (
 )
 import asyncio
 from data.conversation_memory import get_context, clear
+from data.cot import resolve_instrument
 from data.database import db
 import logging
 
@@ -357,6 +358,40 @@ class CallbackFlowMixin:
                 parse_mode="Markdown",
                 disable_web_page_preview=True,
                 reply_markup=kb,
+            )
+
+        elif data.startswith("cot:"):
+            # Quick action instrumen COT (tombol di pesan /cot): tampilkan
+            # laporan untuk instrumen itu — logika identik dengan /cot <simbol>.
+            alias = data.split(":", 1)[1]
+            config = resolve_instrument(alias)
+            if not config:
+                await safe_edit_message_text(
+                    query,
+                    f"❌ Instrumen *{alias}* tidak dikenali di COT.",
+                    parse_mode="Markdown",
+                )
+                return
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id,
+                action="typing",
+            )
+            try:
+                message = await self._cot_report_text(config)
+            except Exception as e:
+                logger.warning(f"COT quick action {alias} gagal: {e}")
+                message = (
+                    f"❌ Gagal memuat laporan COT untuk *{config['display']}*. "
+                    f"Coba lagi beberapa saat."
+                )
+            # Keyboard quick action tetap tampil agar bisa pindah instrumen
+            # tanpa mengetik /cot lagi (callback tidak punya argumen teks).
+            await safe_edit_message_text(
+                query,
+                message,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+                reply_markup=self._cot_quick_keyboard(),
             )
 
         elif data == "menu":

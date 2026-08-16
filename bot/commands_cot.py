@@ -8,7 +8,7 @@ di Supabase 7 hari per instrumen (CFTC rilis 1x/minggu). Interpretasi AI opsiona
 import asyncio
 import logging
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from bot.handlers_utils import (
@@ -48,41 +48,46 @@ class CotCommandsMixin:
         "`/cot us2y` — 2-Year T-Note\\n"
         "`/cot sofr` — SOFR 3M\\n"
         "`/cot fed funds` — Fed Funds\\n"
-        "`/cot sp400` — S&P 400 Midcap\\n\\n"
+        "`/cot sp400` — S&P 400 Midcap\\n"
+        "`/cot dow` — DJIA (E-mini Dow)\\n"
+        "`/cot russell` — Russell 2000 E-mini\\n\\n"
         "⚠️ COT adalah data futures (bukan spot forex) — pair tanpa kontrak "
         "futures AS akan ditolak dengan disclaimer."
     )
+
+    # Instrumen populer untuk tombol quick action di pesan /cot (callback `cot:<alias>`)
+    COT_QUICK_ACTIONS = [
+        ("🥇 Gold", "gold"),
+        ("💶 Euro", "eur"),
+        ("🛢 Oil", "oil"),
+        ("🪙 Bitcoin", "btc"),
+        ("💵 DXY", "dxy"),
+        ("🏛 10Y Note", "us10y"),
+        ("💱 S&P 500", "sp500"),
+        ("🌾 Corn", "corn"),
+        ("🔥 SOFR", "sofr"),
+        ("😨 VIX", "vix"),
+    ]
+
+    def _cot_quick_keyboard(self) -> InlineKeyboardMarkup:
+        """Tombol quick action instrumen COT populer (callback `cot:<alias>`)."""
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(label, callback_data=f"cot:{alias}")
+             for label, alias in self.COT_QUICK_ACTIONS[i:i + 2]]
+            for i in range(0, len(self.COT_QUICK_ACTIONS), 2)
+        ])
 
     def _cot_cache_key(self, config: dict) -> str:
         """Kunci cache Supabase per instrumen (TTL 7 hari di DB)."""
         return "cot:" + "_".join(config.get("keywords") or [])
 
-    async def cot_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handler /cot [simbol]."""
-        if not await self._check_command_rate_limit(update, context):
-            return
-        text = update.message.text or ""
-        arg = text.replace("/cot", "", 1).strip()
-        if not arg or arg.lower() in ("help", "bantuan"):
-            await safe_reply_text(update.message, self.COT_USAGE, parse_mode="Markdown")
-            return
+    async def _cot_report_text(self, config: dict) -> str:
+        """Bangun teks laporan COT untuk satu instrumen (fetch → cache → AI).
 
-        config = resolve_instrument(arg)
-        if not config:
-            await safe_reply_text(
-                update.message,
-                f"❌ Instrumen *{arg}* tidak dikenali di COT.\\n\\n"
-                f"Yang tersedia: gold, silver, eur, gbp, jpy, chf, cad, aud, "
-                f"nzd, mxn, oil, brent, copper, btc, dxy, s&p500, nasdaq, "
-                f"nikkei, us2y, us5y, us10y, us30y, fed funds, sofr, sp400, "
-                f"russell, vix, corn, wheat, soybean, natural gas.\\n\\n"
-                f"Contoh: `/cot gold`, `/cot eur`.",
-                parse_mode="Markdown",
-            )
-            return
-
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
+        Dipakai bersama oleh /cot dan tombol quick action (callback `cot:`),
+        sehingga perilakunya identik. Selalu mengembalikan teks Markdown;
+        diawali pesan error bila data tidak tersedia.
+        """
         cache_key = self._cot_cache_key(config)
 
         # 1) Cek cache Supabase (7 hari) — data + interpretasi AI
@@ -104,16 +109,13 @@ class CotCommandsMixin:
                 tff_rows = await asyncio.to_thread(fetch_tff_rows)
                 data = extract_market(tff_rows, config) if tff_rows else None
             if not data:
-                await safe_reply_text(
-                    update.message,
+                return (
                     f"ℹ️ *{config['display']}* tidak tersedia di laporan COT "
-                    f"terbaru.\\n\\n"
+                    f"terbaru.\n\n"
                     f"⚠️ COT adalah data *futures* AS, bukan spot forex — "
                     f"instrumen tanpa kontrak futures AS tidak punya laporan. "
-                    f"Coba: `/cot gold`, `/cot eur`, `/cot oil`.",
-                    parse_mode="Markdown",
+                    f"Coba: `/cot gold`, `/cot eur`, `/cot oil`."
                 )
-                return
             # Simpan ke cache 7 hari (data diformat JSON-safe)
             try:
                 await db.set_cot_cache_async(cache_key, cot_data_to_json(data))
@@ -134,6 +136,39 @@ class CotCommandsMixin:
         message = format_cot_message(data)
         if ai_text:
             message += f"\n\n🧠 *Interpretasi AI:*\n{ai_text}\n"
+        return message
+
+    async def cot_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler /cot [simbol]."""
+        if not await self._check_command_rate_limit(update, context):
+            return
+        text = update.message.text or ""
+        arg = text.replace("/cot", "", 1).strip()
+        if not arg or arg.lower() in ("help", "bantuan"):
+            await safe_reply_text(
+                update.message,
+                self.COT_USAGE,
+                parse_mode="Markdown",
+                reply_markup=self._cot_quick_keyboard(),
+            )
+            return
+
+        config = resolve_instrument(arg)
+        if not config:
+            await safe_reply_text(
+                update.message,
+                f"❌ Instrumen *{arg}* tidak dikenali di COT.\n\n"
+                f"Yang tersedia: gold, silver, eur, gbp, jpy, chf, cad, aud, "
+                f"nzd, mxn, oil, brent, copper, btc, dxy, s&p500, nasdaq, dow, "
+                f"nikkei, us2y, us5y, us10y, us30y, fed funds, sofr, sp400, "
+                f"russell, vix, corn, wheat, soybean, natural gas.\n\n"
+                f"Contoh: `/cot gold`, `/cot eur`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        message = await self._cot_report_text(config)
         await safe_reply_text(update.message, message, parse_mode="Markdown")
 
     async def _cot_ai_interpretation(self, data: dict) -> str:

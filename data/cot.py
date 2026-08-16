@@ -125,6 +125,9 @@ COT_INSTRUMENTS: List[Dict] = [
     {"aliases": ["nasdaq", "nq", "nasdaq 100"],
      "keywords": ["nasdaq 100"], "display": "NASDAQ 100 E-mini Futures (CME)",
      "prefer": ["chicago mercantile exchange"]},
+    {"aliases": ["dow", "djia", "e-mini dow", "emini dow", "dow jones", "ym"],
+     "keywords": ["djia"], "display": "DJIA (E-mini Dow) Futures (CBOT)",
+     "prefer": ["chicago board of trade"], "avoid": ["micro", "real estate"]},
     {"aliases": ["nikkei", "n225", "nikkei 225"],
      "keywords": ["nikkei stock average"], "display": "Nikkei 225 Futures (CME)",
      "prefer": ["chicago mercantile exchange"], "avoid": ["mini"]},
@@ -153,7 +156,10 @@ COT_INSTRUMENTS: List[Dict] = [
      "keywords": ["s&p 400"], "display": "S&P 400 Midcap E-mini Futures (CME)",
      "prefer": ["chicago mercantile exchange"]},
     {"aliases": ["russell", "russell 2000", "rty"],
-     "keywords": ["russell 2000"], "display": "Russell 2000 E-mini Futures (CME)",
+     # 'russell e-mini' = kontrak utama E-mini Russell 2000 ("RUSSELL E-MINI - CME").
+     # Jangan pakai keyword 'russell 2000': itu cocok dengan 'RUSSELL 2000 ANNUAL
+     # DIVIDEND' (indeks dividen, bukan kontrak) dan micro contract.
+     "keywords": ["russell e-mini"], "display": "Russell 2000 E-mini Futures (CME)",
      "prefer": ["chicago mercantile exchange"], "avoid": ["dividend", "1000", "micro"]},
     {"aliases": ["vix", "volatility"],
      "keywords": ["vix"], "display": "VIX Futures (CBOE)",

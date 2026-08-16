@@ -416,7 +416,7 @@ curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
 | `/plan setup` | 📋 Isi/update profil trading plan via alur **tanya-jawab** (modal → risiko % → gaya → pair favorit → jam). Sekali isi juga didukung: `/plan setup 1000 2 swing XAU/USD,EUR/USD 09:00-16:00` |
 | `/plan` | 📋 Generate rencana trading mingguan personal — pair layak, entry/SL/TP, R:R, ukuran posisi (1 call AI/minggu, di-cache) |
 | `/plan clear` | 📋 Hapus profil trading plan |
-| `/cot <instrumen>` | 📊 Laporan COT (CFTC): posisi net speculative & commercial + perubahan mingguan + interpretasi. 32 instrumen — contoh: `/cot gold`, `/cot eur`, `/cot oil`, `/cot btc`, `/cot dxy`, `/cot us2y`, `/cot us5y`, `/cot us10y`, `/cot us30y`, `/cot fed funds`, `/cot sofr`, `/cot sp400`, `/cot russell`, `/cot vix` (butuh tabel `cot_cache`) |
+| `/cot <instrumen>` | 📊 Laporan COT (CFTC): posisi net speculative & commercial + perubahan mingguan + interpretasi. 33 instrumen — contoh: `/cot gold`, `/cot eur`, `/cot oil`, `/cot btc`, `/cot dxy`, `/cot dow`, `/cot us2y`, `/cot us5y`, `/cot us10y`, `/cot us30y`, `/cot fed funds`, `/cot sofr`, `/cot sp400`, `/cot russell`, `/cot vix` (butuh tabel `cot_cache`). `/cot` tanpa argumen menampilkan **tombol quick action** 10 instrumen populer (Gold, Euro, Oil, BTC, DXY, 10Y, S&P 500, Corn, SOFR, VIX) |
 | `/settings` | ⚙️ Pengaturan bot — toggle alert event, morning brief, kelola **watchlist**, & hapus konteks dalam satu menu |
 | `/status` | Status sistem, AI provider, dan data source |
 | `/about` | Informasi bot |

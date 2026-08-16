@@ -19,7 +19,7 @@ from bot.scheduler_jobs import SchedulerJobsMixin
 
 
 class _FakeMessage:
-    def __init__(self, text):
+    def __init__(self, text=None):
         self.text = text
         self.replies = []
 
@@ -253,6 +253,69 @@ class TestCOTPrewarm(unittest.TestCase):
             # Run 2 di hari yang sama: tidak notif lagi
             asyncio.run(bot.prewarm_cot_cache(app))
             self.assertEqual(m_notify.await_count, 1)
+
+
+class TestCotQuickActions(unittest.TestCase):
+    """Tombol quick action di pesan /cot (callback `cot:<alias>`)."""
+
+    def test_usage_has_quick_keyboard(self):
+        bot = _mk_bot()
+        bot._daily_usage = {}  # dipakai _check_command_rate_limit
+        upd = _FakeUpdate("/cot")
+        ctx = _FakeContext()
+        with mock.patch.object(bot, "_check_command_rate_limit", new=mock.AsyncMock(return_value=True)):
+            asyncio.run(bot.cot_command(upd, ctx))
+        _, kwargs = upd.message.replies[0]
+        kb = kwargs.get("reply_markup")
+        self.assertIsNotNone(kb, "pesan /cot harus punya keyboard quick action")
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        self.assertIn("cot:gold", callbacks)
+        self.assertIn("cot:eur", callbacks)
+        self.assertIn("cot:vix", callbacks)
+
+    @staticmethod
+    def _fake_cot_update(data: str):
+        """Update tiruan untuk callback `cot:<alias>` — edit_message_text
+        merekam pesan ke message.replies seperti reply_text."""
+        msg = _FakeMessage()
+
+        async def _edit(text, **kwargs):
+            msg.replies.append((text, kwargs))
+            return text
+
+        q = type("Q", (), {})()
+        q.data = data
+        q.from_user = type("U", (), {"id": 9999})()
+        q.message = msg
+        q.answer = mock.AsyncMock()
+        q.edit_message_text = _edit  # instance attr — tidak ter-bind, signature (text, **kwargs)
+        return type("U", (), {
+            "callback_query": q,
+            "effective_chat": type("C", (), {"id": 777})(),
+        })()
+
+    def test_quick_action_reports_known_instrument(self):
+        bot = _mk_bot()
+        # _cot_report_text di-stub → callback hanya mendelegasikan + render
+        expected = "📊 laporan COT Gold"
+        with mock.patch.object(bot, "_cot_report_text", new=mock.AsyncMock(return_value=expected)), \
+             mock.patch.object(bot, "_cot_quick_keyboard") as m_kb:
+            upd = self._fake_cot_update("cot:gold")
+            ctx = _FakeContext()
+            asyncio.run(bot.handle_callback(upd, ctx))
+            m_kb.assert_called_once()
+            text, _ = upd.callback_query.message.replies[0]
+            self.assertIn("laporan COT Gold", text)
+
+    def test_quick_action_unknown_instrument(self):
+        bot = _mk_bot()
+        with mock.patch.object(bot, "_cot_report_text", new=mock.AsyncMock()) as m:
+            upd = self._fake_cot_update("cot:zzzz")
+            ctx = _FakeContext()
+            asyncio.run(bot.handle_callback(upd, ctx))
+            m.assert_not_awaited()
+            text, _ = upd.callback_query.message.replies[0]
+            self.assertIn("tidak dikenali", text)
 
 
 class TestCotRefreshCommand(unittest.TestCase):
