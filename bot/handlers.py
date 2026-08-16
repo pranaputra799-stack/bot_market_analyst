@@ -563,11 +563,15 @@ class MarketBot(
             watchlist = []
         wl_status = f"👁️ Watchlist: {len(watchlist)} instrumen" if watchlist else "👁️ Watchlist: kosong"
 
+        # Status COT pre-warm (baris jadwal saja — detail via tombol)
+        cot_line = self._cot_prewarm_status_text(context.bot_data).splitlines()[0]
+
         message = (
             "⚙️ *PENGATURAN*\n\n"
             f"🔔 *Alert Event:* {alert_status}\n"
             f"🌅 *Morning Brief:* {brief_status}\n"
             f"{wl_status}\n"
+            f"📊 *COT Pre-warm:* {cot_line}\n"
             f"{ctx_label}\n\n"
             "Ketuk tombol di bawah untuk mengubah."
         )
@@ -576,6 +580,7 @@ class MarketBot(
             [InlineKeyboardButton(alert_btn, callback_data="settings_alert")],
             [InlineKeyboardButton(brief_btn, callback_data="settings_brief")],
             [InlineKeyboardButton("👁️ Kelola Watchlist", callback_data="settings_watchlist")],
+            [InlineKeyboardButton("📊 COT Pre-warm", callback_data="settings_cot")],
             [InlineKeyboardButton("🧹 Bersihkan Konteks", callback_data="settings_clear")],
             [InlineKeyboardButton("🔙 Kembali ke Menu", callback_data="menu")],
         ]

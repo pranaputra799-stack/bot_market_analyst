@@ -402,7 +402,7 @@ curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
 | `/sentimen` | Sentimen retail trader OANDA — Position/Order Book, hanya pair forex (contoh: `/sentimen eurusd`) |
 | `/calendar` | Kalender ekonomi high-impact bulan ini |
 | `/alert on\|off` | Notifikasi event ekonomi otomatis — digest harian, reminder sebelum rilis, **+ analisis aftermath (dampak ke DXY) + prediksi arah emas** |
-| `⚙️ Pengaturan` (menu) | Satu menu untuk semua yang bisa diatur: toggle notifikasi event, langganan morning brief, & hapus konteks percakapan |
+| `⚙️ Pengaturan` (menu) | Satu menu untuk semua yang bisa diatur: toggle notifikasi event, langganan morning brief, kelola watchlist, **detail jadwal & statistik pre-warm COT**, & hapus konteks percakapan |
 | `/prediksi` | 🎯 Win rate prediksi news (XAU/USD) — total, benar/salah/flat, 10 prediksi terakhir (`/prediksi history` untuk 25) |
 | `/overview` | Ringkasan instan semua instrumen utama (tanpa AI) |
 | `/map` | 🗺️ Heatmap instan — RSI/trend/% change semua instrumen utama dalam satu pesan (tanpa AI). Varian: `/map watchlist` = heatmap hanya untuk pair di watchlist-mu |

@@ -9,6 +9,8 @@ from telegram.ext import (
     ContextTypes,
 )
 from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     Update,
 )
 import asyncio
@@ -266,6 +268,23 @@ class CallbackFlowMixin:
             await safe_edit_message_text(
                 query,
                 message,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+                reply_markup=kb,
+            )
+
+        elif data == "settings_cot":
+            # Detail jadwal & statistik pre-warm COT (tanpa perlu /status)
+            info = self._cot_prewarm_status_text(context.bot_data)
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Kembali ke Pengaturan", callback_data="settings"),
+            ]])
+            await safe_edit_message_text(
+                query,
+                "📊 *COT PRE-WARM (CFTC)*\n\n"
+                f"{info}\n\n"
+                "Cache laporan COT diisi otomatis oleh job terjadwal agar `/cot` "
+                "langsung instan. Ketuk kembali untuk menu pengaturan.",
                 parse_mode="Markdown",
                 disable_web_page_preview=True,
                 reply_markup=kb,

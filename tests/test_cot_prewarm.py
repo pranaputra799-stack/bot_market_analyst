@@ -14,6 +14,7 @@ from datetime import datetime
 from unittest import mock
 
 from bot import commands_cot as cot_mod
+from bot import handlers as handlers_mod
 from bot.handlers import MarketBot
 from bot.scheduler_jobs import SchedulerJobsMixin
 
@@ -255,6 +256,27 @@ class TestCOTPrewarm(unittest.TestCase):
             self.assertEqual(m_notify.await_count, 1)
 
 
+def _fake_cot_update(data: str):
+    """Update tiruan untuk callback `cot:`/`settings_cot` — edit_message_text
+    merekam pesan ke message.replies seperti reply_text."""
+    msg = _FakeMessage()
+
+    async def _edit(text, **kwargs):
+        msg.replies.append((text, kwargs))
+        return text
+
+    q = type("Q", (), {})()
+    q.data = data
+    q.from_user = type("U", (), {"id": 9999})()
+    q.message = msg
+    q.answer = mock.AsyncMock()
+    q.edit_message_text = _edit  # instance attr — tidak ter-bind, signature (text, **kwargs)
+    return type("U", (), {
+        "callback_query": q,
+        "effective_chat": type("C", (), {"id": 777})(),
+    })()
+
+
 class TestCotStatusText(unittest.TestCase):
     """Formatter jadwal & statistik pre-warm untuk /status (murni)."""
 
@@ -314,34 +336,13 @@ class TestCotQuickActions(unittest.TestCase):
         self.assertIn("cot:eur", callbacks)
         self.assertIn("cot:vix", callbacks)
 
-    @staticmethod
-    def _fake_cot_update(data: str):
-        """Update tiruan untuk callback `cot:<alias>` — edit_message_text
-        merekam pesan ke message.replies seperti reply_text."""
-        msg = _FakeMessage()
-
-        async def _edit(text, **kwargs):
-            msg.replies.append((text, kwargs))
-            return text
-
-        q = type("Q", (), {})()
-        q.data = data
-        q.from_user = type("U", (), {"id": 9999})()
-        q.message = msg
-        q.answer = mock.AsyncMock()
-        q.edit_message_text = _edit  # instance attr — tidak ter-bind, signature (text, **kwargs)
-        return type("U", (), {
-            "callback_query": q,
-            "effective_chat": type("C", (), {"id": 777})(),
-        })()
-
     def test_quick_action_reports_known_instrument(self):
         bot = _mk_bot()
         # _cot_report_text di-stub → callback hanya mendelegasikan + render
         expected = "📊 laporan COT Gold"
         with mock.patch.object(bot, "_cot_report_text", new=mock.AsyncMock(return_value=expected)), \
              mock.patch.object(bot, "_cot_quick_keyboard") as m_kb:
-            upd = self._fake_cot_update("cot:gold")
+            upd = _fake_cot_update("cot:gold")
             ctx = _FakeContext()
             asyncio.run(bot.handle_callback(upd, ctx))
             m_kb.assert_called_once()
@@ -351,12 +352,44 @@ class TestCotQuickActions(unittest.TestCase):
     def test_quick_action_unknown_instrument(self):
         bot = _mk_bot()
         with mock.patch.object(bot, "_cot_report_text", new=mock.AsyncMock()) as m:
-            upd = self._fake_cot_update("cot:zzzz")
+            upd = _fake_cot_update("cot:zzzz")
             ctx = _FakeContext()
             asyncio.run(bot.handle_callback(upd, ctx))
             m.assert_not_awaited()
             text, _ = upd.callback_query.message.replies[0]
             self.assertIn("tidak dikenali", text)
+
+
+class TestCotSettingsButton(unittest.TestCase):
+    """Tombol '📊 COT Pre-warm' di menu /settings."""
+
+    def test_settings_menu_has_button_and_status(self):
+        bot = _mk_bot()
+        upd = _FakeUpdate("/settings")
+        ctx = _FakeContext()
+        ctx.bot_data["cot_prewarm_stats"] = {"ok": 31, "skipped": 1, "failed": 0, "at": "2026-08-15T21:05:00+00:00"}
+        with mock.patch.object(handlers_mod.db, "is_subscribed_async", new=mock.AsyncMock(return_value=False)), \
+             mock.patch.object(handlers_mod.db, "get_watchlist_async", new=mock.AsyncMock(return_value=[])):
+            asyncio.run(bot.settings_command(upd, ctx))
+        text, kwargs = upd.message.replies[0]
+        kb = kwargs.get("reply_markup")
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        self.assertIn("settings_cot", callbacks)
+        self.assertIn("COT Pre-warm", text)
+        self.assertIn("Aktif", text)
+
+    def test_callback_shows_detail_and_back_button(self):
+        bot = _mk_bot()
+        ctx = _FakeContext()
+        ctx.bot_data["cot_prewarm_stats"] = {"ok": 31, "skipped": 1, "failed": 0, "at": "2026-08-15T21:05:00+00:00"}
+        upd = _fake_cot_update("settings_cot")
+        asyncio.run(bot.handle_callback(upd, ctx))
+        text, kwargs = upd.callback_query.message.replies[0]
+        self.assertIn("COT PRE-WARM", text)
+        self.assertIn("31 di-cache", text)
+        kb = kwargs.get("reply_markup")
+        callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
+        self.assertIn("settings", callbacks)  # tombol kembali ke pengaturan
 
 
 class TestCotRefreshCommand(unittest.TestCase):
