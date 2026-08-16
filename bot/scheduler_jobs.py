@@ -23,6 +23,8 @@ from config.settings import (
     COT_PREWARM_HOUR,
     COT_PREWARM_MINUTE,
     COT_PREWARM_DAYS,
+    COT_PREWARM_AI_MAX_PER_RUN,
+    COT_PREWARM_SKIP_WITHOUT_DB,
 )
 from telegram import (
     Update,
@@ -1617,17 +1619,31 @@ class SchedulerJobsMixin:
         if not instruments:
             return
 
-        # Download arsip SEKALI (legacy + TFF) — di-cache memori 12 jam di data/cot.py.
-        try:
-            legacy_rows = await asyncio.to_thread(fetch_year_rows)
-        except Exception as e:
-            logger.warning(f"COT pre-warm: arsip legacy gagal: {e}")
+        # EFISIENSI (free tier): tanpa Supabase tidak ada tempat menulis cache —
+        # download arsip + AI interpretasi hanya buang CPU/kuota. Lewati total;
+        # /cot on-demand tetap berfungsi (tanpa caching).
+        if COT_PREWARM_SKIP_WITHOUT_DB and not db.is_connected():
+            logger.info("COT pre-warm dilewati — Supabase belum dikonfigurasi")
+            return
+
+        # Download arsip legacy & TFF PARALEL (sebelumnya berurutan) — arsip
+        # di-cache memori 12 jam di data/cot.py, jadi 1 download per hari.
+        results = await asyncio.gather(
+            asyncio.to_thread(fetch_year_rows),
+            asyncio.to_thread(fetch_tff_rows),
+            return_exceptions=True,
+        )
+        legacy_res, tff_res = results
+        if isinstance(legacy_res, Exception):
+            logger.warning(f"COT pre-warm: arsip legacy gagal: {legacy_res}")
             legacy_rows = []
-        try:
-            tff_rows = await asyncio.to_thread(fetch_tff_rows)
-        except Exception as e:
-            logger.warning(f"COT pre-warm: arsip TFF gagal: {e}")
+        else:
+            legacy_rows = legacy_res
+        if isinstance(tff_res, Exception):
+            logger.warning(f"COT pre-warm: arsip TFF gagal: {tff_res}")
             tff_rows = []
+        else:
+            tff_rows = tff_res
         if not legacy_rows and not tff_rows:
             # Gagal TOTAL: semua arsip CFTC tidak bisa diunduh → user /cot akan
             # tetap coba download on-demand (kemungkinan besar ikut gagal).
@@ -1655,6 +1671,7 @@ class SchedulerJobsMixin:
             return
 
         ok_count = skip_count = fail_count = 0
+        ai_done = 0  # jumlah interpretasi AI pada run ini (dibatasi)
         for config in instruments:
             cache_key = self._cot_cache_key(config)
             rows = tff_rows if config.get("report") == "tff" else legacy_rows
@@ -1682,8 +1699,17 @@ class SchedulerJobsMixin:
                 except Exception as e:
                     logger.debug(f"COT pre-warm: baca cache {cache_key} gagal: {e}")
 
-                # Interpretasi AI hanya untuk data BARU / instrumen tanpa AI
-                if not data.get("ai_interpretation") and getattr(self, "ai", None) is not None:
+                # Interpretasi AI hanya untuk data BARU / instrumen tanpa AI.
+                # EFISIENSI: dibatasi per run (COT_PREWARM_AI_MAX_PER_RUN) agar
+                # job 04:00 tidak meledak dengan puluhan call beruntun saat
+                # laporan mingguan baru rilis — sisanya diisi LAZY oleh /cot
+                # (1x per instrumen per laporan, ikut di-cache di Supabase).
+                if (
+                    not data.get("ai_interpretation")
+                    and getattr(self, "ai", None) is not None
+                    and (not COT_PREWARM_AI_MAX_PER_RUN or ai_done < COT_PREWARM_AI_MAX_PER_RUN)
+                ):
+                    ai_done += 1
                     try:
                         ai_text = await self._cot_ai_interpretation(data)
                         if ai_text:

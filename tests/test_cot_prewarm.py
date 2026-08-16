@@ -120,7 +120,8 @@ class TestCOTPrewarm(unittest.TestCase):
         data_gold = _mk_data("Gold")
         data_eur = _mk_data("Euro")
         data_dxy = _mk_data("DXY")
-        with mock.patch("bot.scheduler_jobs.COT_INSTRUMENTS", instruments), \
+        with mock.patch("data.database._is_configured", return_value=True), \
+             mock.patch("bot.scheduler_jobs.COT_INSTRUMENTS", instruments), \
              mock.patch("bot.scheduler_jobs.fetch_year_rows", return_value=["row-legacy"]), \
              mock.patch("bot.scheduler_jobs.fetch_tff_rows", return_value=["row-tff"]), \
              mock.patch("bot.scheduler_jobs.extract_market", side_effect=lambda rows, cfg: {
@@ -160,7 +161,8 @@ class TestCOTPrewarm(unittest.TestCase):
             "prev_week": {"date": "2026-08-04"},
             "ai_interpretation": "AI lama",
         }}}
-        with mock.patch("bot.scheduler_jobs.COT_INSTRUMENTS", instruments), \
+        with mock.patch("data.database._is_configured", return_value=True), \
+             mock.patch("bot.scheduler_jobs.COT_INSTRUMENTS", instruments), \
              mock.patch("bot.scheduler_jobs.fetch_year_rows", return_value=["row"]), \
              mock.patch("bot.scheduler_jobs.fetch_tff_rows", return_value=[]), \
              mock.patch("bot.scheduler_jobs.extract_market", return_value=data), \
@@ -185,7 +187,8 @@ class TestCOTPrewarm(unittest.TestCase):
             if cfg["keywords"][0] == "silver":
                 raise RuntimeError("network down")
             return _mk_data(cfg["keywords"][0])
-        with mock.patch("bot.scheduler_jobs.COT_INSTRUMENTS", instruments), \
+        with mock.patch("data.database._is_configured", return_value=True), \
+             mock.patch("bot.scheduler_jobs.COT_INSTRUMENTS", instruments), \
              mock.patch("bot.scheduler_jobs.fetch_year_rows", return_value=["row"]), \
              mock.patch("bot.scheduler_jobs.fetch_tff_rows", return_value=[]), \
              mock.patch("bot.scheduler_jobs.extract_market", side_effect=_extract), \
@@ -209,7 +212,8 @@ class TestCOTPrewarm(unittest.TestCase):
             {"keywords": ["silver"], "display": "Silver", "prefer": []},
             {"keywords": ["euro fx"], "display": "Euro", "prefer": []},
         ]
-        with mock.patch("bot.scheduler_jobs.COT_INSTRUMENTS", instruments), \
+        with mock.patch("data.database._is_configured", return_value=True), \
+             mock.patch("bot.scheduler_jobs.COT_INSTRUMENTS", instruments), \
              mock.patch("bot.scheduler_jobs.fetch_year_rows", return_value=["row"]), \
              mock.patch("bot.scheduler_jobs.fetch_tff_rows", return_value=[]), \
              mock.patch("bot.scheduler_jobs.extract_market", return_value=_mk_data("X")), \
@@ -224,7 +228,8 @@ class TestCOTPrewarm(unittest.TestCase):
     def test_all_archives_fail_is_noop(self):
         bot = _mk_bot()
         app = _FakeApplication()
-        with mock.patch("bot.scheduler_jobs.COT_INSTRUMENTS", [{"keywords": ["gold"], "display": "Gold", "prefer": []}]), \
+        with mock.patch("data.database._is_configured", return_value=True), \
+             mock.patch("bot.scheduler_jobs.COT_INSTRUMENTS", [{"keywords": ["gold"], "display": "Gold", "prefer": []}]), \
              mock.patch("bot.scheduler_jobs.fetch_year_rows", return_value=[]), \
              mock.patch("bot.scheduler_jobs.fetch_tff_rows", return_value=[]), \
              mock.patch("bot.scheduler_jobs.db.set_cot_cache_async", new=mock.AsyncMock()) as m_set, \
@@ -238,12 +243,31 @@ class TestCOTPrewarm(unittest.TestCase):
         # Mark: notif sudah terkirim hari ini
         self.assertIn("cot_prewarm_notified", app.bot_data)
 
+    def test_skip_without_db_saves_resources(self):
+        """Supabase tidak terhubung → job tidak download arsip sama sekali
+        (hemat CPU/kuota di free tier) dan tidak menulis cache apa pun."""
+        bot = _mk_bot()
+        app = _FakeApplication()
+        with mock.patch("bot.scheduler_jobs.db.is_connected", return_value=False), \
+             mock.patch("bot.scheduler_jobs.COT_INSTRUMENTS", [{"keywords": ["gold"], "display": "Gold", "prefer": []}]), \
+             mock.patch("bot.scheduler_jobs.fetch_year_rows") as m_fetch, \
+             mock.patch("bot.scheduler_jobs.fetch_tff_rows") as m_fetch_tff, \
+             mock.patch("bot.scheduler_jobs.db.set_cot_cache_async", new=mock.AsyncMock()) as m_set, \
+             mock.patch("bot.scheduler_jobs.notify_admins", new=mock.AsyncMock()) as m_notify:
+            asyncio.run(bot.prewarm_cot_cache(app))
+        m_fetch.assert_not_called()
+        m_fetch_tff.assert_not_called()
+        m_set.assert_not_awaited()
+        m_notify.assert_not_awaited()
+        self.assertNotIn("cot_prewarm_stats", app.bot_data)
+
     def test_total_failure_notify_rate_limited_per_day(self):
         """Job berjalan tiap pagi (Senin-Sabtu): bila CFTC down berhari-hari,
         admin hanya dinotifikasi 1x per hari kalender (tidak spam)."""
         bot = _mk_bot()
         app = _FakeApplication()
-        with mock.patch("bot.scheduler_jobs.COT_INSTRUMENTS", [{"keywords": ["gold"], "display": "Gold", "prefer": []}]), \
+        with mock.patch("data.database._is_configured", return_value=True), \
+             mock.patch("bot.scheduler_jobs.COT_INSTRUMENTS", [{"keywords": ["gold"], "display": "Gold", "prefer": []}]), \
              mock.patch("bot.scheduler_jobs.fetch_year_rows", return_value=[]), \
              mock.patch("bot.scheduler_jobs.fetch_tff_rows", return_value=[]), \
              mock.patch("bot.scheduler_jobs.db.set_cot_cache_async", new=mock.AsyncMock()), \

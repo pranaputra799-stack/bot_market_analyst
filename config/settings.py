@@ -242,6 +242,15 @@ COT_PREWARM_DAYS = [
 # Maksimum instrumen yang diproses per run (0 = semua). Batas keamanan untuk
 # beban AI interpretasi (1 call per instrumen per minggu) & durasi job.
 COT_PREWARM_MAX_INSTRUMENTS = int(os.getenv("COT_PREWARM_MAX_INSTRUMENTS", "0"))
+# Maksimum interpretasi AI per run pre-warm (0 = tanpa batas). Membatasi
+# ledakan call AI saat laporan mingguan baru rilis (semua instrumen belum punya
+# interpretasi — bisa 30+ call beruntun di jam 04:00). Sisanya diisi LAZY oleh
+# /cot (1x per instrumen per laporan, ikut di-cache di Supabase).
+COT_PREWARM_AI_MAX_PER_RUN = int(os.getenv("COT_PREWARM_AI_MAX_PER_RUN", "12"))
+COT_PREWARM_AI_MAX_PER_RUN = max(0, min(COT_PREWARM_AI_MAX_PER_RUN, 100))
+# Skip pre-warm bila Supabase tidak terhubung (tidak ada tempat menulis cache —
+# download arsip + AI interpretasi hanya buang CPU/kuota). Default true.
+COT_PREWARM_SKIP_WITHOUT_DB = os.getenv("COT_PREWARM_SKIP_WITHOUT_DB", "true").lower() in ("1", "true", "yes")
 
 # ===================== AI USAGE REPORT =====================
 # Laporan pemakaian AI harian (token & request per provider) ke ADMIN_USER_IDS

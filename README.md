@@ -204,6 +204,7 @@ python main.py
 | `COT_PREWARM_HOUR` / `COT_PREWARM_MINUTE` | opsi | Jam pre-warm COT (zona `MORNING_BRIEF_TIMEZONE`, default `4:00` — setelah rilis CFTC Jumat 15:30 ET / 02:30 WIB) |
 | `COT_PREWARM_DAYS` | opsi | Hari pre-warm (ISO weekday `1`=Senin..`7`=Minggu, pisahkan koma; default `1,2,3,4,5,6` = Senin-Sabtu) |
 | `COT_PREWARM_MAX_INSTRUMENTS` | opsi | Batas instrumen COT per run pre-warm (0 = semua, default `0`) |
+| `COT_PREWARM_SKIP_WITHOUT_DB` | opsi | Skip pre-warm bila Supabase tidak terhubung (hemat resource, default `true`) |
 | `HEALTH_ENDPOINT_ENABLED` | opsi | Endpoint `/health` untuk monitoring (`true`/`false`, default `true`) |
 | `HEALTH_PORT` | opsi | Port `/health` — beda dari PORT webhook (default `8090`) |
 | `CCXT_PRICE_TTL` | opsi | TTL cache harga crypto ccxt dalam detik (default `30`) |
