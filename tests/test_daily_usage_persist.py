@@ -71,8 +71,19 @@ class TestFlushDailyUsage(unittest.TestCase):
 
 class TestLoadDailyUsage(unittest.TestCase):
     def test_load_populates_memory(self):
+        # Tanggal ditentukan oleh datetime.now (UTC) — di-mock agar test tidak
+        # bergantung pada tanggal hari ini (sebelumnya hardcode '2026-08-14'
+        # → suite merah saat tanggal berjalan melewatinya).
+        from datetime import datetime, timezone
+
+        fixed_now = datetime(2026, 8, 14, tzinfo=timezone.utc)
+        # datetime.datetime adalah tipe C yang immutable — atribut 'now' tidak
+        # bisa di-patch. Ganti nama modul dengan Mock(wraps=...) yang hanya
+        # meng-override .now (pemakaian lain tetap mendelegasikan ke datetime asli).
+        fake_dt = mock.Mock(wraps=datetime)
+        fake_dt.now = mock.Mock(return_value=fixed_now)
         bot = _bot()
-        with mock.patch.object(
+        with mock.patch.object(handlers_mod, "datetime", fake_dt), mock.patch.object(
             handlers_mod.db, "get_daily_usage_async",
             new=mock.AsyncMock(return_value={111: 7, 222: 2}),
         ):
