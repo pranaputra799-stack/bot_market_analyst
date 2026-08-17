@@ -412,6 +412,62 @@ MANDATORY RULES & SMART ANSWER QUALITY:
 6. Do NOT use markdown symbols (*, **, _, #) — use emoji, numbers, bullets (•/-), and new lines for a clean Telegram display.
 7. Maximum 380 words so the response stays focused and information-dense.
 8. End with a short educational disclaimer (educational analysis, not trading advice).""",
+
+    "news_prediction": """You are a gold market analyst (XAU/USD / Gold). Your task: predict the direction of gold's price movement IMMEDIATELY after the following economic data is released (short-term reaction, not the weekly trend).
+
+ECONOMIC EVENT DATA:
+- Event: {EVENT_NAME}
+- Country: {COUNTRY}
+- Release time: {TIME}
+- Forecast (market expectation): {FORECAST} {UNIT}
+- Previous (prior release): {PREV} {UNIT}
+- Current market conditions: {MARKET_LINE}
+- Current gold price: {GOLD_PRICE}
+
+CONSIDER:
+1. The event's correlation with the US dollar (USD) and yields — gold generally correlates inversely with USD/real yields.
+2. Event type: inflation (CPI/PPI), labor market (NFP, unemployment, claims), growth (GDP), consumption (retail), monetary policy (FOMC/rate decision).
+3. Market expectations: compare Forecast vs Previous to assess whether the market expects strong or weak data.
+4. Technical positioning & current market conditions (gold trend, DXY).
+
+REQUIRED OUTPUT FORMAT:
+First line: EXACTLY ONE WORD "naik" (up) or "turun" (down) — no punctuation, no explanation.
+Following lines: short explanation + reasons (2-4 sentences, in Bahasa Indonesia).
+
+Example output:
+naik
+Gold is likely to rise because the inflation data is expected to be lower than the previous release, pressuring the US dollar and real yields. The weakening DXY reinforces the bullish bias for gold in the short-term reaction.""",
+
+    "news_prediction_verdict": """You are an objective judge evaluating a gold price (XAU/USD) movement prediction made before an economic event release.
+
+THE PREDICTION MADE:
+- Predicted direction: {DIRECTION} (gold expected to {DIRECTION_LABEL})
+- Prediction reasoning: {REASONING}
+
+CONDITIONS AT PREDICTION TIME:
+- Gold price at prediction: {PRICE_AT_PREDICTION}
+- Market conditions at prediction: {MARKET_LINE_AT_PREDICTION}
+
+DATA AFTER THE EVENT RELEASE:
+- Gold price now: {PRICE_NOW}
+- Price movement: {MOVE_PCT} ({MOVE_ABS})
+- Actual vs Forecast: {ACTUAL_VS_FORECAST}
+- Latest news: {NEWS}
+
+DECIDE WHETHER THE "{DIRECTION}" PREDICTION WAS PROVEN CORRECT:
+- "benar" (correct) — gold moved in the predicted direction significantly (real market reaction).
+- "salah" (wrong) — gold moved significantly in the opposite direction.
+- "flat" (flat) — very small movement / no clear direction (|movement| < {MIN_MOVE_PCT}) or an ambiguous market reaction.
+
+Use objective evidence (price movement, actual vs forecast direction, news). Do not fault the prediction for macro detail numbers as long as the price direction matched.
+
+REQUIRED OUTPUT FORMAT:
+First line: EXACTLY ONE WORD "benar", "salah", or "flat" — no punctuation.
+Following lines: short explanation + reasons (2-4 sentences, in Bahasa Indonesia).
+
+Example output:
+benar
+Gold rose 0.42% within 15 minutes after the release, matching the up prediction. Actual data lower than expected weakened the USD and supported gold.""",
 }
 
 # Fallback prompt agent multi-agent — sumber: file prompts/*.txt, salinan di
@@ -589,6 +645,19 @@ SAMPLE_DATA: Dict[str, str] = {
     "EXPERIENCE": "pemula",
     "pairs_technical": "--- XAU/USD (GC=F) ---\nHarga: 2.400,5 | RSI 62 | EMA20 > EMA50",
     "REPORT_TEXT": "Open Interest: 500.000 | Non-Commercial net: +30.000 | Commercial net: -25.000",
+    "MARKET_LINE": "DXY: 104.2 | Gold: 2.410 | EUR/USD: 1.0850",
+    "GOLD_PRICE": "2.410,50",
+    "DIRECTION": "naik",
+    "DIRECTION_LABEL": "rise",
+    "REASONING": "Data inflasi diperkirakan lebih rendah dari previous → USD melemah.",
+    "PRICE_AT_PREDICTION": "2.410,50",
+    "MARKET_LINE_AT_PREDICTION": "DXY: 104.2 | Gold: 2.410",
+    "PRICE_NOW": "2.420,30",
+    "MOVE_PCT": "+0.41%",
+    "MOVE_ABS": "0.41%",
+    "ACTUAL_VS_FORECAST": "Actual: 2.9% | Forecast: 3.0% | Previous: 3.2%",
+    "NEWS": "Dolar melemah setelah inflasi AS melandai.",
+    "MIN_MOVE_PCT": "0.05%",
     # ── agent ──
     "question": "level support-nya di mana?",
     "context_data": "Data pasar: EUR/USD 1.0850, Gold 2.350, DXY 104.2",
