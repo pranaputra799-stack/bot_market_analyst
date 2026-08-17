@@ -46,8 +46,16 @@ class TestGenerateBasics(unittest.TestCase):
         eng.api_keys = {}
         with self.assertLogs(level="WARNING"):
             out = eng.generate("prompt-2", use_cache=False)
-        self.assertIn("semua AI provider sedang tidak tersedia", out)
+        self.assertIn("belum ada API key yang diisi", out)
         self.assertEqual(eng.stats["failed"], 1)
+
+    def test_guardrail_message_detected(self):
+        # Guardrail privacy OpenRouter → pesan memberi solusi konkret
+        eng = AIFallbackEngine()
+        eng._openrouter_guardrail_until = time.time() + 3600
+        out = eng._total_failure_message()
+        self.assertIn("guardrail privacy", out)
+        self.assertIn("openrouter.ai/settings/privacy", out)
 
     def test_system_override_passthrough(self):
         eng = _make_engine()

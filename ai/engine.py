@@ -134,6 +134,13 @@ class AIFallbackEngine:
         # thread lain menunggu lalu memakai hasil dari cache (hemat token).
         self._inflight: Dict[str, threading.Event] = {}
         self._inflight_lock = threading.Lock()
+        # Deteksi guardrail privacy OpenRouter: timestamp hingga kapan pesan
+        # error harus menyebutkan solusi data policy. Di-set saat OpenRouter
+        # mengembalikan 404 "No endpoints available matching your guardrail
+        # restrictions and data policy" (lihat _call_provider). Membuat pesan
+        # error jauh lebih jelas daripada "coba lagi nanti" — user langsung
+        # tahu langkah yang harus diambil.
+        self._openrouter_guardrail_until: float = 0.0
         # Catatan thread-safety: system_override & max_tokens dikirim PER-REQUEST
         # (bukan state instance), sehingga generate() aman dipanggil paralel dari
         # banyak thread (asyncio.to_thread di handlers/sentiment/agents) tanpa
@@ -390,7 +397,39 @@ class AIFallbackEngine:
         )
 
     def _total_failure_message(self) -> str:
-        """Pesan error standar saat semua provider gagal (dipakai beberapa jalur)."""
+        """
+        Pesan error saat semua provider gagal — sedetail mungkin sesuai penyebab.
+
+        Mendeteksi penyebab umum agar user langsung tahu langkah perbaikan,
+        bukan sekadar "coba lagi nanti":
+        - Guardrail privacy OpenRouter memblokir semua model free.
+        - Tidak ada API key sama sekali di .env/deploy env.
+        - Semua key ada tapi provider gagal (rate limit / down / model mati).
+        """
+        if time.time() < self._openrouter_guardrail_until:
+            return (
+                "Maaf, AI sedang tidak bisa dipakai: akun OpenRouter memblokir "
+                "semua model gratis (guardrail privacy).\n\n"
+                "Perbaikan (1 menit):\n"
+                "• Buka https://openrouter.ai/settings/privacy\n"
+                "• Set Data Policy ke \"Allow all\"\n"
+                "• Simpan, lalu coba lagi\n\n"
+                "Alternatif: isi API key provider lain (GROQ_API_KEY / "
+                "GEMINI_API_KEY) di .env agar bot tidak bergantung pada OpenRouter."
+            )
+
+        providers = [p for p in self.fallback_order if self.api_keys.get(p)]
+        if not providers:
+            return (
+                "Maaf, semua AI provider tidak aktif: belum ada API key yang diisi.\n\n"
+                "Perbaikan:\n"
+                "• Isi minimal satu API key di file .env:\n"
+                "  - OPENROUTER_API_KEY (paling mudah, banyak model gratis)\n"
+                "  - GROQ_API_KEY atau GEMINI_API_KEY (gratis juga)\n"
+                "• Restart bot setelah mengisi .env\n"
+                "• Cek /status untuk melihat status API keys"
+            )
+
         return (
             "Maaf, semua AI provider sedang tidak tersedia saat ini. "
             "Silakan coba lagi nanti.\n\n"
@@ -609,6 +648,18 @@ class AIFallbackEngine:
                         # ("No endpoints available...") — blacklist sementara agar
                         # request berikutnya langsung skip model ini.
                         self._dead_models[model] = time.time()
+                        # Guardrail privacy OpenRouter memblokir SEMUA model free
+                        # ("No endpoints available matching your guardrail
+                        # restrictions and data policy"). Deteksi ini agar pesan
+                        # error memberitahu user solusinya: set data policy ke
+                        # "Allow all" di openrouter.ai/settings/privacy — tanpa
+                        # itu, mencoba model lain hanya menghasilkan 404 beruntun.
+                        if provider == "openrouter" and (
+                            "guardrail" in resp.text.lower()
+                            or "no endpoints available" in resp.text.lower()
+                            or "data policy" in resp.text.lower()
+                        ):
+                            self._openrouter_guardrail_until = time.time() + 3600
                     logger.warning(f"{config['name']} error {resp.status_code} with {model}: {resp.text[:200]}")
                     # Spacing kecil antar attempt gagal (anti self-429 burst)
                     time.sleep(self._MODEL_ATTEMPT_SPACING)
