@@ -10,8 +10,19 @@ Mencakup:
 """
 import unittest
 
+import data.oanda_client as oanda_mod
 from data.oanda_client import OandaClient
 from data.market_data import MarketDataAggregator
+
+
+def setUpModule():
+    # Hermetik: "tidak terkonfigurasi" harus deterministik apa pun isi .env
+    # (OandaClient(api_key="") jatuh ke nilai env bila OANDA_API_KEY terisi).
+    oanda_mod.OANDA_API_KEY = ""
+
+
+def tearDownModule():
+    oanda_mod.OANDA_API_KEY = ""
 
 
 def _daily_candle(close, complete=True, day=5):

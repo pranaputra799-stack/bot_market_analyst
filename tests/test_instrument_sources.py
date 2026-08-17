@@ -12,9 +12,20 @@ Semua test murni (tanpa network) — OANDA/cache di-stub.
 import unittest
 
 import bot.messages as msgs
+import data.oanda_client as oanda_mod
 from data.market_data import MarketDataAggregator
 from data.oanda_client import OandaClient
 from data.cache import cache
+
+
+def setUpModule():
+    # Hermetik: "tidak terkonfigurasi" harus deterministik apa pun isi .env
+    # (OandaClient(api_key="") jatuh ke nilai env bila OANDA_API_KEY terisi).
+    oanda_mod.OANDA_API_KEY = ""
+
+
+def tearDownModule():
+    oanda_mod.OANDA_API_KEY = ""
 
 
 class _DailyCandle:

@@ -7,7 +7,18 @@ Mencakup:
 """
 import unittest
 
+import data.oanda_stream as oanda_stream_mod
 from data.oanda_stream import OandaPriceStream, parse_price_message
+
+
+def setUpModule():
+    # Hermetik: "tanpa key" harus deterministik apa pun isi .env
+    # (OandaPriceStream(api_key="") jatuh ke nilai env bila OANDA_API_KEY terisi).
+    oanda_stream_mod.OANDA_API_KEY = ""
+
+
+def tearDownModule():
+    oanda_stream_mod.OANDA_API_KEY = ""
 
 
 def _price_msg(instrument="EUR_USD", bid="1.0824", ask="1.0826"):

@@ -11,7 +11,10 @@ build/
 # ===================== Environment =====================
 .env
 .env.local
+.env.*
 *.pkl
+# Dump variabel env / API keys — JANGAN commit (berisi secret)
+api_full.txt
 
 # ===================== IDE =====================
 .vscode/
