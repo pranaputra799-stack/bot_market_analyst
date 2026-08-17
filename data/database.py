@@ -239,15 +239,62 @@ class Database:
             return set()
 
     @staticmethod
+    def _prune_stale_rows(url: str, id_col: str, ids: list, chunk: int, encode: bool = False) -> None:
+        """Hapus baris yang TIDAK ada di `ids` (replace-all semantics) — aman
+        pada ukuran daftar berapa pun.
+
+        Strategi: ambil daftar existing → hitung stale = existing − ids →
+        DELETE `in.(...)` per chunk. DELETE `not.in.(...)` per-chunk
+        (implementasi lama) SALAH: setiap chunk menghapus id milik chunk lain,
+        sehingga hanya chunk TERAKHIR yang bertahan (subscriber hilang saat
+        daftar > chunk size). Bila GET existing gagal, fallback ke SATU DELETE
+        `not.in.(semua ids)` — URL panjang bila daftar besar, tapi semantiknya
+        benar.
+
+        Args:
+            url: URL tabel Supabase (rest/v1/<table>).
+            id_col: Nama kolom id (chat_id / key).
+            ids: Daftar id aktif (harus bertipe sama dengan nilai di kolom).
+            chunk: Ukuran chunk DELETE (agar URL tidak kepanjangan).
+            encode: True bila nilai perlu URL-encode (kunci event berisi '|',
+                ':', '+'); False untuk chat_id numerik.
+        """
+        def _fmt(k) -> str:
+            return quote(str(k), safe="") if encode else str(k)
+
+        try:
+            resp = _session().get(f"{url}?select={id_col}", headers=_get_headers(), timeout=10)
+            resp.raise_for_status()
+            existing = {row[id_col] for row in resp.json()}
+        except Exception:
+            existing = None
+
+        if existing is not None:
+            stale = sorted(existing - set(ids))
+            for i in range(0, len(stale), chunk):
+                cond = ",".join(_fmt(k) for k in stale[i:i + chunk])
+                _session().delete(
+                    f"{url}?{id_col}=in.({cond})",
+                    headers=_get_headers(), timeout=10,
+                ).raise_for_status()
+        else:
+            cond = ",".join(_fmt(k) for k in ids)
+            _session().delete(
+                f"{url}?{id_col}=not.in.({cond})",
+                headers=_get_headers(), timeout=10,
+            ).raise_for_status()
+
+    @staticmethod
     def save_event_alert_subscribers(subscribers) -> bool:
         """Ganti seluruh daftar subscriber event (strategi upsert + prune).
 
         1. UPSERT semua chat_id aktif via POST 'resolution=merge-duplicates'
            (butuh PK/UNIQUE constraint pada tabel — sudah ada di migration).
-        2. PRUNE: DELETE chat_id yang TIDAK ada di daftar baru lewat filter
-           'chat_id=not.in.(...)' — selalu punya WHERE clause, jadi lolos
-           proteksi Supabase "DELETE requires a WHERE clause" yang menolak
-           DELETE massal tanpa filter dengan 400 (code 21000).
+        2. PRUNE: hapus chat_id lama yang TIDAK ada di daftar baru (via
+           _prune_stale_rows) — selalu pakai WHERE clause, jadi lolos proteksi
+           Supabase "DELETE requires a WHERE clause" (400 code 21000), dan
+           TIDAK menghapus id baru (regresi lama: not.in per-chunk hanya
+           menyisakan chunk terakhir saat daftar > 200).
 
         Keuntungan vs pola lama (DELETE semua lalu insert): tidak ada request
         DELETE tanpa WHERE, dan bila upsert gagal, daftar lama tidak hilang
@@ -269,13 +316,7 @@ class Database:
                 rows = [{"chat_id": c, "created_at": now_iso} for c in ids]
                 headers = {**_get_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"}
                 _session().post(url, json=rows, headers=headers, timeout=10).raise_for_status()
-                # Prune yang tidak lagi subscribe — chunk agar URL tidak kepanjangan.
-                for i in range(0, len(ids), 200):
-                    cond = ",".join(str(c) for c in ids[i:i + 200])
-                    _session().delete(
-                        f"{url}?chat_id=not.in.({cond})",
-                        headers=_get_headers(), timeout=10,
-                    ).raise_for_status()
+                Database._prune_stale_rows(url, "chat_id", ids, chunk=200)
             else:
                 # Daftar kosong: kosongkan tabel — DELETE tetap pakai WHERE clause.
                 _session().delete(
@@ -310,8 +351,8 @@ class Database:
         """Ganti seluruh kunci event yang sudah di-notify (strategi upsert + prune).
 
         Sama seperti save_event_alert_subscribers: upsert dulu via
-        'resolution=merge-duplicates', lalu prune kunci yang tidak ada di daftar
-        baru lewat filter 'key=not.in.(...)'. DELETE selalu punya WHERE clause
+        'resolution=merge-duplicates', lalu hapus kunci lama yang tidak ada di
+        daftar baru (via _prune_stale_rows). DELETE selalu punya WHERE clause
         sehingga lolos proteksi Supabase "DELETE requires a WHERE clause" (400
         code 21000). Nilai kunci di-URL-encode (kunci mengandung karakter seperti
         '|', ':', '+'). Hanya kunci string non-kosong yang dikirim.
@@ -326,14 +367,7 @@ class Database:
                 rows = [{"key": k, "created_at": now_iso} for k in keyset]
                 headers = {**_get_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"}
                 _session().post(url, json=rows, headers=headers, timeout=10).raise_for_status()
-                # Prune kunci yang tidak lagi berlaku — chunk kecil (key bisa
-                # panjang, mis. 'NFP|2026-08-10T12:30:00+00:00') + URL-encode nilai.
-                for i in range(0, len(keyset), 50):
-                    cond = ",".join(quote(k, safe="") for k in keyset[i:i + 50])
-                    _session().delete(
-                        f"{url}?key=not.in.({cond})",
-                        headers=_get_headers(), timeout=10,
-                    ).raise_for_status()
+                Database._prune_stale_rows(url, "key", keyset, chunk=50, encode=True)
             else:
                 _session().delete(
                     f"{url}?key=not.is.null",

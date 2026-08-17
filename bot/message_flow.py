@@ -191,6 +191,19 @@ class MessageFlowMixin:
         # Riwayat percakapan user (untuk konteks follow-up)
         history_text = format_history(user_id)
 
+        # ===== COT CONTEXT (posisi institusional CFTC) =====
+        # Bila user bertanya soal COT/posisi institusional, kumpulkan data COT
+        # (cache mingguan, download fallback) dan suntikkan ke pipeline AI agar
+        # analisis didasarkan data sungguhan — bukan pengetahuan umum model.
+        cot_context = ""
+        if self._is_cot_question(user_question):
+            try:
+                cot_context = await self._get_cot_context_for_question(user_question)
+                if cot_context:
+                    logger.info(f"COT context disuntikkan untuk user {user_id}")
+            except Exception as e:
+                logger.debug(f"COT context gagal dimuat: {e}")
+
         # Kuota harian per-user — cek SEBELUM pipeline AI. Fast price path di
         # atas tidak dihitung; hanya pertanyaan yang benar-benar memakai AI
         # yang memakai kuota (di-consume tepat sebelum pipeline dijalankan).
@@ -246,6 +259,7 @@ class MessageFlowMixin:
                     question=user_question,
                     market_data_ohlcv=ohlcv_data,
                     conversation_history=history_text,
+                    extra_context=cot_context,
                 )
 
                 final_message = result.final_response
@@ -272,6 +286,11 @@ class MessageFlowMixin:
             else:
                 # ===== LEGACY: Single-prompt method =====
                 data_context = await self._gather_context(user_question)
+                if cot_context:
+                    data_context = (
+                        f"{data_context}\n\n"
+                        f"📊 *DATA COT (POSISI INSTITUSIONAL CFTC):*\n{cot_context}"
+                    )
                 prompt = self._build_prompt(user_question, data_context, history_text)
 
                 answer = await asyncio.to_thread(

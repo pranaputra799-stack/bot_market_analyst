@@ -33,13 +33,13 @@ class WatchlistCommandsMixin:
     WATCHLIST_MAX = 10  # batas instrumen per user (jaga prompt & biaya)
 
     WATCHLIST_USAGE = (
-        "👁️ *WATCHLIST PERSONAL*\\n\\n"
+        "👁️ *WATCHLIST PERSONAL*\n\n"
         "Simpan instrumen favoritmu — dipakai untuk morning brief yang lebih "
-        "fokus dan `/map watchlist`.\\n\\n"
-        "`/watchlist` — lihat daftar + harga terkini\\n"
-        "`/watchlist add XAU/USD` — tambah instrumen\\n"
-        "`/watchlist remove XAU/USD` — hapus instrumen\\n"
-        "`/watchlist clear` — kosongkan daftar\\n\\n"
+        "fokus dan `/map watchlist`.\n\n"
+        "`/watchlist` — lihat daftar + harga terkini\n"
+        "`/watchlist add XAU/USD` — tambah instrumen\n"
+        "`/watchlist remove XAU/USD` — hapus instrumen\n"
+        "`/watchlist clear` — kosongkan daftar\n\n"
         "Contoh: `/watchlist add gold`, `/watchlist add eurusd`, "
         "`/watchlist add XAU/USD`."
     )
@@ -157,7 +157,7 @@ class WatchlistCommandsMixin:
         if ok:
             await safe_reply_text(
                 update.message,
-                f"✅ *{dname}* ditambahkan ke watchlist.\\n\\n"
+                f"✅ *{dname}* ditambahkan ke watchlist.\n\n"
                 f"Ketuk `/morning` untuk brief pagi yang fokus ke watchlistmu, "
                 f"atau `/map watchlist` untuk heatmap khusus.",
                 parse_mode="Markdown",
@@ -229,11 +229,11 @@ class WatchlistCommandsMixin:
         if not watchlist:
             await safe_reply_text(
                 update.message,
-                "👁️ *WATCHLIST*\\n\\n"
-                "Watchlistmu masih kosong. Tambahkan instrumen favorit:\\n"
-                "`/watchlist add gold` — Gold (XAU/USD)\\n"
-                "`/watchlist add eurusd` — EUR/USD\\n"
-                "`/watchlist add gbpusd` — GBP/USD\\n\\n"
+                "👁️ *WATCHLIST*\n\n"
+                "Watchlistmu masih kosong. Tambahkan instrumen favorit:\n"
+                "`/watchlist add gold` — Gold (XAU/USD)\n"
+                "`/watchlist add eurusd` — EUR/USD\n"
+                "`/watchlist add gbpusd` — GBP/USD\n\n"
                 "Setelah itu `/morning` jadi fokus ke watchlistmu, dan "
                 "`/map watchlist` menampilkan heatmap khusus.",
                 parse_mode="Markdown",
@@ -260,13 +260,13 @@ class WatchlistCommandsMixin:
             *(asyncio.to_thread(_row, label) for label in watchlist)
         )
         header = (
-            f"👁️ *WATCHLIST* ({len(watchlist)}/{self.WATCHLIST_MAX})\\n\\n"
+            f"👁️ *WATCHLIST* ({len(watchlist)}/{self.WATCHLIST_MAX})\n\n"
         )
         body = "```\n" + "\n".join(rows) + "\n```"
         footer = (
-            "\n\n➕ Tambah: `/watchlist add <simbol>`\\n"
-            "🗑️ Hapus: `/watchlist remove <simbol>`\\n"
-            "🗺️ Heatmap: `/map watchlist`\\n"
+            "\n\n➕ Tambah: `/watchlist add <simbol>`\n"
+            "🗑️ Hapus: `/watchlist remove <simbol>`\n"
+            "🗺️ Heatmap: `/map watchlist`\n"
             "🌅 Brief fokus: `/morning`"
         )
         await safe_reply_text(

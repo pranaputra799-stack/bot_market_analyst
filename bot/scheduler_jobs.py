@@ -154,13 +154,22 @@ class SchedulerJobsMixin:
             logger.warning(f"Morning brief: format kalender gagal: {e}")
             calendar_text = "📅 Tidak ada event terjadwal yang tersedia."
 
+        # COT: posisi institusional CFTC (cache mingguan) — konteks tambahan
+        # agar outlook AI juga mempertimbangkan posisi smart money/hedger.
+        # Best-effort: gagal/baru pertama kali → kosong (brief tetap jalan).
+        cot_data = ""
+        try:
+            cot_data = await self._get_cot_context_text()
+        except Exception as e:
+            logger.debug(f"Morning brief: COT context gagal: {e}")
+
         # AI-powered outlook & catalysts using multi-agent analysis
         if self.analysis_director:
             try:
                 # Gunakan multi-agent untuk analisis yang lebih dalam
                 analysis_prompt = self._build_morning_brief_prompt(
                     today, market_summary, macro_summary, calendar_text, news_summary,
-                    sentiment_text, watchlist_text,
+                    sentiment_text, watchlist_text, cot_data,
                 )
 
                 result = await self.analysis_director.analyze(analysis_prompt)
@@ -199,7 +208,7 @@ class SchedulerJobsMixin:
         try:
             outlook_prompt = self._build_morning_brief_prompt(
                 today, market_summary, macro_summary, calendar_text, news_summary,
-                sentiment_text, watchlist_text,
+                sentiment_text, watchlist_text, cot_data,
             )
             ai_response = await self.ai.generate_async(
                 outlook_prompt, use_cache=True, max_tokens=2048
@@ -250,6 +259,7 @@ class SchedulerJobsMixin:
         news_summary: str,
         sentiment_text: str = "",
         watchlist: str = "",
+        cot_data: str = "",
     ) -> str:
         """
         Bangun prompt morning brief (dipakai path multi-agent & legacy).
@@ -257,6 +267,8 @@ class SchedulerJobsMixin:
         Args:
             watchlist: Daftar instrumen favorit user (string gabungan) — diisi
                 placeholder {WATCHLIST}; kosong = analisis pasar global.
+            cot_data: Ringkasan posisi institusional COT (CFTC) — kosong bila
+                tidak tersedia; AI tetap memakai data pasar lainnya.
 
         Konten prompt DIAMBIL dari `prompts/morning_brief.txt` (single source
         of truth) — edit file tersebut untuk mengubah perilaku tanpa mengubah
@@ -272,6 +284,7 @@ class SchedulerJobsMixin:
             calendar_data=calendar_text,
             news_data=news_summary,
             sentiment_data=sentiment_section,
+            cot_data=cot_data or "(belum tersedia — lewati bagian ini)",
         )
     def _get_alert_subscribers(self, application: Application) -> set:
         """Dapatkan daftar chat_id yang subscribe notifikasi event."""

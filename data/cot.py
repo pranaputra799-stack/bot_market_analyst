@@ -713,3 +713,26 @@ def format_cot_message(data: Dict) -> str:
     lines.append("")
     lines.append("⚠️ COT = data futures AS (bukan spot forex) — edukasi, bukan saran trading.")
     return "\n".join(lines)
+
+
+def format_cot_summary(data: Dict) -> str:
+    """Versi RINGKAS format_cot_message — konteks AI (morning brief / chat).
+
+    Satu instrumen jadi 3 baris padat (posisi & perubahan net speculative +
+    commercial) tanpa tabel penuh, agar beberapa instrumen muat dalam satu
+    prompt tanpa membakar token.
+    """
+    nc = data.get("noncommercial") or {}
+    cm = data.get("commercial") or {}
+    date = data.get("report_date")
+    date_str = date.strftime("%d %b %Y") if date else "—"
+
+    def _fmt(v: Optional[int]) -> str:
+        return f"{v:+,}" if v is not None else "—"
+
+    return (
+        f"📊 {data.get('display', '')} (posisi per {date_str}):\n"
+        f"• Speculative (non-commercial): net {_fmt(nc.get('net'))} kontrak "
+        f"— perubahan mingguan {_fmt(nc.get('change'))}\n"
+        f"• Commercial (hedger): net {_fmt(cm.get('net'))} kontrak"
+    )

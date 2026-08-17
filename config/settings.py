@@ -100,8 +100,16 @@ OANDA_ENV = os.getenv("OANDA_ENV", "practice").strip().lower()
 OANDA_PRICE_TTL = int(os.getenv("OANDA_PRICE_TTL", "30"))
 
 # ===================== DATABASE =====================
-SUPABASE_URL = _get_key("SUPABASE_URL", "")
+SUPABASE_URL = _get_key("SUPABASE_URL", "").strip()
 SUPABASE_KEY = _get_key("SUPABASE_KEY", "")
+
+# Defensif: URL Supabase tanpa skema (mis. "db.xxxx.supabase.co" — tanpa
+# https://) membuat SEMUA request REST gagal dengan "No scheme supplied" dan
+# fitur persisten (subscriber /alert, morning brief, cache L2, journal, dll)
+# diam-diam mati — alert user hilang setiap restart. Normalisasi otomatis ke
+# https:// bila skema tidak ditulis.
+if SUPABASE_URL and "://" not in SUPABASE_URL:
+    SUPABASE_URL = "https://" + SUPABASE_URL
 
 # Supabase juga dipakai sebagai cache persisten (L2): AI response & conversation
 # memory disimpan di tabel 'app_cache' (lihat migrations/supabase.sql) agar RAM

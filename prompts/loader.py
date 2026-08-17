@@ -259,6 +259,21 @@ BERITA TERKINI:
 SENTIMEN PASAR (skor -1 s/d +1):
 {sentiment_data}
 
+DATA COT (POSISI INSTITUSIONAL CFTC):
+{cot_data}
+
+PANDUAN MEMBACA COT (jika bagian DATA COT terisi):
+- Non-commercial (speculative / managed money / hedge fund): posisi bersih (net) LONG atau
+  SHORT + perubahan mingguannya. Perubahan tajam atau posisi ekstrem sering jadi sinyal arah
+  jangka menengah (bukan intraday).
+- Commercial (hedger: produsen/pengguna asli) umumnya posisi lindung nilai — jangan dibaca
+  sebagai sinyal arah harga seperti "smart money".
+- Gunakan COT sebagai KONTEKS TAMBAHAN untuk mendukung ATAU menantang kesimpulan dari data
+  harga/makro — jangan jadikan satu-satunya dasar. Bila COT bertentangan dengan data harga,
+  sebutkan perbedaan itu secara eksplisit.
+- Jika bagian DATA COT bertuliskan "(belum tersedia — lewati bagian ini)", JANGAN mengarang
+  angka COT apa pun.
+
 PANDUAN MEMBACA KALENDER EKONOMI (jika bagian KALENDER ada):
 Setiap event punya 3 nilai yang MAKNA-NYA BERBEDA:
 - Forecast: ekspektasi/konsensus pasar sebelum rilis (angka yang DIHARAPKAN).
@@ -557,6 +572,11 @@ SAMPLE_DATA: Dict[str, str] = {
     "calendar_data": "📅 NFP — 15:30 WIB (Forecast 180K, Previous 165K) — Belum rilis",
     "news_data": "📰 Dolar melemah setelah data inflasi AS melandai.",
     "sentiment_data": "+0.35 (bullish moderat)",
+    "cot_data": (
+        "📊 Gold Futures (COMEX) (posisi per 12 Agu 2026):\n"
+        "• Speculative (non-commercial): net +12,000 kontrak — perubahan mingguan +500\n"
+        "• Commercial (hedger): net -10,000 kontrak"
+    ),
     "WATCHLIST": "EUR/USD, XAU/USD (Gold)",
     "PROFILE": "modal $1.000 • risiko 2%/trade • gaya swing • jam 09:00-16:00",
     "BALANCE": "1,000",

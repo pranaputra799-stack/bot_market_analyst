@@ -114,24 +114,24 @@ class PlanCommandsMixin:
         if not args:
             await safe_reply_text(
                 update.message,
-                "Format: `/plan setup <modal> <risk%> <gaya> <pair1,pair2> [jam]`\\n\\n"
-                "Contoh:\\n"
-                "`/plan setup 1000 2 swing XAU/USD,EUR/USD 09:00-16:00`\\n"
-                "`/plan setup 500 1 day_trade EUR/USD`\\n\\n"
+                "Format: `/plan setup <modal> <risk%> <gaya> <pair1,pair2> [jam]`\n\n"
+                "Contoh:\n"
+                "`/plan setup 1000 2 swing XAU/USD,EUR/USD 09:00-16:00`\n"
+                "`/plan setup 500 1 day_trade EUR/USD`\n\n"
                 "Gaya: `scalping`, `day_trade`, `swing`.",
                 parse_mode="Markdown",
             )
             return
         profile = validate_profile_input(list(args))
         if "error" in profile:
-            await safe_reply_text(update.message, f"❌ {profile['error']}\\n\\n{self.PLAN_USAGE}", parse_mode="Markdown")
+            await safe_reply_text(update.message, f"❌ {profile['error']}\n\n{self.PLAN_USAGE}", parse_mode="Markdown")
             return
         ok = await db.upsert_user_profile_async(user_id, profile)
         if ok:
             await safe_reply_text(
                 update.message,
-                "✅ *Profil trading plan tersimpan!*\\n\\n"
-                f"👤 {format_profile_line(profile)}\\n\\n"
+                "✅ *Profil trading plan tersimpan!*\n\n"
+                f"👤 {format_profile_line(profile)}\n\n"
                 "Sekarang ketik `/plan` untuk generate rencana mingguanmu.",
                 parse_mode="Markdown",
             )
@@ -151,7 +151,7 @@ class PlanCommandsMixin:
         if not profile:
             await safe_reply_text(
                 update.message,
-                "ℹ️ Profil belum diisi. Ketik `/plan setup` dulu — contoh:\\n"
+                "ℹ️ Profil belum diisi. Ketik `/plan setup` dulu — contoh:\n"
                 "`/plan setup 1000 2 swing XAU/USD,EUR/USD 09:00-16:00`",
                 parse_mode="Markdown",
             )
@@ -170,7 +170,7 @@ class PlanCommandsMixin:
         if "error" in result:
             await safe_reply_text(
                 update.message,
-                f"❌ {result['error']}\\n\\nCoba lagi beberapa saat — kalau berulang, cek `/status`.",
+                f"❌ {result['error']}\n\nCoba lagi beberapa saat — kalau berulang, cek `/status`.",
                 parse_mode="Markdown",
             )
             return

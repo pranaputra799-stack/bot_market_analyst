@@ -11,6 +11,7 @@ from data.cot import (
     cot_data_to_json,
     extract_market,
     format_cot_message,
+    format_cot_summary,
     interpret_cot,
     parse_cot_csv,
     parse_legacy_csv,
@@ -245,6 +246,16 @@ class TestInterpretAndFormat(unittest.TestCase):
         self.assertIn("COT REPORT", msg)
         self.assertIn("500,000", msg)
         self.assertIn("Open Interest", msg)
+
+    def test_format_summary_compact_for_ai_context(self):
+        msg = format_cot_summary(self.data)
+        # Ringkas (konteks AI) — tanpa tabel penuh, tapi memuat angka kunci
+        self.assertIn("Gold Futures", msg)
+        self.assertIn("+100,000", msg)  # net non-commercial (300000-200000)
+        self.assertIn("-100,000", msg)  # net commercial (150000-250000)
+        self.assertIn("+20,000", msg)   # perubahan mingguan
+        # Jangan memuat baris tabel berat (Open Interest di sini bukan wajib)
+        self.assertNotIn("Open Interest", msg)
 
 
 class TestJsonRoundTrip(unittest.TestCase):

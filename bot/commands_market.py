@@ -264,12 +264,23 @@ class MarketCommandsMixin:
         if subscribers != before:
             await self._persist_alert_subscribers(context)
     async def _persist_alert_subscribers(self, context) -> None:
-        """Simpan daftar subscriber event saat ini ke Supabase (best-effort)."""
+        """Simpan daftar subscriber event saat ini ke Supabase (best-effort).
+
+        Kegagalan di-log WARNING (bukan debug): persist yang gagal = langganan
+        alert hilang saat bot restart (Render free tier spin-down) → user harus
+        mengaktifkan ulang. Silent-fail di sini pernah jadi support issue.
+        """
         try:
             subscribers = context.bot_data.get("event_alert_subscribers", set())
-            await db.save_event_alert_subscribers_async(subscribers)
+            ok = await db.save_event_alert_subscribers_async(subscribers)
+            if not ok:
+                logger.warning(
+                    "Persist event subscribers GAGAL (Supabase tidak tersedia/"
+                    "gagal) — alert user akan hilang saat restart. Cek "
+                    "SUPABASE_URL (harus https://...) & tabel event_alert_subscribers."
+                )
         except Exception as e:
-            logger.debug(f"Persist event subscribers gagal: {e}")
+            logger.warning(f"Persist event subscribers gagal: {e}")
     async def calendar_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler untuk perintah /calendar - Kalender Ekonomi."""
         if not await self._check_command_rate_limit(update, context):

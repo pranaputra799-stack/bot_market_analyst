@@ -62,6 +62,10 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
         post_fake = mock.Mock()
         post_fake.raise_for_status = mock.Mock()
         sess.post.return_value = post_fake
+        # Tabel berisi key lama "stale1" + key baru "a" → hanya stale1 yang di-prune
+        get_fake = mock.Mock()
+        get_fake.json.return_value = [{"key": "a"}, {"key": "stale1"}]
+        sess.get.return_value = get_fake
         with mock.patch("data.database._is_configured", return_value=True), \
              mock.patch("data.database._session", return_value=sess):
             self.assertTrue(Database.save_event_alert_notified({"b", "a"}))
@@ -74,15 +78,16 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
             self.assertTrue(row["created_at"])
         prefer = sess.post.call_args.kwargs["headers"]["Prefer"]
         self.assertIn("merge-duplicates", prefer)
-        # ...lalu prune via DELETE yang SELALU punya WHERE clause
-        # (lolos proteksi Supabase "DELETE requires a WHERE clause" / 400 21000).
+        # ...lalu prune HANYA key lama yang tidak ada di daftar baru
+        # (bukan not.in yang bisa menghapus id baru di daftar besar).
         sess.delete.assert_called_once()
         del_url = sess.delete.call_args.args[0]
-        self.assertIn("key=not.in.(a,b)", del_url)
+        self.assertIn("key=in.(stale1)", del_url)
+        self.assertNotIn("key=not.in", del_url)
 
     def test_save_event_alert_notified_url_encodes_key_values(self):
         """Kunci mengandung karakter khusus ('|', ':', '+') yang harus di-URL-
-        encode dalam filter not.in.() agar query string tidak rusak."""
+        encode dalam filter in.() agar query string tidak rusak."""
         sess = mock.Mock()
         delete_fake = mock.Mock()
         delete_fake.raise_for_status = mock.Mock()
@@ -91,15 +96,20 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
         post_fake.raise_for_status = mock.Mock()
         sess.post.return_value = post_fake
         key = "NFP|2026-08-10T12:30:00+00:00"
+        stale = "OLD|2026-08-01T00:00:00+00:00"
+        get_fake = mock.Mock()
+        get_fake.json.return_value = [{"key": stale}]
+        sess.get.return_value = get_fake
         with mock.patch("data.database._is_configured", return_value=True), \
              mock.patch("data.database._session", return_value=sess):
             self.assertTrue(Database.save_event_alert_notified({key}))
         del_url = sess.delete.call_args.args[0]
-        self.assertIn("%7C", del_url)  # '|'
-        self.assertIn("%3A", del_url)  # ':'
-        self.assertIn("%2B", del_url)  # '+'
+        self.assertIn("key=in.(", del_url)
+        self.assertIn("%7C", del_url)  # '|' di-encode
+        self.assertIn("%3A", del_url)  # ':' di-encode
+        self.assertIn("%2B", del_url)  # '+' di-encode
         # Nilai asli tidak boleh muncul mentah (harus ter-encode).
-        self.assertNotIn(key, del_url)
+        self.assertNotIn(stale, del_url)
 
     def test_save_event_alert_subscribers_replace_all(self):
         sess = mock.Mock()
@@ -109,6 +119,10 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
         post_fake = mock.Mock()
         post_fake.raise_for_status = mock.Mock()
         sess.post.return_value = post_fake
+        # Tabel berisi chat_id 1 (masih aktif) + 99 (stale) → hanya 99 di-prune
+        get_fake = mock.Mock()
+        get_fake.json.return_value = [{"chat_id": 1}, {"chat_id": 99}]
+        sess.get.return_value = get_fake
         with mock.patch("data.database._is_configured", return_value=True), \
              mock.patch("data.database._session", return_value=sess):
             self.assertTrue(Database.save_event_alert_subscribers({2, 1}))
@@ -120,10 +134,11 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
             self.assertTrue(row["created_at"])
         prefer = sess.post.call_args.kwargs["headers"]["Prefer"]
         self.assertIn("merge-duplicates", prefer)
-        # Prune: DELETE dengan WHERE clause, bukan DELETE massal tanpa filter.
+        # Prune: DELETE dengan WHERE clause, TANPA menghapus id baru (1, 2).
         sess.delete.assert_called_once()
         del_url = sess.delete.call_args.args[0]
-        self.assertIn("chat_id=not.in.(1,2)", del_url)
+        self.assertIn("chat_id=in.(99)", del_url)
+        self.assertNotIn("chat_id=not.in", del_url)
 
     def test_save_event_alert_subscribers_filters_invalid_chat_ids(self):
         """Nilai non-int (string/bool) tidak boleh ikut dikirim — satu nilai
@@ -135,6 +150,9 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
         post_fake = mock.Mock()
         post_fake.raise_for_status = mock.Mock()
         sess.post.return_value = post_fake
+        get_fake = mock.Mock()
+        get_fake.json.return_value = [{"chat_id": 2}, {"chat_id": 999}]
+        sess.get.return_value = get_fake
         with mock.patch("data.database._is_configured", return_value=True), \
              mock.patch("data.database._session", return_value=sess):
             # Catatan: True tidak boleh dipakai bareng 1 (True == 1 di Python,
@@ -145,7 +163,8 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
         for row in payload:
             self.assertIn("created_at", row)
         sess.delete.assert_called_once()
-        self.assertIn("chat_id=not.in.(2,5)", sess.delete.call_args.args[0])
+        # Stale = existing − baru = {999} — id baru (2, 5) tidak ikut terhapus.
+        self.assertIn("chat_id=in.(999)", sess.delete.call_args.args[0])
 
     def test_save_event_alert_subscribers_empty_clears_table(self):
         """Daftar kosong => tidak ada upsert, cukup DELETE semua via WHERE
@@ -162,8 +181,9 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
         self.assertIn("chat_id=not.is.null", sess.delete.call_args.args[0])
 
     def test_save_event_alert_subscribers_prune_chunked(self):
-        """>200 chat_id => DELETE prune dipecah per 200 agar URL tidak
-        kepanjangan (2 panggilan DELETE untuk 250 id)."""
+        """>200 stale => DELETE prune dipecah per 200 via in.(...) agar URL tidak
+        kepanjangan — dan TIDAK menghapus id baru (regresi: not.in per-chunk
+        hanya menyisakan chunk terakhir)."""
         sess = mock.Mock()
         delete_fake = mock.Mock()
         delete_fake.raise_for_status = mock.Mock()
@@ -171,11 +191,22 @@ class TestDatabaseAsyncWrappers(unittest.TestCase):
         post_fake = mock.Mock()
         post_fake.raise_for_status = mock.Mock()
         sess.post.return_value = post_fake
+        # Existing: 500 baris (0..499); daftar baru: 250..499 → stale = 0..249
+        get_fake = mock.Mock()
+        get_fake.json.return_value = [{"chat_id": c} for c in range(500)]
+        sess.get.return_value = get_fake
         with mock.patch("data.database._is_configured", return_value=True), \
              mock.patch("data.database._session", return_value=sess):
-            self.assertTrue(Database.save_event_alert_subscribers(set(range(250))))
+            self.assertTrue(Database.save_event_alert_subscribers(set(range(250, 500))))
         self.assertEqual(sess.post.call_count, 1)
         self.assertEqual(sess.delete.call_count, 2)
+        urls = [c.args[0] for c in sess.delete.call_args_list]
+        # Hanya stale yang dihapus, dipecah per 200: 0..199 lalu 200..249
+        self.assertIn("chat_id=in.(0,1,2", urls[0])
+        self.assertIn("chat_id=in.(200,201,202", urls[1])
+        # Tidak ada DELETE not.in (yang bisa menghapus id baru).
+        self.assertNotIn("not.in", urls[0])
+        self.assertNotIn("not.in", urls[1])
 
     # ===================== USER ACTIVITY =====================
 

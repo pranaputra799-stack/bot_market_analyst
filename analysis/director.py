@@ -111,6 +111,7 @@ class AnalysisDirector:
         market_data_ohlcv: Optional[List[Dict]] = None,
         technical_indicators: Optional[Dict] = None,
         conversation_history: str = "",
+        extra_context: str = "",
     ) -> AnalysisResult:
         """
         Run the full multi-agent analysis pipeline.
@@ -121,6 +122,10 @@ class AnalysisDirector:
             technical_indicators: Optional technical indicators
             conversation_history: Riwayat percakapan user (format_history) untuk
                 konteks follow-up — disuntikkan ke research & synthesis prompt
+            extra_context: Konteks tambahan dari lapisan bot yang tidak
+                dikumpulkan research agent (mis. data COT/posisi institusional
+                saat user menanyakannya) — disuntikkan ke research context
+                sehingga semua agent & sintesis melihat data yang sama.
 
         Returns:
             AnalysisResult with all agent outputs and final response
@@ -172,6 +177,15 @@ class AnalysisDirector:
                 conversation_history=conversation_history,  # konteks follow-up
             )
             metrics.record_agent_time("research", (time.time() - research_start) * 1000)
+
+            # ===== EXTRA CONTEXT (mis. data COT) =====
+            # Data yang tidak dikumpulkan research agent (posisi institusional
+            # CFTC dkk) disuntikkan ke raw_context agar thesis/contradiction/
+            # scenarios/synthesis ikut mempertimbangkannya.
+            if extra_context and result.research_context:
+                result.research_context.raw_context = (
+                    result.research_context.raw_context + "\n\n" + extra_context
+                ).strip()
 
             # ===== STAGE 2: Signals (only if market data is relevant) =====
             if intent_result.needs_market_data or market_data_ohlcv:

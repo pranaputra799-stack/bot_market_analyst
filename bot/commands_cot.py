@@ -22,8 +22,10 @@ from data.cot import (
     fetch_tff_rows,
     fetch_year_rows,
     format_cot_message,
+    format_cot_summary,
     resolve_instrument,
 )
+import re
 from config.settings import ADMIN_USER_IDS
 from data.database import db
 from prompts.loader import format_prompt
@@ -35,22 +37,22 @@ class CotCommandsMixin:
     """Command COT — posisi institusional dari CFTC (on-demand + cache 7 hari)."""
 
     COT_USAGE = (
-        "📊 *COT REPORT (CFTC)*\\n\\n"
+        "📊 *COT REPORT (CFTC)*\n\n"
         "Posisi institusional (non-commercial/speculative & commercial/hedger) "
-        "di pasar futures AS — dirilis CFTC gratis setiap Jumat.\\n\\n"
-        "`/cot gold` — Gold futures (XAU/USD)\\n"
-        "`/cot eur` — Euro FX\\n"
-        "`/cot gbp` — British Pound\\n"
-        "`/cot jpy` — Japanese Yen\\n"
-        "`/cot oil` — WTI Crude Oil\\n"
-        "`/cot btc` — Bitcoin futures\\n"
-        "`/cot dxy` — US Dollar Index\\n"
-        "`/cot us2y` — 2-Year T-Note\\n"
-        "`/cot sofr` — SOFR 3M\\n"
-        "`/cot fed funds` — Fed Funds\\n"
-        "`/cot sp400` — S&P 400 Midcap\\n"
-        "`/cot dow` — DJIA (E-mini Dow)\\n"
-        "`/cot russell` — Russell 2000 E-mini\\n\\n"
+        "di pasar futures AS — dirilis CFTC gratis setiap Jumat.\n\n"
+        "`/cot gold` — Gold futures (XAU/USD)\n"
+        "`/cot eur` — Euro FX\n"
+        "`/cot gbp` — British Pound\n"
+        "`/cot jpy` — Japanese Yen\n"
+        "`/cot oil` — WTI Crude Oil\n"
+        "`/cot btc` — Bitcoin futures\n"
+        "`/cot dxy` — US Dollar Index\n"
+        "`/cot us2y` — 2-Year T-Note\n"
+        "`/cot sofr` — SOFR 3M\n"
+        "`/cot fed funds` — Fed Funds\n"
+        "`/cot sp400` — S&P 400 Midcap\n"
+        "`/cot dow` — DJIA (E-mini Dow)\n"
+        "`/cot russell` — Russell 2000 E-mini\n\n"
         "⚠️ COT adalah data futures (bukan spot forex) — pair tanpa kontrak "
         "futures AS akan ditolak dengan disclaimer."
     )
@@ -81,12 +83,11 @@ class CotCommandsMixin:
         """Kunci cache Supabase per instrumen (TTL 7 hari di DB)."""
         return "cot:" + "_".join(config.get("keywords") or [])
 
-    async def _cot_report_text(self, config: dict) -> str:
-        """Bangun teks laporan COT untuk satu instrumen (fetch → cache → AI).
+    async def _load_cot_data(self, config: dict):
+        """Muat data COT satu instrumen: cache Supabase (7 hari) → download CFTC → cache.
 
-        Dipakai bersama oleh /cot dan tombol quick action (callback `cot:`),
-        sehingga perilakunya identik. Selalu mengembalikan teks Markdown;
-        diawali pesan error bila data tidak tersedia.
+        Returns:
+            Dict data COT (atau None bila instrumen tidak ditemukan di laporan).
         """
         cache_key = self._cot_cache_key(config)
 
@@ -108,19 +109,32 @@ class CotCommandsMixin:
             if not data and config.get("report") == "tff":
                 tff_rows = await asyncio.to_thread(fetch_tff_rows)
                 data = extract_market(tff_rows, config) if tff_rows else None
-            if not data:
-                return (
-                    f"ℹ️ *{config['display']}* tidak tersedia di laporan COT "
-                    f"terbaru.\n\n"
-                    f"⚠️ COT adalah data *futures* AS, bukan spot forex — "
-                    f"instrumen tanpa kontrak futures AS tidak punya laporan. "
-                    f"Coba: `/cot gold`, `/cot eur`, `/cot oil`."
-                )
-            # Simpan ke cache 7 hari (data diformat JSON-safe)
-            try:
-                await db.set_cot_cache_async(cache_key, cot_data_to_json(data))
-            except Exception as e:
-                logger.debug(f"COT cache save gagal: {e}")
+            if data:
+                # Simpan ke cache 7 hari (data diformat JSON-safe)
+                try:
+                    await db.set_cot_cache_async(cache_key, cot_data_to_json(data))
+                except Exception as e:
+                    logger.debug(f"COT cache save gagal: {e}")
+        return data
+
+    async def _cot_report_text(self, config: dict) -> str:
+        """Bangun teks laporan COT untuk satu instrumen (fetch → cache → AI).
+
+        Dipakai bersama oleh /cot dan tombol quick action (callback `cot:`),
+        sehingga perilakunya identik. Selalu mengembalikan teks Markdown;
+        diawali pesan error bila data tidak tersedia.
+        """
+        data = await self._load_cot_data(config)
+        if not data:
+            return (
+                f"ℹ️ *{config['display']}* tidak tersedia di laporan COT "
+                f"terbaru.\n\n"
+                f"⚠️ COT adalah data *futures* AS, bukan spot forex — "
+                f"instrumen tanpa kontrak futures AS tidak punya laporan. "
+                f"Coba: `/cot gold`, `/cot eur`, `/cot oil`."
+            )
+
+        cache_key = self._cot_cache_key(config)
 
         # 3) Interpretasi AI (1x per laporan — ikut di-cache)
         ai_text = data.get("ai_interpretation")
@@ -137,6 +151,66 @@ class CotCommandsMixin:
         if ai_text:
             message += f"\n\n🧠 *Interpretasi AI:*\n{ai_text}\n"
         return message
+
+    async def _get_cot_context_text(self, instruments: list = None, max_instruments: int = 5) -> str:
+        """Ringkasan COT ringkas untuk konteks AI (morning brief / chat).
+
+        Baca dari cache Supabase (7 hari, diisi pre-warm mingguan) — download
+        CFTC hanya sebagai fallback saat cache kosong. Selalu aman: gagal → "".
+
+        Args:
+            instruments: Daftar alias instrumen (mis. ["gold", "eur", "dxy"]);
+                None/kosong = set default penting.
+            max_instruments: Batas jumlah instrumen yang diproses.
+        """
+        aliases = instruments or ["gold", "eur", "dxy", "oil", "sp500", "btc"]
+        configs = []
+        for alias in aliases:
+            cfg = resolve_instrument(alias)
+            if cfg and cfg not in configs:
+                configs.append(cfg)
+            if len(configs) >= max_instruments:
+                break
+
+        sections = []
+        for cfg in configs:
+            try:
+                data = await self._load_cot_data(cfg)
+                if data:
+                    sections.append(format_cot_summary(data))
+            except Exception as e:
+                logger.debug(f"COT context {cfg.get('display')} gagal: {e}")
+        return "\n\n".join(sections) if sections else ""
+
+    @staticmethod
+    def _is_cot_question(text: str) -> bool:
+        """Deteksi pertanyaan yang menyebut data COT / posisi institusional."""
+        q = (text or "").lower()
+        if any(kw in q for kw in (
+            "cftc",
+            "posisi institusional",
+            "smart money",
+            "commitments of traders",
+            "hedger",
+            "hedging",
+            "institutional positioning",
+            "laporan cot",
+            "posisi trader",
+            "posisi spekulatif",
+        )):
+            return True
+        # Kata 'cot' utuh (bukan substring seperti cotton/coto) — user bisa
+        # menulis "data cot", "cot gold", "bagaimana cot-nya?".
+        return re.search(r"\bcot\b", q) is not None
+
+    async def _get_cot_context_for_question(self, question: str, max_instruments: int = 4) -> str:
+        """Konteks COT untuk satu pertanyaan: instrumen yang disebut + default penting."""
+        aliases = ["gold", "eur", "dxy"]
+        cfg = resolve_instrument(question)
+        if cfg and cfg.get("keywords"):
+            alias = cfg["keywords"][0]
+            aliases = [alias] + [a for a in aliases if a != alias]
+        return await self._get_cot_context_text(aliases, max_instruments=max_instruments)
 
     async def cot_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler /cot [simbol]."""
