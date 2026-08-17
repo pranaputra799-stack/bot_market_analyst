@@ -2,46 +2,45 @@ Analyze the following market data to answer this question:
 
 QUESTION: {question}
 
-DATA KONTEKS:
+CONTEXT DATA:
 {context_data}
 
-KONTEKS PERCAKAPAN SEBELUMNYA (bisa membantu memahami pertanyaan follow-up;
-abaikan jika tidak relevan):
+PREVIOUS CONVERSATION CONTEXT (can help understand follow-up questions;
+ignore if not relevant):
 {conversation_history}
 
-PANDUAN MEMBACA DATA KALENDER EKONOMI (jika bagian CALENDAR ada):
-Setiap event punya 3 nilai yang MAKNA-NYA BERBEDA:
-- Forecast: ekspektasi/konsensus pasar sebelum rilis (angka yang DIHARAPKAN).
-- Previous: nilai rilis sebelumnya (acuan perbandingan).
-- Actual: nilai yang BENAR-BENAR sudah dirilis (HANYA ada jika event sudah lewat dan
-  ditandai "Sudah rilis — Actual: ..." di data; event lewat tanpa nilai memakai tanda
-  "Sudah rilis (nilai aktual belum tersedia)"; event mendatang ditandai "Belum rilis"
-  dan TIDAK punya Actual).
-Gunakan ketiganya untuk menilai "surprise": Actual vs Forecast yang meleset jauh
-(mis. Actual 2.1% vs Forecast 3.0%) adalah katalis kuat; Actual yang sesuai ekspektasi
-umumnya sudah "harga-in" oleh pasar.
+HOW TO READ ECONOMIC CALENDAR DATA (if a CALENDAR section exists):
+Each event has 3 values with DIFFERENT MEANINGS:
+- Forecast: market expectation/consensus before the release (the EXPECTED number).
+- Previous: the previous release value (comparison baseline).
+- Actual: the value that has ACTUALLY been released (ONLY exists if the event has passed and
+  is marked "Released — Actual: ..." in the data; passed events without a value use
+  "Released (actual value not yet available)"; upcoming events are marked "Not released yet"
+  and have NO Actual).
+Use all three to assess the "surprise": an Actual far from the Forecast (e.g., Actual 2.1%
+vs Forecast 3.0%) is a strong catalyst; an Actual matching expectations is generally already
+"priced in" by the market.
 
-Berikan analisis dalam JSON yang VALID dan LENGKAP (tanpa teks lain di luar JSON),
-sesuai skema berikut:
+Provide a VALID and COMPLETE analysis in JSON (no other text outside the JSON),
+following this schema:
 {{
-    "price_context": "string — ringkasan aksi harga terkait pertanyaan, kosongkan ("") jika tidak relevan",
-    "key_drivers": ["string", ...] — 2-4 driver utama, null jika tidak ada data,
-    "market_regime": "string — pilih salah satu: trending|ranging|volatile, null jika tidak jelas",
-    "risk_factors": ["string", ...] — 1-3 faktor risiko, null jika tidak ada,
+    "price_context": "string — summary of price action relevant to the question, empty ("") if not relevant",
+    "key_drivers": ["string", ...] — 2-4 main drivers, null if no data,
+    "market_regime": "string — choose one: trending|ranging|volatile, null if unclear",
+    "risk_factors": ["string", ...] — 1-3 risk factors, null if none,
     "key_levels": {{
-        "support": ["string", ...] — level support, null jika tidak ada,
-        "resistance": ["string", ...] — level resistance, null jika tidak ada
+        "support": ["string", ...] — support levels, null if none,
+        "resistance": ["string", ...] — resistance levels, null if none
     }}
 }}
 
-ATURAN:
-- JANGAN mengarang angka/harga yang tidak ada di data di atas.
-- Semua level di "key_levels" WAJIB berasal dari data yang diberikan (mis. pivot,
-  fibonacci, high/low yang tertulis). Jika data tidak memuat level tersebut,
-  isi null — DILARANG menebak level dari prinsip umum atau ingatan.
-- "price_context" hanya boleh merangkum angka yang benar-benar ada di data.
-- Jangan menyebut event belum rilis sebagai "sudah rilis" dan sebaliknya — ikuti status di data.
-- Jika data kosong, isi field dengan null (bukan teks karangan).
-- Jangan pakai simbol * atau **.
-- Jawab dalam Bahasa Indonesia.
-
+RULES:
+- Do NOT invent numbers/prices that are not in the data above.
+- All levels in "key_levels" MUST come from the given data (e.g., pivot, fibonacci,
+  written high/low). If the data does not contain those levels, fill with null — it is
+  FORBIDDEN to guess levels from general principles or memory.
+- "price_context" may only summarize numbers that actually exist in the data.
+- Do not describe unreleased events as "released" and vice versa — follow the status in the data.
+- If the data is empty, fill fields with null (not made-up text).
+- Do not use * or ** symbols.
+- Respond in Bahasa Indonesia (Indonesian).

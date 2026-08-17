@@ -18,4 +18,3 @@ RULES:
 - Probabilities must sum to 100%.
 - Scenarios must be grounded in the provided data; do not invent catalysts.
 - {NO_MARKDOWN_RULE}
-

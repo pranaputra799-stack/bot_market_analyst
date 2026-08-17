@@ -81,7 +81,7 @@ class TestMorningBriefResilience(unittest.TestCase):
     def test_all_sources_ok_multi_agent(self):
         bot = _make_bot()
         director = FakeDirector(result=SimpleNamespace(
-            final_response="OUTLOOK: Dolar melemah.\n\nKATALIS UTAMA: CPI AS."
+            final_response="OUTLOOK: Dolar melemah.\n\nKEY CATALYSTS: CPI AS."
         ))
         with _enter_mocks(*self._mock_data(bot)), \
                 mock.patch.object(bot, "analysis_director", director):
@@ -126,7 +126,7 @@ class TestMorningBriefResilience(unittest.TestCase):
 
     def test_split_outlook_catalysts(self):
         out, cat = MarketBot._split_outlook_catalysts(
-            "OUTLOOK: Gold menguat.\n\nKATALIS UTAMA: NFP Jumat."
+            "OUTLOOK: Gold menguat.\n\nKEY CATALYSTS: NFP Jumat."
         )
         self.assertEqual(out, "Gold menguat.")
         self.assertEqual(cat, "NFP Jumat.")

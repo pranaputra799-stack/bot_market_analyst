@@ -14,4 +14,3 @@ each one matters for the user's decision. Only report contradictions backed by
 the data provided — do not invent conflicts.
 
 {NO_MARKDOWN_RULE}
-

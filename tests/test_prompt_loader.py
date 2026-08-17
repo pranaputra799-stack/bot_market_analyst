@@ -105,7 +105,7 @@ class TestPromptLoader(unittest.TestCase):
         # Parser _generate_morning_brief memotong di marker ini — wajib ada
         prompt = format_prompt("morning_brief", **_FULL_KWARGS["morning_brief"])
         self.assertIn("OUTLOOK:", prompt)
-        self.assertIn("KATALIS UTAMA:", prompt)
+        self.assertIn("KEY CATALYSTS:", prompt)
 
     def test_defaults_in_sync_with_files(self):
         # DEFAULT_PROMPTS harus identik dengan isi file .txt (fallback darurat
@@ -171,7 +171,7 @@ class TestAgentPrompts(unittest.TestCase):
             context_data="Data pasar",
             conversation_history="User: analisis EUR/USD",
         )
-        self.assertIn("KONTEKS PERCAKAPAN SEBELUMNYA", p)
+        self.assertIn("PREVIOUS CONVERSATION CONTEXT", p)
         self.assertIn("EUR/USD", p)
         self.assertIn('"price_context"', p)  # skema JSON tetap utuh ({{ }} → { })
         self.assertNotIn("{question}", p)
@@ -301,7 +301,7 @@ class TestPromptWiring(unittest.TestCase):
         self.assertIn("NFP 15:30 WIB", prompt)
         self.assertIn("Berita", prompt)
         self.assertIn("+0.4", prompt)
-        self.assertIn("KATALIS UTAMA:", prompt)
+        self.assertIn("KEY CATALYSTS:", prompt)
         self.assertNotIn("{", prompt)
 
     def test_build_morning_brief_prompt_sentiment_default(self):

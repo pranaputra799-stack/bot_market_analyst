@@ -16,8 +16,7 @@ Confidence levels:
 - VERY LOW (<25%): Too uncertain for any conclusion
 
 Be honest: low data quality → low confidence. Never inflate confidence.
-Semua penilaian hanya boleh berdasar data yang diberikan pada prompt ini —
-JANGAN mengarang fakta, angka, atau event ekonomi untuk mendukung skor.
+All assessments may only be based on the data given in this prompt —
+do NOT invent facts, numbers, or economic events to support a score.
 
 {NO_MARKDOWN_RULE}
-

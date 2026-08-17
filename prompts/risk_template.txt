@@ -5,32 +5,31 @@ THESIS: {thesis_output}
 CONTRADICTIONS: {contradiction_output}
 SCENARIOS: {scenarios_output}
 
-Output JSON yang VALID, sesuai skema:
+Output VALID JSON, following this schema:
 {{
     "overall_risk_level": "string — low|moderate|high|extreme",
     "risk_factors": [
         {{
-            "risk": "string — nama risiko",
+            "risk": "string — name of the risk",
             "severity": "string — high|medium|low",
-            "explanation": "string — penjelasan 1-2 kalimat",
-            "what_to_watch": "string — apa yang perlu diperhatikan"
+            "explanation": "string — 1-2 sentence explanation",
+            "what_to_watch": "string — what to watch for"
         }}
     ],
     "catalyst_calendar": [
         {{
-            "event": "string — nama event/data (HANYA yang ada di data kalender)",
-            "date": "string — tanggal dari data, atau "Tidak tersedia" jika tidak ada",
+            "event": "string — name of the event/data (ONLY those in the calendar data)",
+            "date": "string — date from the data, or "Not available" if absent",
             "impact": "string — high|medium|low",
-            "what_it_means": "string — dampak potensial (bandingkan Actual vs Forecast vs Previous bila tersedia; event belum rilis = ekspektasi pasar)"
+            "what_it_means": "string — potential impact (compare Actual vs Forecast vs Previous when available; unreleased event = market expectation)"
         }}
     ],
-    "summary": "string — ringkasan risiko 2 kalimat"
+    "summary": "string — 2 sentence risk summary"
 }}
 
 RULES:
-- Pahami makna nilai kalender: Actual = nilai yang sudah rilis, Forecast = konsensus pasar, Previous = nilai sebelumnya. "Surprise" besar (Actual vs Forecast) = risiko/katalis tinggi.
-- JANGAN menebak event/tanggal yang tidak ada di data. Jika kalender kosong, isi "catalyst_calendar": [].
-- Jangan pakai simbol * atau **.
-- ⚠️ INGAT: Ini analisis EDUKASI, bukan saran trading.
-- Jawab dalam Bahasa Indonesia.
-
+- Understand the calendar value meanings: Actual = value already released, Forecast = market consensus, Previous = prior value. A large "surprise" (Actual vs Forecast) = high risk/catalyst.
+- Do NOT guess events/dates that are not in the data. If the calendar is empty, fill "catalyst_calendar": [].
+- Do not use * or ** symbols.
+- ⚠️ REMEMBER: This is EDUCATIONAL analysis, not trading advice.
+- Respond in Bahasa Indonesia (Indonesian).

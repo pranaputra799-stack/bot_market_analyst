@@ -24,9 +24,9 @@ from utils.token_budget import truncate_to_budget
 # Aturan format output bersama untuk semua prompt: bot menampilkan plain text,
 # jadi AI dilarang memakai simbol markdown yang bisa tampil mentah di Telegram.
 NO_MARKDOWN_RULE = (
-    "FORMAT OUTPUT: JANGAN gunakan simbol markdown (*, **, _, #) pada jawaban. "
-    "Gunakan emoji, angka, bullet (•/-), dan baris baru untuk struktur. "
-    "Jawab dalam Bahasa Indonesia yang santai namun profesional."
+    "OUTPUT FORMAT: Do NOT use markdown symbols (*, **, _, #) in your answer. "
+    "Use emoji, numbers, bullets (•/-), and new lines for structure. "
+    "Respond in Bahasa Indonesia (Indonesian), casual yet professional."
 )
 
 
@@ -167,7 +167,7 @@ def format_context_for_prompt(
         Teks konteks yang muat di batas (dengan marker terpotong bila perlu)
     """
     if not context_data:
-        return "Tidak ada data konteks yang tersedia."
+        return "No context data available."
     if max_tokens is not None:
         return truncate_to_budget(context_data, max_tokens, "context")
     if len(context_data) > max_length:
@@ -191,10 +191,10 @@ def build_analysis_prompt(
     """Build the final synthesis prompt for the Director."""
     return FINAL_SYNTHESIS_TEMPLATE.format(
         question=question,
-        conversation_history=conversation_history or "Tidak ada percakapan sebelumnya.",
+        conversation_history=conversation_history or        "No previous conversation.",
         research_output=research_output or "Not analyzed",
         signal_output=signal_output or "Not analyzed",
-        indicators_output=indicators_output or "Tidak ada data indikator — jangan mengarang angka RSI/MACD/level.",
+        indicators_output=indicators_output or "No indicator data — do not invent RSI/MACD/level numbers.",
         thesis_output=thesis_output or "Not analyzed",
         contradiction_output=contradiction_output or "Not analyzed",
         scenarios_output=scenarios_output or "Not analyzed",

@@ -23,9 +23,9 @@ providers:
   - id: "file://agent_provider.py:call_confidence"
     label: "Confidence Agent (JSON)"
 
-# Template prompt — {symbol} diisi dari vars tiap test
+# Template prompt — {symbol} is filled from the vars of each test
 prompts:
-  - "Analisis {symbol} sekarang"
+  - "Analyze {symbol} now"
 
 tests:
   # ---------- Provider 1: Sintesis akhir (teks user-facing) ----------

@@ -14,4 +14,3 @@ RULES:
 - Only mention events that exist in the provided data; never guess dates.
 - This is EDUCATIONAL, not trading advice.
 - {NO_MARKDOWN_RULE}
-

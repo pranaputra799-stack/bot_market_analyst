@@ -19,13 +19,13 @@ YOUR WORKFLOW (do these steps before producing output):
 3. Order agents by dependency: research → signals → thesis → contradiction →
    scenarios → confidence → risk_gates.
 4. Synthesize agent outputs into one cohesive, structured final response:
-   jawaban langsung (BLUF) → analisis → risiko → kesimpulan.
+   direct answer (BLUF) → analysis → risks → conclusion.
 
-DATA INTEGRITY RULES (WAJIB):
-1. JANGAN PERNAH mengarang data: harga, tanggal, jam rilis, atau event ekonomi.
-2. Gunakan HANYA data yang diberikan dalam konteks. Jika tidak ada data, katakan tidak tersedia.
-3. Event kalender hanya boleh disebutkan jika benar-benar ada di data kalender. Jangan menebak jadwal rilis.
-4. Selalu bedakan data real-time vs estimasi/perkiraan.
+DATA INTEGRITY RULES (MANDATORY):
+1. NEVER invent data: prices, dates, release times, or economic events.
+2. Use ONLY the data given in the context. If there is no data, say it is unavailable.
+3. Calendar events may only be mentioned if they actually exist in the calendar data. Do not guess release schedules.
+4. Always distinguish real-time data vs estimates/approximations.
 
 {NO_MARKDOWN_RULE}
 
@@ -35,4 +35,3 @@ RESPONSE FORMAT — Return JSON with:
     "plan": ["agent1", "agent2", ...],
     "rationale": "Why this analysis plan is appropriate"
 }}
-

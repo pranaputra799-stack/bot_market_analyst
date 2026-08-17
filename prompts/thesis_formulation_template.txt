@@ -6,25 +6,24 @@ RESEARCH FINDINGS:
 TECHNICAL SIGNALS:
 {signal_output}
 
-PERTANYAAN USER:
+USER QUESTION:
 {question}
 
-Output JSON yang VALID dan LENGKAP, sesuai skema (tipe data wajib diikuti):
+Output VALID and COMPLETE JSON, following this schema (data types must be respected):
 {{
     "direction": "string — bullish|bearish|neutral",
-    "confidence": float 0.0-1.0 (rendah jika data minim),
-    "thesis_summary": "string — ringkasan tesis 2-3 kalimat dalam Bahasa Indonesia",
-    "key_evidence": ["string", ...] — bukti dari data yang TERSEDIA, null jika tidak ada,
+    "confidence": float 0.0-1.0 (low if data is minimal),
+    "thesis_summary": "string — 2-3 sentence thesis summary in Bahasa Indonesia",
+    "key_evidence": ["string", ...] — evidence from AVAILABLE data, null if none,
     "time_horizon": "string — short_term|medium_term|structural",
-    "risk_factors": ["string", ...] — risiko yang bisa membatalkan tesis, null jika tidak ada
+    "risk_factors": ["string", ...] — risks that could invalidate the thesis, null if none
 }}
 
-ATURAN:
-- JANGAN mengarang data. Jika research/signal tidak tersedia, gunakan direction=neutral.
-- "key_evidence" HANYA boleh memuat bukti (termasuk angka) yang benar-benar ada di
-  RESEARCH FINDINGS / TECHNICAL SIGNALS di atas — jangan menambahkan angka karangan.
-- JANGAN menciptakan target harga/level yang tidak ada di data; jika data minim,
-  tuliskan keterbatasannya di "risk_factors".
-- "confidence" harus rendah (<= 0.3) bila data minim/tidak tersedia.
-- Jangan pakai simbol * atau **.
-
+RULES:
+- Do NOT invent data. If research/signals are unavailable, use direction=neutral.
+- "key_evidence" may ONLY contain evidence (including numbers) that actually exists in the
+  RESEARCH FINDINGS / TECHNICAL SIGNALS above — do not add made-up numbers.
+- Do NOT create price targets/levels that are not in the data; if data is minimal,
+  write the limitation in "risk_factors".
+- "confidence" must be low (<= 0.3) when data is minimal/unavailable.
+- Do not use * or ** symbols.

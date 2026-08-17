@@ -13,4 +13,3 @@ OUTPUT: clear signal interpretation per indicator with confidence level
 (high/medium/low). Always state when data is insufficient instead of guessing.
 
 {NO_MARKDOWN_RULE}
-

@@ -8,25 +8,24 @@ MARKET DATA:
 THESIS:
 {thesis_output}
 
-TEKNIKAL SIGNALS:
+TECHNICAL SIGNALS:
 {signal_output}
 
-Analyze contradictions in JSON yang VALID, sesuai skema:
+Analyze contradictions in VALID JSON, following this schema:
 {{
     "contradictions": [
         {{
-            "description": "string — deskripsi kontradiksi",
+            "description": "string — description of the contradiction",
             "severity": "string — high|medium|low",
-            "sources": ["string", ...] — sumber sinyal yang bertentangan,
-            "impact": "string — bagaimana ini mempengaruhi analisis"
+            "sources": ["string", ...] — sources of the conflicting signals,
+            "impact": "string — how this affects the analysis"
         }}
     ],
-    "overall_assessment": "string — apakah kontradiksi signifikan atau bisa diabaikan"
+    "overall_assessment": "string — whether the contradictions are significant or negligible"
 }}
 
-ATURAN:
-- Jika tidak ada kontradiksi nyata, isi "contradictions": [] (array kosong).
-- JANGAN memaksakan kontradiksi yang tidak didukung data.
-- Jangan pakai simbol * atau **.
-- Jawab dalam Bahasa Indonesia.
-
+RULES:
+- If there are no real contradictions, fill "contradictions": [] (empty array).
+- Do NOT force contradictions that are not supported by the data.
+- Do not use * or ** symbols.
+- Respond in Bahasa Indonesia (Indonesian).

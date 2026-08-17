@@ -264,10 +264,10 @@ def format_history(user_id: int, max_exchanges: int = MAX_EXCHANGES_IN_CONTEXT) 
     ctx = get_context(user_id)
     ctx_lines = []
     if ctx.get("asset_focus"):
-        ctx_lines.append(f"• Fokus aset: {ctx['asset_focus']}")
+        ctx_lines.append(f"• Asset focus: {ctx['asset_focus']}")
     if ctx.get("direction"):
-        ctx_lines.append(f"• Arah tren: {ctx['direction']}")
-    ctx_block = "\n".join(["KONTEKS PERCAKAPAN TERAKHIR:", *ctx_lines]) if ctx_lines else ""
+        ctx_lines.append(f"• Trend direction: {ctx['direction']}")
+    ctx_block = "\n".join(["RECENT CONVERSATION CONTEXT:", *ctx_lines]) if ctx_lines else ""
 
     # Satu blok per pertukaran — memudahkan membuang yang paling lama.
     blocks: List[str] = []
@@ -283,7 +283,7 @@ def format_history(user_id: int, max_exchanges: int = MAX_EXCHANGES_IN_CONTEXT) 
     if not blocks and not ctx_block:
         return ""
 
-    header = "Percakapan sebelumnya (User ↔ Bot):" if blocks else ""
+    header = "Previous conversation (User ↔ Bot):" if blocks else ""
 
     def _join(selected_blocks: List[str]) -> str:
         parts = []

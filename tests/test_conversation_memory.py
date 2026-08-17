@@ -140,9 +140,9 @@ class TestContextTracking(unittest.TestCase):
     def test_format_history_includes_context_section(self):
         cm.add_exchange(2001, "analisis teknikal eurusd", "Bias bullish, target 1.1000")
         text = cm.format_history(2001)
-        self.assertIn("KONTEKS PERCAKAPAN TERAKHIR", text)
-        self.assertIn("Fokus aset: EUR/USD", text)
-        self.assertIn("Arah tren: bullish", text)
+        self.assertIn("RECENT CONVERSATION CONTEXT", text)
+        self.assertIn("Asset focus: EUR/USD", text)
+        self.assertIn("Trend direction: bullish", text)
 
     def test_clear_removes_context(self):
         cm.add_exchange(2001, "analisis eurusd", "bullish")
@@ -157,7 +157,7 @@ class TestPromptIntegration(unittest.TestCase):
             context_data="Data pasar",
             conversation_history='User: "analisis teknikal EUR/USD"\nBot: level 1.0800',
         )
-        self.assertIn("KONTEKS PERCAKAPAN SEBELUMNYA", prompt)
+        self.assertIn("PREVIOUS CONVERSATION CONTEXT", prompt)
         self.assertIn("EUR/USD", prompt)
 
     def test_research_template_default_history(self):
@@ -178,7 +178,7 @@ class TestPromptIntegration(unittest.TestCase):
 
     def test_build_analysis_prompt_default_history(self):
         prompt = build_analysis_prompt(question="q")
-        self.assertIn("Tidak ada percakapan sebelumnya.", prompt)
+        self.assertIn("No previous conversation.", prompt)
 
     def test_legacy_build_prompt_injects_history(self):
         # _build_prompt tidak memakai state instance — aman tanpa __init__ penuh
@@ -190,12 +190,12 @@ class TestPromptIntegration(unittest.TestCase):
             "DATA PASAR",
             'User: "analisis teknikal EUR/USD"',
         )
-        self.assertIn("PERCAKAPAN SEBELUMNYA", prompt)
+        self.assertIn("PREVIOUS CONVERSATION", prompt)
         self.assertIn("EUR/USD", prompt)
 
         # Tanpa history → section tidak muncul
         prompt2 = bot._build_prompt("q", "DATA PASAR")
-        self.assertNotIn("PERCAKAPAN SEBELUMNYA", prompt2)
+        self.assertNotIn("PREVIOUS CONVERSATION", prompt2)
 
 
 if __name__ == "__main__":

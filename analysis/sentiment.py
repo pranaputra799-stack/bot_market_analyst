@@ -25,39 +25,39 @@ logger = logging.getLogger(__name__)
 
 SENTIMENT_SYSTEM = (
     "ROLE:\n"
-    "Anda adalah analis sentimen pasar keuangan. Tugas: membaca daftar headline berita dan "
-    "menentukan skor sentimen terhadap INSTRUMEN yang ditanyakan (bukan sentimen umum dunia).\n\n"
-    "ALUR BERPIKIR:\n"
-    "1. Baca setiap headline beserta skor awal dari sistem.\n"
-    "2. Nilai apakah isi berita positif/negatif/netral UNTUK instrumen tersebut.\n"
-    "3. Perhatikan relevansi, kualitas sumber, dan waktu berita.\n"
-    "4. Susun skor akhir + driver utama + assessment singkat.\n\n"
-    "ATURAN:\n"
-    "- Skala skor: -1.0 (sangat bearish) sampai +1.0 (sangat bullish).\n"
-    "- JANGAN mengarang berita yang tidak ada di daftar.\n"
-    "- Jika berita tidak cukup atau tidak relevan, beri skor mendekati 0 dan confidence rendah.\n"
-    "- Jawab dalam Bahasa Indonesia.\n"
-    "- FORMAT OUTPUT: JANGAN gunakan simbol markdown (*, **, _, #)."
+    "You are a financial market sentiment analyst. Task: read a list of news headlines and "
+    "determine the sentiment score for the REQUESTED INSTRUMENT (not general world sentiment).\n\n"
+    "THINKING FLOW:\n"
+    "1. Read each headline along with its initial system score.\n"
+    "2. Assess whether the news is positive/negative/neutral FOR that instrument.\n"
+    "3. Consider relevance, source quality, and news timing.\n"
+    "4. Produce the final score + main drivers + a short assessment.\n\n"
+    "RULES:\n"
+    "- Score scale: -1.0 (very bearish) to +1.0 (very bullish).\n"
+    "- Do NOT invent news that is not in the list.\n"
+    "- If the news is insufficient or irrelevant, give a score near 0 and low confidence.\n"
+    "- Respond in Bahasa Indonesia (Indonesian).\n"
+    "- OUTPUT FORMAT: Do NOT use markdown symbols (*, **, _, #)."
 )
 
 SENTIMENT_TEMPLATE = """\
-INSTRUMEN: {instrument}
-TANGGAL: {date}
+INSTRUMENT: {instrument}
+DATE: {date}
 
-DAFTAR BERITA (headline | skor awal sistem):
+NEWS LIST (headline | initial system score):
 {articles}
 
-Berikan analisis dalam JSON yang VALID, sesuai skema:
+Provide a VALID analysis in JSON, following this schema:
 {{
-    "score": float -1.0 s/d +1.0,
+    "score": float -1.0 to +1.0,
     "label": "string — sangat_bearish|bearish|netral|bullish|sangat_bullish",
-    "bull_drivers": ["string", ...] — 1-3 faktor bullish (null jika tidak ada),
-    "bear_drivers": ["string", ...] — 1-3 faktor bearish (null jika tidak ada),
-    "assessment": "string — ringkasan sentimen 1-2 kalimat Bahasa Indonesia",
-    "confidence": float 0.0-1.0 — seberapa yakin terhadap skor (jumlah & relevansi berita)
+    "bull_drivers": ["string", ...] — 1-3 bullish factors (null if none),
+    "bear_drivers": ["string", ...] — 1-3 bearish factors (null if none),
+    "assessment": "string — 1-2 sentence sentiment summary in Bahasa Indonesia",
+    "confidence": float 0.0-1.0 — how confident you are in the score (news count & relevance)
 }}
 
-Jawab HANYA JSON tanpa teks lain. Jangan pakai simbol * atau **.
+Output ONLY JSON, no other text. Do not use * or ** symbols.
 """
 
 # ===================== LEXICON =====================

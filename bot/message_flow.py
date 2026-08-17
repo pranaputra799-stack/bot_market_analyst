@@ -650,32 +650,32 @@ class MessageFlowMixin:
         template = "market_analysis"
 
         if any(kw in q for kw in ["teknikal", "support", "resistance", "rsi", "macd", "chart", "trend"]):
-            intent_instruction = "Fokus pada analisis teknikal: level support/resistance, indikator, dan trend."
+            intent_instruction = "Focus on technical analysis: support/resistance levels, indicators, and trend."
         elif any(kw in q for kw in ["nfp", "cpi", "inflasi", "gdp", "fed", "suku bunga", "tenaga kerja"]):
-            intent_instruction = "Fokus pada data fundamental: dampak data makroekonomi ke pasar."
+            intent_instruction = "Focus on fundamental data: the impact of macroeconomic data on the market."
             template = "macro_explanation"
         elif any(kw in q for kw in ["berita", "news", "sentimen", "headline"]):
-            intent_instruction = "Fokus pada berita terkini dan sentimen pasar yang relevan."
+            intent_instruction = "Focus on the latest relevant news and market sentiment."
         elif any(kw in q for kw in ["korelasi", "hubungan", "dampak", "pengaruh"]):
-            intent_instruction = "Fokus pada hubungan/korelasi antar instrumen yang ditanyakan."
+            intent_instruction = "Focus on the relationship/correlation between the requested instruments."
             template = "technical_analysis"
         elif any(kw in q for kw in ["apa itu", "pengertian", "definisi", "bagaimana", "belajar"]):
-            intent_instruction = "Fokus pada edukasi: jelaskan konsep dengan bahasa sederhana dan berikan contoh."
+            intent_instruction = "Focus on education: explain the concept in simple language and give examples."
         elif any(kw in q for kw in ["bandingkan", "perbedaan", "vs", "versus"]):
-            intent_instruction = "Fokus pada perbandingan: berikan perbedaan dan persamaan yang jelas."
+            intent_instruction = "Focus on comparison: give clear differences and similarities."
         elif any(kw in q for kw in ["prediksi", "akan", "ramalan", "perkiraan", "kemana"]):
-            intent_instruction = "Berikan analisis prospek dengan skenario yang mungkin terjadi. Jangan memberikan kepastian."
+            intent_instruction = "Give an outlook analysis with possible scenarios. Do not promise certainty."
         elif any(kw in q for kw in ["risiko", "bahaya", "waspada", "volatilitas"]):
-            intent_instruction = "Fokus pada identifikasi dan penjelasan risiko pasar."
+            intent_instruction = "Focus on identifying and explaining market risks."
         elif any(kw in q for kw in ["harga", "price", "berapa", "rate", "kurs", "naik", "turun"]):
-            intent_instruction = "Fokus pada harga terkini, perubahan, dan konteks pergerakan."
+            intent_instruction = "Focus on the latest price, its change, and the context of the move."
 
         history_section = ""
         if conversation_history:
             history_section = (
-                f"\n=== PERCAKAPAN SEBELUMNYA (gunakan jika pertanyaan follow-up) ===\n"
+                f"\n=== PREVIOUS CONVERSATION (use for follow-up questions) ===\n"
                 f"{conversation_history}\n"
-                f"=== AKHIR PERCAKAPAN ===\n"
+                f"=== END OF CONVERSATION ===\n"
             )
 
         # Deteksi instrumen yang dibahas (best-effort). Tidak memakai state

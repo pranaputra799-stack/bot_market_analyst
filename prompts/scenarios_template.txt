@@ -11,22 +11,21 @@ THESIS:
 CONTRADICTIONS:
 {contradiction_output}
 
-Output JSON yang VALID, sesuai skema:
+Output VALID JSON, following this schema:
 {{
     "scenarios": [
         {{
             "name": "string — Bull Case|Bear Case|Base Case",
-            "description": "string — deskripsi skenario 1-2 kalimat",
+            "description": "string — 1-2 sentence scenario description",
             "probability": integer 0-100,
-            "key_catalysts": ["string", ...] — katalis yang memicu skenario,
+            "key_catalysts": ["string", ...] — catalysts that trigger the scenario,
             "impact_level": "string — high|medium|low"
         }}
     ]
 }}
 
 RULES:
-- Probabilitas TOTAL harus = 100% (3 skenario).
-- Jangan mengarang katalis yang tidak ada di data.
-- Jangan pakai simbol * atau **.
-- Jawab dalam Bahasa Indonesia.
-
+- Total probabilities MUST = 100% (3 scenarios).
+- Do not invent catalysts that are not in the data.
+- Do not use * or ** symbols.
+- Respond in Bahasa Indonesia (Indonesian).

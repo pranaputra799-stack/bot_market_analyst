@@ -234,12 +234,12 @@ class SchedulerJobsMixin:
     def _split_outlook_catalysts(ai_content: str) -> Tuple[str, str]:
         """Pisah konten AI → (outlook, catalysts) TANPA memotong konten.
 
-        Marker `KATALIS UTAMA:` memisahkan dua bagian. Bila marker tidak ada,
+        Marker `KEY CATALYSTS:` memisahkan dua bagian. Bila marker tidak ada,
         seluruh konten dianggap outlook (catalysts → placeholder).
         """
         ai_content = (ai_content or "").strip()
-        if "KATALIS UTAMA" in ai_content:
-            sections = ai_content.split("KATALIS UTAMA:")
+        if "KEY CATALYSTS" in ai_content:
+            sections = ai_content.split("KEY CATALYSTS:")
             outlook = sections[0].replace("OUTLOOK:", "").replace("OUTLOOK", "").strip()
             catalysts = sections[1].strip() if len(sections) > 1 else ""
         else:

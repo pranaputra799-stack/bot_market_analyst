@@ -6,7 +6,7 @@ CONTRADICTIONS: {contradiction_output}
 SCENARIOS: {scenarios_output}
 THESIS: {thesis_output}
 
-Output JSON yang VALID, sesuai skema (nilai float 0.0-1.0):
+Output VALID JSON, following this schema (float values 0.0-1.0):
 {{
     "overall_score": 0.0-1.0,
     "level": "string — high|moderate|low|very_low",
@@ -14,15 +14,14 @@ Output JSON yang VALID, sesuai skema (nilai float 0.0-1.0):
     "signal_alignment": 0.0-1.0,
     "contradiction_impact": 0.0-1.0,
     "scenario_clarity": 0.0-1.0,
-    "assessment": "string — penjelasan score 2-3 kalimat Bahasa Indonesia",
-    "limitations": ["string", ...] — keterbatasan analisis, null jika tidak ada
+    "assessment": "string — 2-3 sentence explanation of the score in Bahasa Indonesia",
+    "limitations": ["string", ...] — analysis limitations, null if none
 }}
 
-ATURAN:
-- Jika data input "Not analyzed"/kosong, beri score rendah (<= 0.3) — jangan menebak.
-- "assessment" HANYA boleh merujuk bukti yang benar-benar ada di input; jangan
-  mengarang angka/event untuk mendukung skor.
-- "limitations" hanya boleh memuat keterbatasan yang terlihat di input (data
-  kosong/berlawanan) — bukan karangan.
-- Jangan pakai simbol * atau **.
-
+RULES:
+- If input data is "Not analyzed"/empty, give a low score (<= 0.3) — do not guess.
+- "assessment" may ONLY reference evidence that actually exists in the input; do not
+  invent numbers/events to support the score.
+- "limitations" may only contain limitations visible in the input (empty/conflicting
+  data) — not made-up ones.
+- Do not use * or ** symbols.
