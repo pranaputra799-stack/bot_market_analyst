@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from data.cache import cache, parse_json_payload
+from data.reddit_data import RedditFetcher
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,7 @@ class SentimentAnalyzer:
     def __init__(self, ai_engine: Any = None, news_fetcher: Any = None):
         self.ai = ai_engine
         self.news_fetcher = news_fetcher
+        self.reddit = RedditFetcher()
 
     # ── Public API ───────────────────────────────────────────────
 
@@ -139,6 +141,35 @@ class SentimentAnalyzer:
         if not articles and symbol != "FOREX":
             finnhub = await self.news_fetcher.get_finnhub_news("FOREX", limit=10)
             articles = finnhub.get("articles", [])
+
+        # Tambahan: Google News RSS (gratis, tanpa API key) — data segar
+        google_news = await self.news_fetcher.get_google_news(symbol, limit=5)
+        google_articles = google_news.get("articles", [])
+        # Konversi format Google News ke format Finnhub agar bisa di-skor
+        for ga in google_articles:
+            text = f"{ga.get('title', '')} {ga.get('description', '')}"
+            ga["headline"] = ga.get("title", "")
+            ga["summary"] = ga.get("description", "")
+            ga["sentiment"] = self._lexicon_score(text)  # Lexicon sebagai proxy
+            articles.append(ga)
+
+        # Tambahan: Reddit sentiment (gratis, komunitas finansial)
+        try:
+            reddit_data = await self.reddit.get_financial_sentiment(symbol, limit=3)
+            reddit_posts = reddit_data.get("top_posts", [])
+            for rp in reddit_posts:
+                text = f"{rp.get('title', '')} {rp.get('selftext', '')}"
+                articles.append({
+                    "headline": f"[Reddit] {rp.get('title', '')}",
+                    "summary": rp.get("selftext", "")[:200],
+                    "source": f"r/{rp.get('subreddit', 'unknown')}",
+                    "sentiment": rp.get("sentiment_proxy", 0),
+                    "score": rp.get("score", 0),
+                    "url": rp.get("permalink", ""),
+                    "is_reddit": True,
+                })
+        except Exception as e:
+            logger.warning(f"Reddit sentiment fetch failed: {e}")
 
         if not articles:
             return {
