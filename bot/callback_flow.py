@@ -185,6 +185,24 @@ class CallbackFlowMixin:
                     "❌ Gagal memuat ulang kalender. Silakan coba lagi nanti.",
                 )
 
+        elif data == "news":
+            # Tombol menu '🗞️ Berita Terkini' — feed berita ForexFactory.
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id,
+                action="typing",
+            )
+            try:
+                message = await self._build_news_reply("")
+            except Exception as e:
+                logger.warning(f"News callback error: {e}")
+                message = "📰 Berita tidak tersedia saat ini. Coba lagi nanti."
+            await safe_edit_message_text(
+                query,
+                message,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+
         elif data.startswith("aft:"):
             await self._handle_calendar_aftermath_button(query, data)
 

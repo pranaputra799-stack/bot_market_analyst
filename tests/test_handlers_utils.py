@@ -132,7 +132,7 @@ class TestStartMenuKeyboard(unittest.TestCase):
     # Callback yang ditangani handle_callback
     SUPPORTED = {
         "morning", "overview", "gold_price", "eurusd", "macro",
-        "calendar", "sentiment", "sentimen_retail", "alert_on",
+        "calendar", "news", "sentiment", "sentimen_retail", "alert_on",
         "prediksi", "subscribe", "unsubscribe", "help", "settings",
         "settings_alert", "settings_brief", "settings_clear", "menu",
     }
@@ -194,11 +194,10 @@ class TestReplyKeyboardMenu(unittest.TestCase):
     def test_reply_keyboard_built(self):
         kb = _menu_reply_keyboard()
         rows = kb.keyboard
-        # 5 baris × 2 tombol + 1 baris bantuan, sama dengan menu inline
+        # 6 baris × 2 tombol (termasuk 🗞️ Berita Terkini), sama dengan menu inline
         self.assertEqual(len(rows), 6)
-        for row in rows[:-1]:
+        for row in rows:
             self.assertEqual(len(row), 2)
-        self.assertEqual(len(rows[-1]), 1)
         # Tombolnya KeyboardButton (bukan inline)
         self.assertTrue(all(b.text for row in rows for b in row))
 
@@ -207,7 +206,7 @@ class TestReplyKeyboardMenu(unittest.TestCase):
         # handler (gold_price, eurusd, overview, calendar, sentiment, macro,
         # morning, prediksi, alert_on, settings, help).
         supported = {
-            "gold_price", "eurusd", "overview", "calendar", "sentiment",
+            "gold_price", "eurusd", "overview", "calendar", "news", "sentiment",
             "macro", "morning", "prediksi", "alert_on", "settings", "help",
         }
         for row in MENU_KEYBOARD_LABELS:
@@ -220,7 +219,8 @@ class TestReplyKeyboardMenu(unittest.TestCase):
         inline_labels = {
             "🥇 Harga Gold", "💱 EUR/USD", "🌍 Overview Pasar", "📅 Kalender",
             "📰 Sentimen Pasar", "🏛️ Data Makro", "🌅 Morning Brief",
-            "🎯 Prediksi News", "🔔 Alert Event", "⚙️ Pengaturan", "❓ Bantuan",
+            "🎯 Prediksi News", "🗞️ Berita Terkini", "🔔 Alert Event",
+            "⚙️ Pengaturan", "❓ Bantuan",
         }
         keyboard_labels = {label for row in MENU_KEYBOARD_LABELS for label in row}
         self.assertEqual(keyboard_labels, inline_labels)

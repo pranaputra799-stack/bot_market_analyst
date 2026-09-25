@@ -264,8 +264,8 @@ MENU_KEYBOARD_LABELS = [
     ["🌍 Overview Pasar", "📅 Kalender"],
     ["📰 Sentimen Pasar", "🏛️ Data Makro"],
     ["🌅 Morning Brief", "🎯 Prediksi News"],
-    ["🔔 Alert Event", "⚙️ Pengaturan"],
-    ["❓ Bantuan"],
+    ["🗞️ Berita Terkini", "🔔 Alert Event"],
+    ["⚙️ Pengaturan", "❓ Bantuan"],
 ]
 
 MENU_KEYBOARD_ACTIONS = {
@@ -277,6 +277,7 @@ MENU_KEYBOARD_ACTIONS = {
     "🏛️ Data Makro": "macro",
     "🌅 Morning Brief": "morning",
     "🎯 Prediksi News": "prediksi",
+    "🗞️ Berita Terkini": "news",
     "🔔 Alert Event": "alert_on",
     "⚙️ Pengaturan": "settings",
     "❓ Bantuan": "help",
@@ -311,10 +312,11 @@ def _main_menu_inline_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🎯 Prediksi News", callback_data="prediksi"),
         ],
         [
+            InlineKeyboardButton("🗞️ Berita Terkini", callback_data="news"),
             InlineKeyboardButton("🔔 Alert Event", callback_data="alert_on"),
-            InlineKeyboardButton("⚙️ Pengaturan", callback_data="settings"),
         ],
         [
+            InlineKeyboardButton("⚙️ Pengaturan", callback_data="settings"),
             InlineKeyboardButton("❓ Bantuan", callback_data="help"),
         ],
     ]

@@ -340,25 +340,13 @@ class MarketCommandsMixin:
         lines.append("💡 `/news 10` = 10 berita • `/news gold` = filter kata kunci")
         lines.append(DISCLAIMER)
         return "\n".join(lines)
-    async def news_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def _build_news_reply(self, arg: str = "") -> str:
         """
-        Handler untuk /news - feed berita terbaru ForexFactory (via Parse.bot API).
-
-        Penggunaan:
-          /news        -> 8 berita terbaru
-          /news 12     -> 12 berita terbaru (maks 15)
-          /news gold   -> berita yang judul/ringkasannya mengandung kata kunci
-        Bila ForexFactory tidak tersedia, otomatis fallback ke ringkasan multi-sumber.
+        Bangun teks /news dari argumen: kosong = 8 terbaru, angka = jumlah artikel,
+        selain itu = filter kata kunci. Tidak pernah raise — dipakai oleh command
+        /news DAN tombol menu (yang meng-edit pesan, bukan mengirim baru).
         """
-        if not await self._check_command_rate_limit(update, context):
-            return
-        chat_id = update.effective_chat.id
-        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
-
-        text = update.message.text or ""
-        parts = text.split(maxsplit=1)
-        arg = parts[1].strip() if len(parts) > 1 else ""
-
+        arg = (arg or "").strip()
         keyword = ""
         limit = 8
         if arg.isdigit():
@@ -379,36 +367,46 @@ class MarketCommandsMixin:
                     if kw in f"{a.get('title', '')} {a.get('description', '')}".lower()
                 ][:limit]
         except Exception as e:
-            logger.warning(f"News command ForexFactory error: {e}")
+            logger.warning(f"News build error: {e}")
             articles = []
 
         if not articles:
             if keyword:
-                await safe_reply_text(
-                    update.message,
+                return (
                     f"🔎 Tidak ada berita ForexFactory yang cocok dengan *{_ff_md_escape(keyword)}*.\n\n"
-                    f"Coba kata kunci lain atau kirim /news untuk berita terbaru.",
-                    parse_mode="Markdown",
-                    disable_web_page_preview=True,
+                    f"Coba kata kunci lain atau kirim /news untuk berita terbaru."
                 )
-                return
             # Fallback: ringkasan multi-sumber (Finnhub/Google News) bila FF kosong.
             try:
                 summary = await self.news.get_news_summary("FOREX")
             except Exception as e:
-                logger.warning(f"News command fallback error: {e}")
+                logger.warning(f"News fallback error: {e}")
                 summary = ""
-            await safe_reply_text(
-                update.message,
-                summary or "📰 Berita tidak tersedia saat ini. Coba lagi nanti.",
-                parse_mode="Markdown",
-                disable_web_page_preview=True,
-            )
+            return summary or "📰 Berita tidak tersedia saat ini. Coba lagi nanti."
+
+        return self._format_forexfactory_news(articles, keyword)
+    async def news_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Handler untuk /news - feed berita terbaru ForexFactory (via Parse.bot API).
+
+        Penggunaan:
+          /news        -> 8 berita terbaru
+          /news 12     -> 12 berita terbaru (maks 15)
+          /news gold   -> berita yang judul/ringkasannya mengandung kata kunci
+        Bila ForexFactory tidak tersedia, otomatis fallback ke ringkasan multi-sumber.
+        """
+        if not await self._check_command_rate_limit(update, context):
             return
+        chat_id = update.effective_chat.id
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        text = update.message.text or ""
+        parts = text.split(maxsplit=1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
 
         await safe_reply_text(
             update.message,
-            self._format_forexfactory_news(articles, keyword),
+            await self._build_news_reply(arg),
             parse_mode="Markdown",
             disable_web_page_preview=True,
         )

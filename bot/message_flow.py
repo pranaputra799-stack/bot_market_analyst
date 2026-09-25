@@ -95,6 +95,8 @@ class MessageFlowMixin:
             await self.overview_command(update, context)
         elif action == "calendar":
             await self.calendar_command(update, context)
+        elif action == "news":
+            await self.news_command(update, context)
         elif action == "morning":
             await self.morning_brief_command(update, context)
         elif action == "prediksi":

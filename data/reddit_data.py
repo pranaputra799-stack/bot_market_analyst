@@ -10,7 +10,7 @@ Cara kerja:
 - Rate limit: 1 request per detik (untuk anonim)
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from data.http_session import get_aiohttp_session
