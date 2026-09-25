@@ -137,5 +137,38 @@ class TestAsList(unittest.TestCase):
         self.assertEqual(SentimentAnalyzer._as_list(None), [])
 
 
+class TestForexFactoryInSentiment(unittest.IsolatedAsyncioTestCase):
+    """Analisis sentimen ikut membaca berita ForexFactory (sumber utama)."""
+
+    async def test_forexfactory_articles_are_scored(self):
+        class _FakeReddit:
+            async def get_financial_sentiment(self, symbol, limit=3):
+                return {"top_posts": []}
+
+        class _FakeNews:
+            async def get_finnhub_news(self, symbol, limit=10):
+                return {"articles": []}
+
+            async def get_google_news(self, symbol, limit=5):
+                return {"articles": []}
+
+            async def get_forexfactory_news(self, limit=10):
+                return {"articles": [{
+                    "title": "Gold rallies as dollar weakens",
+                    "description": "Bullish momentum menguat",
+                    "url": "https://www.forexfactory.com/news/1",
+                    "impact": "high",
+                }]}
+
+        analyzer = SentimentAnalyzer(ai_engine=None, news_fetcher=_FakeNews())
+        analyzer.reddit = _FakeReddit()
+        result = await analyzer.analyze("FOREX", use_llm=False)
+
+        self.assertNotIn("error", result)
+        self.assertEqual(result.get("count"), 1)
+        self.assertEqual(result["articles"][0].get("source"), "ForexFactory")
+        self.assertGreater(result.get("score", 0), 0)  # kata bullish → skor positif
+
+
 if __name__ == "__main__":
     unittest.main()

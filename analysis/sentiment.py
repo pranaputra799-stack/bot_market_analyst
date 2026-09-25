@@ -142,6 +142,25 @@ class SentimentAnalyzer:
             finnhub = await self.news_fetcher.get_finnhub_news("FOREX", limit=10)
             articles = finnhub.get("articles", [])
 
+        # Tambahan: ForexFactory (sumber berita UTAMA) — headline + preview.
+        # FF tidak memberi skor sentimen numerik → diskor via lexicon.
+        try:
+            get_ff = getattr(self.news_fetcher, "get_forexfactory_news", None)
+            if callable(get_ff):
+                ff_news = await get_ff(limit=10)
+                for art in ff_news.get("articles", []):
+                    text = f"{art.get('title', '')} {art.get('description', '')}"
+                    articles.append({
+                        "headline": art.get("title", ""),
+                        "summary": art.get("description", ""),
+                        "source": "ForexFactory",
+                        "url": art.get("url", ""),
+                        "sentiment": self._lexicon_score(text),
+                        "is_forexfactory": True,
+                    })
+        except Exception as e:
+            logger.warning(f"ForexFactory sentiment fetch failed: {e}")
+
         # Tambahan: Google News RSS (gratis, tanpa API key) — data segar
         google_news = await self.news_fetcher.get_google_news(symbol, limit=5)
         google_articles = google_news.get("articles", [])

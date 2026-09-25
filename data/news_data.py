@@ -315,6 +315,20 @@ class NewsFetcher:
             logger.warning(f"Google News RSS error for {symbol}: {e}")
             return {"source": "Google News", "error": str(e), "articles": []}
 
+    # ===================== FOREXFACTORY NEWS (Primary) =====================
+
+    async def get_forexfactory_news(self, limit: int = 10) -> Dict:
+        """
+        Berita ForexFactory via Parse.bot (sumber berita UTAMA).
+        Wrapper aman (tidak pernah raise) agar bisa dipakai langsung oleh
+        SentimentAnalyzer & pipeline AI.
+        """
+        try:
+            return await self.forexfactory.get_news(limit=limit)
+        except Exception as e:
+            logger.warning(f"ForexFactory news error: {e}")
+            return {"source": "ForexFactory", "error": str(e), "articles": []}
+
     # ===================== NEWS SUMMARY =====================
 
     async def get_news_summary(self, symbol: str = "FOREX") -> str:

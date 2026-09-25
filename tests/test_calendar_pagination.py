@@ -142,6 +142,29 @@ class TestCalendarReply(unittest.TestCase):
         self.assertIn("Filter: USD · High Impact", message)
 
 
+class TestWeekJumpButtons(unittest.TestCase):
+    def test_present_in_usd_mode(self):
+        bot = _bot([_ev("US Event", hours=0)])  # minggu ini
+        _, kb = asyncio.run(bot._build_calendar_reply())
+        labels = [b.text for row in kb.inline_keyboard for b in row]
+        self.assertTrue(any("Minggu Ini" in lbl for lbl in labels))
+
+    def test_absent_in_all_mode(self):
+        bot = _bot([_ev("US Event", hours=0), _ev("EU Event", currency="EUR", country="EU", hours=1)])
+        _, kb = asyncio.run(bot._build_calendar_reply(mode="all"))
+        labels = [b.text for row in kb.inline_keyboard for b in row]
+        self.assertFalse(any("Minggu" in lbl for lbl in labels))
+
+    def test_targets_map_to_pages(self):
+        # 6 event dalam beberapa minggu + 1 jauh → target halaman 0 dan 1
+        events = [_ev(f"E{i}", hours=24 * (i + 1)) for i in range(6)] + [_ev("Far", hours=24 * 30)]
+        bot = _bot(events)
+        _, kb = asyncio.run(bot._build_calendar_reply(page=0))
+        cbs = _callbacks(kb)
+        self.assertIn("cal:usd_high:0", cbs)
+        self.assertIn("cal:usd_high:1", cbs)
+
+
 class TestRecentEventsFormat(unittest.TestCase):
     def test_format_with_actual_and_prev(self):
         text = MarketBot._format_recent_events([

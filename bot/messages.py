@@ -260,6 +260,13 @@ def get_data_sources_status(market_data, macro_data, news_fetcher) -> str:
     else:
         lines.append("  ⬜ FRED (belum dikonfigurasi)")
 
+    # Check ForexFactory (via Parse.bot) — sumber utama berita & kalender ekonomi
+    ff_client = getattr(news_fetcher, "forexfactory", None)
+    if ff_client is not None and getattr(ff_client, "enabled", False):
+        lines.append("  ✅ ForexFactory (berita & kalender via Parse.bot)")
+    else:
+        lines.append("  ⬜ ForexFactory (isi PARSE_API_KEY untuk berita & kalender)")
+
     # Peta sumber data per instrumen utama — validasi beban yfinance.
     # getattr defensif: MarketDataAggregator lama (tanpa method ini) tidak
     # boleh membuat /status crash — blok dilewati begitu saja.

@@ -1541,6 +1541,48 @@ class SchedulerJobsMixin:
             lines.append(line)
         return "\n".join(lines)
 
+    @staticmethod
+    def _week_start_of(event: Dict, fallback) -> "datetime.date":
+        """Tanggal Senin dari minggu sebuah event (untuk pengelompokan per minggu)."""
+        dt = event.get("_dt_utc") or fallback
+        d = dt.date()
+        return d - timedelta(days=d.weekday())
+
+    def _build_calendar_week_buttons(
+        self, ordered: List[Dict], mode: str, size: int
+    ) -> List[List[InlineKeyboardButton]]:
+        """
+        Tombol lompat PER MINGGU (khusus tampilan USD) → melompat ke halaman
+        yang memuat event pertama minggu tersebut. Label '📍 Minggu Ini' /
+        'Minggu Depan', sisanya rentang tanggal singkat (mis. '21–27 Sep').
+        """
+        if mode != "usd_high" or not ordered:
+            return []
+
+        now = datetime.now(timezone.utc)
+        current_week = now.date() - timedelta(days=now.date().weekday())
+
+        first_index: Dict = {}
+        for i, e in enumerate(ordered):
+            ws = self._week_start_of(e, now)
+            first_index.setdefault(ws, i)
+
+        buttons: List[InlineKeyboardButton] = []
+        for ws in sorted(first_index):
+            we = ws + timedelta(days=6)
+            if ws == current_week:
+                label = "📍 Minggu Ini"
+            elif ws == current_week + timedelta(days=7):
+                label = "Minggu Depan"
+            elif ws.month == we.month:
+                label = f"{ws.day}–{we.day} {we.strftime('%b')}"
+            else:
+                label = f"{ws.day} {ws.strftime('%b')}–{we.day} {we.strftime('%b')}"
+            target = first_index[ws] // size
+            buttons.append(InlineKeyboardButton(label, callback_data=f"cal:{mode}:{target}"))
+
+        return [buttons[i:i + 3] for i in range(0, len(buttons), 3)]
+
     def _build_calendar_page_keyboard(
         self,
         page_events: List[Dict],
@@ -1548,10 +1590,15 @@ class SchedulerJobsMixin:
         page: int,
         pages: int,
         numbered: bool,
+        ordered: Optional[List[Dict]] = None,
+        size: int = 5,
     ) -> InlineKeyboardMarkup:
-        """Keyboard kalender: tombol analisis dampak + navigasi halaman + toggle mode + refresh."""
+        """Keyboard kalender: tombol analisis dampak + lompat minggu + navigasi halaman + toggle mode + refresh."""
         aft_kb = self._build_calendar_aftermath_buttons(page_events, numbered=numbered)
         rows = list(aft_kb.inline_keyboard) if aft_kb else []
+
+        if ordered:
+            rows.extend(self._build_calendar_week_buttons(ordered, mode, size))
 
         if pages > 1:
             nav: List[InlineKeyboardButton] = []
@@ -1615,7 +1662,9 @@ class SchedulerJobsMixin:
         parts.append(DISCLAIMER)
 
         message = "\n\n".join(parts)
-        kb = self._build_calendar_page_keyboard(page_events, mode, page, pages, numbered)
+        kb = self._build_calendar_page_keyboard(
+            page_events, mode, page, pages, numbered, ordered=ordered, size=size
+        )
         return message, kb
     async def _handle_calendar_aftermath_button(self, query, data: str):
         """Tombol '📊 Analisis Dampak' pada pesan /calendar → kirim analisis event.
