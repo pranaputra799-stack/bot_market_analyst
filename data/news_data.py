@@ -1,6 +1,7 @@
 """
 News & Sentiment Data Fetcher - Mengambil berita dan sentimen pasar dari multiple sources.
-Sources: Finnhub News (primary), Marketaux, NewsAPI, RSS Feeds, Google News RSS.
+Sources: ForexFactory (primary, via Parse.bot API), Finnhub News, Marketaux,
+NewsAPI, RSS Feeds, Google News RSS.
 
 Berita dan sentimen pasar adalah komponen krusial untuk analisis fundamental.
 """
@@ -19,6 +20,7 @@ from data.http_session import get_aiohttp_session
 
 from config.settings import FINNHUB_KEY, MARKETAUX_KEY, NEWSAPI_KEY, MORNING_BRIEF_TIMEZONE
 from data.cache import cache
+from data.forexfactory_client import ForexFactoryClient
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,9 @@ class NewsFetcher:
         self.finnhub_key = FINNHUB_KEY
         self.marketaux_key = MARKETAUX_KEY
         self.newsapi_key = NEWSAPI_KEY
+        # Berita FOREXFACTORY via Parse.bot API — sumber UTAMA bila PARSE_API_KEY
+        # diisi; Finnhub/Marketaux/Google News jadi cadangan.
+        self.forexfactory = ForexFactoryClient()
 
     # ===================== FINNHUB NEWS (Primary) =====================
 
@@ -324,12 +329,28 @@ class NewsFetcher:
             return cached_result
 
         finnhub = await self.get_finnhub_news(symbol, limit=3)
+        ff_news = await self.forexfactory.get_news(limit=5)
         lines = []
 
-        # Finnhub news
+        # ForexFactory news (primary — via Parse.bot API)
+        if ff_news.get("articles"):
+            lines.append("📰 *BERITA TERKINI (ForexFactory)*")
+            for art in ff_news["articles"]:
+                impact = (art.get("impact") or "").lower()
+                impact_tag = " 🔥" if impact == "high" else " ⚠️" if impact == "medium" else ""
+                lines.append(f"• *{art['title']}*{impact_tag}")
+                if art.get("description"):
+                    lines.append(f"  _{art['description'][:150]}..._")
+                lines.append("")
+
+        # Finnhub news (cadangan / pelengkap bila ForexFactory tidak tersedia)
         if "articles" in finnhub and finnhub["articles"]:
-            lines.append("📰 *BERITA TERKINI*")
-            lines.append(f"Sentimen Keseluruhan: {finnhub.get('overall_sentiment', 'N/A')}\n")
+            if lines:
+                lines.append("🛰️ *BERITA LAINNYA (Finnhub):*")
+                lines.append(f"Sentimen: {finnhub.get('overall_sentiment', 'N/A')}\n")
+            else:
+                lines.append("📰 *BERITA TERKINI*")
+                lines.append(f"Sentimen Keseluruhan: {finnhub.get('overall_sentiment', 'N/A')}\n")
             for article in finnhub["articles"]:
                 sentiment_str = article.get("sentiment_label", "")
                 lines.append(f"{sentiment_str} *{article['headline']}*")

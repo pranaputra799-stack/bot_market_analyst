@@ -37,6 +37,14 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+def _ff_md_escape(text: str) -> str:
+    """Escape karakter Markdown (legacy) agar headline berita tidak merusak format."""
+    for ch in ("\\", "_", "*", "`", "["):
+        text = text.replace(ch, "\\" + ch)
+    return text
+
+
 class MarketCommandsMixin:
     """Command analisis pasar — sentiment, kalender, overview, morning brief, risk, pivot, map."""
 
@@ -304,6 +312,106 @@ class MarketCommandsMixin:
                 update.message,
                 "❌ Gagal memuat kalender ekonomi. Silakan coba lagi nanti.",
             )
+    @staticmethod
+    def _format_forexfactory_news(articles: list, keyword: str = "") -> str:
+        """Format feed berita ForexFactory jadi pesan Telegram (murni — mudah di-test)."""
+        today = datetime.now(ZoneInfo(MORNING_BRIEF_TIMEZONE)).strftime("%d %B %Y")
+        lines = [
+            "📰 *BERITA FOREXFACTORY*",
+            f"📆 {today}",
+            "🏭 Sumber: ForexFactory (real-time)",
+        ]
+        if keyword:
+            lines.append(f"🔎 Filter: `{_ff_md_escape(keyword)}`")
+        lines.append("")
+
+        for i, art in enumerate(articles, 1):
+            impact = (art.get("impact") or "").lower()
+            tag = " 🔥" if impact == "high" else " ⚠️" if impact == "medium" else ""
+            lines.append(f"{i}. *{_ff_md_escape((art.get('title') or '').strip())}*{tag}")
+            desc = (art.get("description") or "").strip()
+            if desc:
+                lines.append(f"   _{_ff_md_escape(desc[:180])}_")
+            url = art.get("url")
+            if url:
+                lines.append(f"   🔗 [Baca selengkapnya]({url})")
+            lines.append("")
+
+        lines.append("💡 `/news 10` = 10 berita • `/news gold` = filter kata kunci")
+        lines.append(DISCLAIMER)
+        return "\n".join(lines)
+    async def news_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Handler untuk /news - feed berita terbaru ForexFactory (via Parse.bot API).
+
+        Penggunaan:
+          /news        -> 8 berita terbaru
+          /news 12     -> 12 berita terbaru (maks 15)
+          /news gold   -> berita yang judul/ringkasannya mengandung kata kunci
+        Bila ForexFactory tidak tersedia, otomatis fallback ke ringkasan multi-sumber.
+        """
+        if not await self._check_command_rate_limit(update, context):
+            return
+        chat_id = update.effective_chat.id
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        text = update.message.text or ""
+        parts = text.split(maxsplit=1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        keyword = ""
+        limit = 8
+        if arg.isdigit():
+            limit = max(1, min(int(arg), 15))
+        elif arg:
+            keyword = arg
+
+        articles = []
+        try:
+            # Untuk filter kata kunci, ambil seluruh feed lalu saring lokal
+            # (feed ForexFactory berisi puluhan berita terbaru).
+            news = await self.news.forexfactory.get_news(limit=50 if keyword else limit)
+            articles = news.get("articles") or []
+            if keyword:
+                kw = keyword.lower()
+                articles = [
+                    a for a in articles
+                    if kw in f"{a.get('title', '')} {a.get('description', '')}".lower()
+                ][:limit]
+        except Exception as e:
+            logger.warning(f"News command ForexFactory error: {e}")
+            articles = []
+
+        if not articles:
+            if keyword:
+                await safe_reply_text(
+                    update.message,
+                    f"🔎 Tidak ada berita ForexFactory yang cocok dengan *{_ff_md_escape(keyword)}*.\n\n"
+                    f"Coba kata kunci lain atau kirim /news untuk berita terbaru.",
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True,
+                )
+                return
+            # Fallback: ringkasan multi-sumber (Finnhub/Google News) bila FF kosong.
+            try:
+                summary = await self.news.get_news_summary("FOREX")
+            except Exception as e:
+                logger.warning(f"News command fallback error: {e}")
+                summary = ""
+            await safe_reply_text(
+                update.message,
+                summary or "📰 Berita tidak tersedia saat ini. Coba lagi nanti.",
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+            return
+
+        await safe_reply_text(
+            update.message,
+            self._format_forexfactory_news(articles, keyword),
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
     async def _build_overview_message(self, refresh: bool = False) -> str:
         """
         Bangun pesan overview pasar (dipakai perintah /overview & tombol menu).

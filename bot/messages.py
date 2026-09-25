@@ -62,6 +62,7 @@ HELP_MESSAGE = """
 /sentiment - 🧠 Sentimen pasar (contoh: /sentiment eurusd)
 /sentimen - 🧠 Sentimen retail OANDA — Position/Order Book
 /calendar - 📅 Kalender ekonomi high-impact
+/news - 📰 Berita terbaru ForexFactory (contoh: /news 10, /news gold)
 /aftermath - 🎯 Analisis dampak event (contoh: /aftermath nfp)
 /prediksi - 🎯 Win rate prediksi news XAU/USD (contoh: /prediksi history)
 /overview - 🌍 Overview semua instrumen (instan)

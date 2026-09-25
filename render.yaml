@@ -48,6 +48,9 @@ services:
         sync: false
       - key: OANDA_API_KEY
         sync: false
+      # ForexFactory (via Parse.bot) — sumber utama berita & kalender ekonomi.
+      - key: PARSE_API_KEY
+        sync: false
       # --- Tetap (nilai default aman; bisa di-override di dashboard) ---
       # Webhook DIPAKSA: Render wajib mendeteksi port 0.0.0.0:PORT untuk
       # deploy sukses (tanpa webhook server tidak bind port publik). URL

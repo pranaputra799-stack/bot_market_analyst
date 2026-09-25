@@ -177,7 +177,10 @@ python main.py
 | `GROQ_API_KEY` | opsi | Fallback — https://console.groq.com/keys |
 | `GEMINI_API_KEY` | opsi | Fallback — https://aistudio.google.com/app/apikey |
 | `FRED_API_KEY` | opsi | Kalender ekonomi real-time resmi — https://fred.stlouisfed.org |
-| `FINNHUB_KEY` | opsi | Berita & sentimen |
+| `PARSE_API_KEY` | opsi | **Sumber utama berita & kalender ekonomi** — ForexFactory via Parse.bot API (https://parse.bot/settings). Bila diisi, FRED/Finnhub/RSS otomatis jadi cadangan |
+| `FOREXFACTORY_ENABLED` | opsi | Aktif/nonaktifkan sumber ForexFactory (`true`/`false`, default `true`) |
+| `FOREXFACTORY_SCRAPER_ID` | opsi | Override `scraper_id` API "forexfactory.com API" di akun Parse.bot |
+| `FINNHUB_KEY` | opsi | Berita & sentimen (cadangan) |
 | `OANDA_API_KEY` | opsi* | **Real-time Forex & Gold** — token akun demo OANDA (https://www.oanda.com/demo-account/) |
 | `OANDA_ACCOUNT_ID` | opsi* | ID akun OANDA (kosongkan → auto-detect dari token) |
 | `OANDA_ENV` | opsi | `practice` (demo, default) atau `live` |
@@ -402,6 +405,7 @@ curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
 | `/sentiment` | Sentimen pasar berbasis berita (contoh: `/sentiment eurusd`) |
 | `/sentimen` | Sentimen retail trader OANDA — Position/Order Book, hanya pair forex (contoh: `/sentimen eurusd`) |
 | `/calendar` | Kalender ekonomi high-impact bulan ini |
+| `/news` | Berita terbaru ForexFactory (contoh: `/news 10`, `/news gold`) |
 | `/alert on\|off` | Notifikasi event ekonomi otomatis — digest harian, reminder sebelum rilis, **+ analisis aftermath (dampak ke DXY) + prediksi arah emas** |
 | `⚙️ Pengaturan` (menu) | Satu menu untuk semua yang bisa diatur: toggle notifikasi event, langganan morning brief, kelola watchlist, **detail jadwal & statistik pre-warm COT**, & hapus konteks percakapan |
 | `/prediksi` | 🎯 Win rate prediksi news (XAU/USD) — total, benar/salah/flat, 10 prediksi terakhir (`/prediksi history` untuk 25) |

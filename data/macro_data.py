@@ -19,6 +19,7 @@ from data.http_session import get_aiohttp_session, get_requests_session
 from config.settings import FRED_API_KEY, FINNHUB_KEY
 from config.providers import FRED_INDICATORS
 from data.cache import cache, cached, CACHE_MACRO_TTL
+from data.forexfactory_client import ForexFactoryClient
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,9 @@ class MacroDataFetcher:
     def __init__(self):
         self.fred_key = FRED_API_KEY
         self.finnhub_key = FINNHUB_KEY
+        # Kalender ekonomi FOREXFACTORY via Parse.bot API — sumber UTAMA bila
+        # PARSE_API_KEY diisi; FRED/Finnhub/jadwal resmi jadi cadangan.
+        self.forexfactory = ForexFactoryClient()
 
     # ===================== FRED DATA (Primary) =====================
 
@@ -640,7 +644,9 @@ class MacroDataFetcher:
         # Deteksi sumber data untuk kejujuran label
         source = ""
         sources = {e.get("source") for e in events if e.get("source")}
-        if "finnhub" in sources:
+        if "forexfactory" in sources:
+            source = "🏭 Sumber: ForexFactory (real-time)"
+        elif "finnhub" in sources:
             source = "🛰️ Sumber: Finnhub (real-time)"
         elif "fred" in sources:
             source = "🏛️ Sumber: FRED (jadwal rilis resmi real-time)"
@@ -915,9 +921,10 @@ class MacroDataFetcher:
     ) -> List[Dict]:
         """
         Mendapatkan kalender ekonomi. Prioritas sumber:
-        1. FRED (gratis, resmi, real-time) - jadwal rilis aktual BLS/BEA
-        2. Finnhub (jika API key punya akses)
-        3. Fallback: jadwal resmi built-in (BLS/Fed) + event berulang
+        1. ForexFactory (via Parse.bot API) - real-time, semua currency & impact
+        2. FRED (gratis, resmi, real-time) - jadwal rilis aktual BLS/BEA
+        3. Finnhub (jika API key punya akses)
+        4. Fallback: jadwal resmi built-in (BLS/Fed) + event berulang
         Hasil di-cache 10 menit dengan key yang menyertakan tanggal agar tidak basi.
 
         Args:
@@ -939,12 +946,15 @@ class MacroDataFetcher:
             if cached_result:
                 return cached_result
 
-        # 1) FRED (primary - gratis & real-time)
-        events = await self.get_economic_calendar_fred(from_date=from_date, to_date=to_date)
-        # 2) Finnhub (jika FRED gagal/kunci kosong; endpoint ini butuh plan berbayar)
+        # 1) ForexFactory via Parse.bot (primary bila PARSE_API_KEY diisi)
+        events = await self.forexfactory.get_calendar(from_date=from_date, to_date=to_date)
+        # 2) FRED (gratis & resmi — cadangan utama)
+        if not events:
+            events = await self.get_economic_calendar_fred(from_date=from_date, to_date=to_date)
+        # 3) Finnhub (jika FRED gagal/kunci kosong; endpoint ini butuh plan berbayar)
         if not events:
             events = await self.get_economic_calendar_finnhub(from_date=from_date, to_date=to_date)
-        # 3) Fallback built-in (defensif; finnhub sudah punya fallback internal sendiri)
+        # 4) Fallback built-in (defensif; finnhub sudah punya fallback internal sendiri)
         if not events:
             events = self._get_scheduled_calendar(from_date=from_date, to_date=to_date)
 

@@ -33,6 +33,7 @@ COMMANDS = [
     BotCommand("morning", "🌅 Morning Brief harian"),
     BotCommand("sentiment", "🧠 Sentimen pasar"),
     BotCommand("calendar", "📅 Kalender Ekonomi"),
+    BotCommand("news", "📰 Berita terbaru (ForexFactory)"),
     BotCommand("aftermath", "🎯 Analisis dampak event (contoh: /aftermath nfp)"),
     BotCommand("prediksi", "🎯 Win rate prediksi news (XAU/USD)"),
     BotCommand("alert", "🔔 Notifikasi event ekonomi"),

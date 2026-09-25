@@ -570,6 +570,7 @@ def register_handlers(application: Application, bot: MarketBot):
     application.add_handler(CommandHandler("morning", bot.morning_brief_command))
     application.add_handler(CommandHandler("sentiment", bot.sentiment_command))
     application.add_handler(CommandHandler("calendar", bot.calendar_command))
+    application.add_handler(CommandHandler("news", bot.news_command))
     application.add_handler(CommandHandler("aftermath", bot.aftermath_command))
     application.add_handler(CommandHandler("prediksi", bot.prediksi_command))
     application.add_handler(CommandHandler("alert", bot.alert_command))

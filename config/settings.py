@@ -80,6 +80,25 @@ NEWSAPI_KEY = _get_key("NEWSAPI_KEY", "")
 EXCHANGE_RATE_KEY = _get_key("EXCHANGE_RATE_KEY", "")
 TWELVEDATA_KEY = _get_key("TWELVEDATA_KEY", "")
 
+# ===================== FOREXFACTORY (via Parse.bot API) =====================
+# Sumber utama KALENDER EKONOMI & BERITA. Parse.bot mengubah forexfactory.com
+# menjadi API JSON bertipe; auth via header `X-API-Key` (key berawalan `pmx_`).
+#
+# Setup:
+#   1) Buat/lihat API key di https://parse.bot/settings
+#   2) Isi PARSE_API_KEY (JANGAN commit ke repo — baca dari env).
+# Hasilnya: kalender ekonomi & berita diambil dari ForexFactory (real-time),
+# FRED/Finnhub/RSS otomatis menjadi cadangan bila API ini tidak tersedia.
+# Set FOREXFACTORY_ENABLED=false untuk memaksa kembali ke sumber lama.
+PARSE_API_KEY = _get_key("PARSE_API_KEY", "")
+PARSE_API_BASE = os.getenv("PARSE_API_BASE", "https://api.parse.bot")
+# scraper_id API "forexfactory.com API" di akun Parse.bot. Bisa di-override via
+# env bila API dibuat ulang / dipindah akun.
+FOREXFACTORY_SCRAPER_ID = os.getenv(
+    "FOREXFACTORY_SCRAPER_ID", "390d206e-305a-47db-826d-b1ae13b61094"
+)
+FOREXFACTORY_ENABLED = os.getenv("FOREXFACTORY_ENABLED", "true").lower() in ("1", "true", "yes")
+
 # ===================== OANDA (REAL-TIME FOREX & GOLD) =====================
 # OANDA v20 API — sumber data REAL-TIME untuk Forex & Gold (XAU/USD).
 # Yahoo Finance (sumber lama) delayed 15-20 menit; OANDA demo memberi harga
