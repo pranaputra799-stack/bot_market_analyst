@@ -185,6 +185,35 @@ class CallbackFlowMixin:
                     "❌ Gagal memuat ulang kalender. Silakan coba lagi nanti.",
                 )
 
+        elif data.startswith("cal:"):
+            # Navigasi halaman / toggle mode kalender: cal:<mode>:<page>
+            parts = data.split(":", 2)
+            mode = parts[1] if len(parts) > 1 else "usd_high"
+            try:
+                page = int(parts[2]) if len(parts) > 2 else 0
+            except ValueError:
+                page = 0
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id,
+                action="typing",
+            )
+            try:
+                message, kb = await self._build_calendar_reply(page=page, mode=mode)
+                kwargs = {"parse_mode": "Markdown", "disable_web_page_preview": True}
+                if kb:
+                    kwargs["reply_markup"] = kb
+                await safe_edit_message_text(query, message, **kwargs)
+            except Exception as e:
+                logger.error(f"Calendar page callback error: {e}")
+                await safe_edit_message_text(
+                    query,
+                    "❌ Gagal memuat kalender ekonomi. Silakan coba lagi nanti.",
+                )
+
+        elif data == "cal_noop":
+            # Tombol indikator halaman (📄 x/y) — tidak melakukan apa-apa.
+            return
+
         elif data == "news":
             # Tombol menu '🗞️ Berita Terkini' — feed berita ForexFactory.
             await context.bot.send_chat_action(

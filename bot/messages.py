@@ -61,7 +61,7 @@ HELP_MESSAGE = """
 /morning - 🌅 Morning Brief harian
 /sentiment - 🧠 Sentimen pasar (contoh: /sentiment eurusd)
 /sentimen - 🧠 Sentimen retail OANDA — Position/Order Book
-/calendar - 📅 Kalender ekonomi high-impact
+/calendar - 📅 Kalender ekonomi (default USD high-impact, paginasi + toggle semua event)
 /news - 📰 Berita terbaru ForexFactory (contoh: /news 10, /news gold)
 /aftermath - 🎯 Analisis dampak event (contoh: /aftermath nfp)
 /prediksi - 🎯 Win rate prediksi news XAU/USD (contoh: /prediksi history)

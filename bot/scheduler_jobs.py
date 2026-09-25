@@ -1480,21 +1480,143 @@ class SchedulerJobsMixin:
         rows = list(kb.inline_keyboard) if kb else []
         rows.append([InlineKeyboardButton("🔁 Refresh", callback_data=callback)])
         return InlineKeyboardMarkup(rows)
-    async def _build_calendar_reply(self, refresh: bool = False) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
-        """Bangun isi pesan /calendar + tombol analisis dampak & refresh
-        (dipakai /calendar, tombol menu kalender, dan '🔁 Refresh')."""
+
+    # ===== /calendar: filter (USD/high), urutan (upcoming dulu), pagination =====
+    CALENDAR_PAGE_SIZE = 5
+
+    @staticmethod
+    def _is_usd_event(event: Dict) -> bool:
+        """True bila event terkait USD (pakai `currency`; fallback ke `country`)."""
+        cur = (event.get("currency") or "").strip().upper()
+        if not cur:
+            cur = "USD" if (event.get("country") or "").strip().upper() == "US" else ""
+        return cur == "USD"
+
+    @staticmethod
+    def _event_dt(event: Dict):
+        return event.get("_dt_utc")
+
+    def _ordered_calendar_events(self, events: List[Dict], mode: str) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Filter + urutkan event kalender → (upcoming, past).
+        Upcoming = belum terjadi, urut TERDEKAT dulu (diprioritaskan); past =
+        sudah rilis, urut TERBARU dulu (untuk seksi 'event terakhir').
+        """
+        if mode == "usd_high":
+            events = [
+                e for e in (events or [])
+                if e.get("impact") == "high" and self._is_usd_event(e)
+            ]
+        now = datetime.now(timezone.utc)
+
+        def dt_of(e):
+            return self._event_dt(e) or now
+
+        upcoming = [e for e in events if dt_of(e) >= now]
+        past = [e for e in events if dt_of(e) < now]
+        upcoming.sort(key=dt_of)
+        past.sort(key=dt_of, reverse=True)
+        return upcoming, past
+
+    @staticmethod
+    def _format_recent_events(events: List[Dict], limit: int = 3) -> str:
+        """Seksi ringkas 'event terakhir yang sudah rilis' (Actual + Forecast/Previous)."""
+        picked = (events or [])[:limit]
+        if not picked:
+            return ""
+        lines = ["🕓 *EVENT TERAKHIR (sudah rilis)*"]
+        for e in picked:
+            unit = e.get("unit", "") or ""
+            actual, est, prev = e.get("actual"), e.get("estimate"), e.get("prev")
+            line = f"• {e.get('country_emoji', '')} *{e.get('event', '')}*"
+            if actual not in (None, ""):
+                line += f" — Actual: *{actual}{unit}*"
+            extras = []
+            if est not in (None, ""):
+                extras.append(f"f {est}{unit}")
+            if prev not in (None, ""):
+                extras.append(f"p {prev}{unit}")
+            if extras:
+                line += f" ({' | '.join(extras)})"
+            lines.append(line)
+        return "\n".join(lines)
+
+    def _build_calendar_page_keyboard(
+        self,
+        page_events: List[Dict],
+        mode: str,
+        page: int,
+        pages: int,
+        numbered: bool,
+    ) -> InlineKeyboardMarkup:
+        """Keyboard kalender: tombol analisis dampak + navigasi halaman + toggle mode + refresh."""
+        aft_kb = self._build_calendar_aftermath_buttons(page_events, numbered=numbered)
+        rows = list(aft_kb.inline_keyboard) if aft_kb else []
+
+        if pages > 1:
+            nav: List[InlineKeyboardButton] = []
+            if page > 0:
+                nav.append(InlineKeyboardButton("⬅️ Sebelumnya", callback_data=f"cal:{mode}:{page - 1}"))
+            nav.append(InlineKeyboardButton(f"📄 {page + 1}/{pages}", callback_data="cal_noop"))
+            if page < pages - 1:
+                nav.append(InlineKeyboardButton("Berikutnya ➡️", callback_data=f"cal:{mode}:{page + 1}"))
+            rows.append(nav)
+
+        if mode == "usd_high":
+            rows.append([InlineKeyboardButton("🌐 Semua Event", callback_data="cal:all:0")])
+        else:
+            rows.append([InlineKeyboardButton("🇺🇸 USD High", callback_data="cal:usd_high:0")])
+
+        return self._add_refresh_button(InlineKeyboardMarkup(rows))
+
+    async def _build_calendar_reply(
+        self, refresh: bool = False, page: int = 0, mode: str = "usd_high"
+    ) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
+        """
+        Bangun isi pesan /calendar (dipakai /calendar, tombol menu, pagination,
+        toggle mode, dan '🔁 Refresh').
+
+        Default: event USD + high impact saja, yang BELUM terjadi ditampilkan dulu
+        (terdekat di atas), 5 per halaman, plus seksi 3 event terakhir yang rilis.
+        """
+        if mode not in ("usd_high", "all"):
+            mode = "usd_high"
+
         events = await self.macro.get_economic_calendar_month(refresh=refresh)
-        # numbered=True: event berindeks (1., 2., ...) agar mudah dipetakan ke
-        # tombol '📊 Analisis Dampak' (tombol memakai nomor yang sama).
+        upcoming, past = self._ordered_calendar_events(events, mode)
+        ordered = upcoming + past
+        total = len(ordered)
+
+        size = self.CALENDAR_PAGE_SIZE
+        pages = max(1, (total + size - 1) // size)
+        page = max(0, min(page, pages - 1))
+        page_events = ordered[page * size:(page + 1) * size]
+
+        # numbered hanya di mode high-only, agar nomor di daftar = nomor tombol.
+        numbered = (mode == "usd_high")
         calendar_text = self.macro.format_calendar_text(
-            events, max_events=15, only_high=True, numbered=True
+            page_events, max_events=size, only_high=(mode == "usd_high"), numbered=numbered
         )
-        message = f"{calendar_text}\n{DISCLAIMER}"
-        displayed = [e for e in events if e.get("impact") == "high"][:15]
-        aft_kb = self._build_calendar_aftermath_buttons(displayed, numbered=True)
-        if aft_kb:
-            message = f"{calendar_text}\n\n📊 *Ketuk tombol event untuk analisis dampak.*\n{DISCLAIMER}"
-        return message, self._add_refresh_button(aft_kb)
+
+        parts = [
+            "🇺🇸 *Filter: USD · High Impact*" if mode == "usd_high" else "🌐 *Filter: Semua Event*"
+        ]
+        if total:
+            note = " · belum terjadi dulu" if upcoming else ""
+            parts.append(f"📄 Halaman *{page + 1}/{pages}* · {total} event{note}")
+        parts.append(calendar_text)
+
+        recent = self._format_recent_events(past, limit=3)
+        if recent:
+            parts.append(recent)
+
+        if any(e.get("impact") == "high" for e in page_events):
+            parts.append("📊 *Ketuk tombol event untuk analisis dampak.*")
+        parts.append(DISCLAIMER)
+
+        message = "\n\n".join(parts)
+        kb = self._build_calendar_page_keyboard(page_events, mode, page, pages, numbered)
+        return message, kb
     async def _handle_calendar_aftermath_button(self, query, data: str):
         """Tombol '📊 Analisis Dampak' pada pesan /calendar → kirim analisis event.
         Mencocokkan ulang via ID pendek (kalender di-cache, jadi stabil)."""

@@ -435,7 +435,9 @@ class TestCalendarRefreshButton(unittest.TestCase):
 
     def test_build_calendar_reply_passes_refresh_flag(self):
         calls = []
-        bot = self._bot_with_macro([_event("CPI / Inflasi AS (YoY)", hours_ago=2)], calls)
+        # Event BELUM terjadi (hours_ago negatif) agar tampil di halaman 1
+        # mode default (USD · high impact, upcoming dulu).
+        bot = self._bot_with_macro([_event("CPI / Inflasi AS (YoY)", hours_ago=-30)], calls)
         message, kb = asyncio.run(bot._build_calendar_reply(refresh=True))
         self.assertEqual(calls, [True])  # refresh=True → bypass cache
         self.assertIsNotNone(kb)

@@ -404,7 +404,7 @@ curl http://127.0.0.1:8090/health   # JSON: status, uptime, cache, ai
 | `/unsubscribe` | Berhenti langganan Morning Brief |
 | `/sentiment` | Sentimen pasar berbasis berita (contoh: `/sentiment eurusd`) |
 | `/sentimen` | Sentimen retail trader OANDA — Position/Order Book, hanya pair forex (contoh: `/sentimen eurusd`) |
-| `/calendar` | Kalender ekonomi high-impact bulan ini |
+| `/calendar` | Kalender ekonomi bulan ini — default **USD + high impact**, event belum terjadi didahulukan, 5/halaman + tombol halaman & toggle 🌐 Semua Event |
 | `/news` | Berita terbaru ForexFactory (contoh: `/news 10`, `/news gold`) |
 | `/alert on\|off` | Notifikasi event ekonomi otomatis — digest harian, reminder sebelum rilis, **+ analisis aftermath (dampak ke DXY) + prediksi arah emas** |
 | `⚙️ Pengaturan` (menu) | Satu menu untuk semua yang bisa diatur: toggle notifikasi event, langganan morning brief, kelola watchlist, **detail jadwal & statistik pre-warm COT**, & hapus konteks percakapan |
